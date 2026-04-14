@@ -330,6 +330,11 @@ button:disabled { background: #444; cursor: not-allowed; }
   </div>
   <div class="card">
     <h2>WiFi Config</h2>
+    <div style="margin-bottom:8px">
+      <button onclick="scanWifi()" id="wifiScanBtn">Scan networks</button>
+      <span id="wifiScanStatus" style="color:#888;margin-left:8px;font-size:12px"></span>
+    </div>
+    <div id="wifiScanList" style="margin-bottom:10px"></div>
     <div class="label">SSID:</div>
     <input type="text" id="wifiSSID" placeholder="your WiFi name">
     <div class="label">Password:</div>
@@ -603,6 +608,55 @@ function saveWifi() {
 function clearWifi() {
   if (!confirm('Reset WiFi to AP mode?')) return;
   fetch('/api/wifi/clear').then(r=>r.text()).then(t=>alert(t));
+}
+
+// Scan is async on the ESP side — HTTP returns right away, we poll for results.
+// Expect a 1-3s AP hiccup during the scan; WebSocket keepalive rides it out.
+function scanWifi() {
+  const btn = document.getElementById('wifiScanBtn');
+  const stat = document.getElementById('wifiScanStatus');
+  const list = document.getElementById('wifiScanList');
+  btn.disabled = true;
+  stat.textContent = 'scanning... (brief AP lag)';
+  list.innerHTML = '';
+  fetch('/api/wifi/scan', {method:'POST'})
+    .then(() => pollWifiScan(0))
+    .catch(e => { stat.textContent = 'scan error'; btn.disabled = false; });
+}
+function pollWifiScan(tries) {
+  if (tries > 30) {  // ~15s cap
+    document.getElementById('wifiScanStatus').textContent = 'timeout';
+    document.getElementById('wifiScanBtn').disabled = false;
+    return;
+  }
+  setTimeout(() => {
+    fetch('/api/wifi/scan_results').then(r=>r.json()).then(j => {
+      if (!j.done) return pollWifiScan(tries + 1);
+      renderWifiScan(j.nets || []);
+      document.getElementById('wifiScanStatus').textContent = (j.nets||[]).length + ' networks';
+      document.getElementById('wifiScanBtn').disabled = false;
+    }).catch(() => pollWifiScan(tries + 1));
+  }, 500);
+}
+function renderWifiScan(nets) {
+  nets.sort((a,b) => b.rssi - a.rssi);
+  const list = document.getElementById('wifiScanList');
+  if (!nets.length) { list.innerHTML = '<div style="color:#888">no networks found</div>'; return; }
+  list.innerHTML = nets.map(n => {
+    const bars = n.rssi > -55 ? '▂▄▆█' : n.rssi > -70 ? '▂▄▆_' : n.rssi > -80 ? '▂▄__' : '▂___';
+    const lock = n.enc ? '🔒' : ' ';
+    const ssid = (n.ssid || '<hidden>').replace(/</g,'&lt;');
+    return `<div class="row" style="cursor:pointer;padding:4px;border-bottom:1px solid #222" onclick="pickSsid(${JSON.stringify(n.ssid||'').replace(/"/g,'&quot;')})">`
+         + `<span style="flex:1">${lock} ${ssid}</span>`
+         + `<span style="color:#8af;font-family:monospace">${bars}</span>`
+         + `<span style="color:#888;margin-left:8px;width:60px;text-align:right">${n.rssi} dBm</span>`
+         + `<span style="color:#666;margin-left:8px;width:30px;text-align:right">ch${n.ch}</span>`
+         + `</div>`;
+  }).join('');
+}
+function pickSsid(ssid) {
+  document.getElementById('wifiSSID').value = ssid;
+  document.getElementById('wifiPASS').focus();
 }
 
 // === Incoming messages ===

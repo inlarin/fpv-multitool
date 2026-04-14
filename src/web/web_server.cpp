@@ -435,6 +435,49 @@ void WebServer::start() {
         req->send(200, "text/plain", "WiFi credentials cleared. Reboot to go to AP mode.");
     });
 
+    // Async WiFi scan — start. Returns immediately; results polled via /scan_results.
+    // Note: while scanning the AP radio briefly hops channels, so connected
+    // clients see a ~1-3s hiccup but don't fully disconnect.
+    s_server->on("/api/wifi/scan", HTTP_POST, [](AsyncWebServerRequest *req) {
+        int16_t st = WiFi.scanComplete();
+        if (st == WIFI_SCAN_RUNNING) {
+            req->send(200, "text/plain", "scan already in progress");
+            return;
+        }
+        // true=async, false=show_hidden
+        int16_t n = WiFi.scanNetworks(true, false);
+        if (n == WIFI_SCAN_FAILED) {
+            req->send(500, "text/plain", "scan start failed");
+            return;
+        }
+        req->send(200, "text/plain", "scan started");
+    });
+
+    s_server->on("/api/wifi/scan_results", HTTP_GET, [](AsyncWebServerRequest *req) {
+        int16_t n = WiFi.scanComplete();
+        JsonDocument doc;
+        if (n == WIFI_SCAN_RUNNING) {
+            doc["done"] = false;
+        } else if (n == WIFI_SCAN_FAILED || n < 0) {
+            doc["done"] = true;
+            doc["nets"].to<JsonArray>();  // empty
+        } else {
+            doc["done"] = true;
+            JsonArray nets = doc["nets"].to<JsonArray>();
+            for (int i = 0; i < n; i++) {
+                JsonObject o = nets.add<JsonObject>();
+                o["ssid"] = WiFi.SSID(i);
+                o["rssi"] = WiFi.RSSI(i);
+                o["ch"]   = WiFi.channel(i);
+                o["enc"]  = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? 0 : 1;
+            }
+            WiFi.scanDelete();  // free results after reporting
+        }
+        String out;
+        serializeJson(doc, out);
+        req->send(200, "application/json", out);
+    });
+
     s_server->on("/status", HTTP_GET, [](AsyncWebServerRequest *req) {
         JsonDocument doc;
         doc["mode"] = WifiManager::currentMode();
