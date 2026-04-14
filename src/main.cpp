@@ -6,6 +6,7 @@
 #include "ui/display.h"
 #include "ui/button.h"
 #include "ui/menu.h"
+#include "ui/status_led.h"
 #include "bridge/usb2ttl.h"
 #include "servo/servo_tester.h"
 #include "motor/motor_tester.h"
@@ -134,6 +135,7 @@ void setup() {
 
     Display::init();
     Button::init(BTN_BOOT);
+    StatusLed::init();
 
     // Auto-start WiFi + web server in background
     autoStartWifi();
@@ -145,6 +147,7 @@ void setup() {
 
 void loop() {
     esp_task_wdt_reset();  // feed watchdog
+    StatusLed::loop();
     ButtonEvent evt = Button::poll();
 
     if (currentApp == APP_NONE) {
