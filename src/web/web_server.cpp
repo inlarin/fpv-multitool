@@ -546,16 +546,14 @@ void WebServer::start() {
         }
         uint8_t id = req->getParam("id")->value().toInt();
         String v = req->getParam("value")->value();
-        // Try byte first; if looks like text (for STRING), send as text
-        int intVal = v.toInt();
-        bool ok;
         const auto *p = CRSFConfig::paramById(id);
-        if (p && (p->type == 10)) { // STRING
-            ok = CRSFConfig::writeParamText(id, v);
-        } else {
-            ok = CRSFConfig::writeParamByte(id, (uint8_t)intVal);
+        if (!p) { req->send(404, "text/plain", "unknown param id"); return; }
+        bool ok = CRSFConfig::writeParamAuto(id, v);
+        if (!ok) {
+            req->send(400, "text/plain", "param type not writable");
+            return;
         }
-        req->send(200, "text/plain", ok ? "OK" : "Failed");
+        req->send(200, "text/plain", "OK");
     });
 
     s_server->on("/api/crsf/bind", HTTP_POST, [](AsyncWebServerRequest *req) {

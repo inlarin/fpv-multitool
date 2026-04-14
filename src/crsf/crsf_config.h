@@ -52,6 +52,15 @@ void requestParameter(uint8_t id);
 bool writeParamByte(uint8_t id, uint8_t value);
 bool writeParamText(uint8_t id, const String &value);
 
+// Write numeric parameter with type-aware width (UINT8/INT8/UINT16/INT16, big-endian).
+// Returns false if id unknown, type non-numeric, or UART not running.
+bool writeParamInt(uint8_t id, int32_t value);
+
+// Convenience: dispatch write based on the stored param type.
+// STRING → text; TEXT_SELECTION/COMMAND/UINT8/INT8 → byte; UINT16/INT16 → BE word.
+// Returns false if param is unknown or type is unwritable (FOLDER/INFO).
+bool writeParamAuto(uint8_t id, const String &value);
+
 // Accessors
 const DeviceInfo& deviceInfo();
 int paramCount();

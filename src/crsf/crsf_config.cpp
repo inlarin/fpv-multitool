@@ -16,6 +16,11 @@ static uint8_t s_chunk_buf[512];
 static size_t  s_chunk_buf_len = 0;
 static uint32_t s_last_request_ms = 0;
 
+// Deferred re-read after a write so the cached Param refreshes with
+// whatever the RX actually accepted (clamp, reject, etc).
+static uint8_t  s_reread_id = 0;
+static uint32_t s_reread_at_ms = 0;
+
 // ---------- Helpers ----------
 static Param* findOrCreateParam(uint8_t id) {
     for (int i = 0; i < s_param_count; i++) {
@@ -52,6 +57,7 @@ void reset() {
     memset(&s_device, 0, sizeof(s_device));
     s_current_param_id = 0xFF;
     s_chunk_buf_len = 0;
+    s_reread_id = 0;
 }
 
 void requestDeviceInfo() {
@@ -247,13 +253,70 @@ void requestParameter(uint8_t id) {
     s_last_request_ms = millis();
 }
 
+// After a successful write, schedule a re-read so the cached Param
+// refreshes — ELRS usually echoes 0x2B anyway, but this closes the gap.
+static void scheduleReread(uint8_t id) {
+    s_reread_id = id;
+    s_reread_at_ms = millis() + 150;
+}
+
 bool writeParamByte(uint8_t id, uint8_t value) {
     uint8_t v = value;
-    return CRSFService::sendParameterWrite(id, &v, 1);
+    bool ok = CRSFService::sendParameterWrite(id, &v, 1);
+    if (ok) scheduleReread(id);
+    return ok;
 }
 
 bool writeParamText(uint8_t id, const String &value) {
-    return CRSFService::sendParameterWrite(id, (const uint8_t*)value.c_str(), value.length() + 1);
+    bool ok = CRSFService::sendParameterWrite(id, (const uint8_t*)value.c_str(), value.length() + 1);
+    if (ok) scheduleReread(id);
+    return ok;
+}
+
+bool writeParamInt(uint8_t id, int32_t value) {
+    const Param *p = paramById(id);
+    if (!p) return false;
+    uint8_t buf[4];
+    uint8_t len = 0;
+    switch (p->type) {
+        case CRSF::PARAM_UINT8:
+        case CRSF::PARAM_INT8:
+            buf[0] = (uint8_t)(value & 0xFF);
+            len = 1;
+            break;
+        case CRSF::PARAM_UINT16:
+        case CRSF::PARAM_INT16: {
+            uint16_t v = (uint16_t)(value & 0xFFFF);
+            buf[0] = (v >> 8) & 0xFF;
+            buf[1] = v & 0xFF;
+            len = 2;
+            break;
+        }
+        default:
+            return false;
+    }
+    bool ok = CRSFService::sendParameterWrite(id, buf, len);
+    if (ok) scheduleReread(id);
+    return ok;
+}
+
+bool writeParamAuto(uint8_t id, const String &value) {
+    const Param *p = paramById(id);
+    if (!p) return false;
+    switch (p->type) {
+        case CRSF::PARAM_STRING:
+            return writeParamText(id, value);
+        case CRSF::PARAM_TEXT_SELECTION:
+        case CRSF::PARAM_COMMAND:
+        case CRSF::PARAM_UINT8:
+        case CRSF::PARAM_INT8:
+            return writeParamInt(id, value.toInt());
+        case CRSF::PARAM_UINT16:
+        case CRSF::PARAM_INT16:
+            return writeParamInt(id, value.toInt());
+        default:
+            return false;  // FOLDER / INFO / FLOAT (unsupported) etc.
+    }
 }
 
 void loop() {
@@ -262,6 +325,13 @@ void loop() {
         millis() - s_last_request_ms > 1000) {
         s_current_param_id = 0xFF;
         s_chunk_buf_len = 0;
+    }
+
+    // Fire a deferred re-read after a write so the cached value refreshes.
+    if (s_reread_id != 0 && (int32_t)(millis() - s_reread_at_ms) >= 0) {
+        uint8_t id = s_reread_id;
+        s_reread_id = 0;
+        requestParameter(id);
     }
 
     // Batch parameter requesting
