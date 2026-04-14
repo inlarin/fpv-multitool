@@ -9,13 +9,27 @@ const char WEB_INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <title>FPV MultiTool</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0f0f1e; color: #e0e0e0; font-family: -apple-system,BlinkMacSystemFont,sans-serif; padding: 10px; }
-h1 { color: #0af; font-size: 20px; margin-bottom: 10px; text-align: center; }
-.tabs { display: flex; gap: 4px; margin-bottom: 15px; overflow-x: auto; }
-.tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; }
+body {
+  background: #0f0f1e; color: #e0e0e0;
+  font-family: -apple-system,BlinkMacSystemFont,sans-serif;
+  max-width: 1200px;      /* keep layout readable on 2K/4K — cards stay around arm's reach */
+  margin: 0 auto;
+  padding: clamp(8px, 2vw, 20px);
+}
+h1 {
+  color: #0af;
+  font-size: clamp(18px, 2.4vw, 26px);
+  margin-bottom: 10px;
+  text-align: center;
+}
+.tabs { display: flex; gap: 4px; margin-bottom: 15px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; }
 .tab.active { background: #0066aa; color: #fff; }
-.card { background: #1a1a2e; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-.card h2 { color: #0cf; font-size: 16px; margin-bottom: 12px; }
+/* Cards flow into 2–3 columns on wide screens, single column on phones.
+   Cap track width so lone cards don't stretch to 1200px on 4K monitors. */
+.tab-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 520px)); gap: 12px; align-items: start; justify-content: center; }
+.card { background: #1a1a2e; border-radius: 8px; padding: 16px; min-width: 0; }
+.card h2 { color: #0cf; font-size: clamp(14px, 1.4vw, 17px); margin-bottom: 12px; }
 .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #222; }
 .row:last-child { border-bottom: none; }
 .label { color: #888; font-size: 13px; }
@@ -371,7 +385,8 @@ function send(obj) {
 
 function showTab(name) {
   document.querySelectorAll('.tab-content').forEach(e => e.style.display = 'none');
-  document.getElementById('tab-'+name).style.display = 'block';
+  // CSS default is grid (multi-column on wide screens) — restore it, don't force block.
+  document.getElementById('tab-'+name).style.display = '';
   document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
   event.target.classList.add('active');
 }
