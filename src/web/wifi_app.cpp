@@ -9,6 +9,7 @@
 #include "battery/dji_battery.h"
 #include "motor/dshot.h"
 #include "pin_config.h"
+#include "wdt.h"
 
 static const char* AP_SSID = "FPV-MultiTool";
 static const char* AP_PASS = "fpv12345";
@@ -146,6 +147,7 @@ void runWifiApp() {
     uint32_t lastRedraw = millis();
 
     while (true) {
+        feed_wdt();
         ButtonEvent evt = Button::poll();
 
         if (evt == BTN_DOUBLE_CLICK) {
@@ -179,36 +181,45 @@ void runWifiApp() {
         // Keep web server + motor commands alive
         WebServer::loop();
 
-        if (WebState::motor.armRequest) {
+        bool armReq, disarmReq, beepReq, armed;
+        int dshotSpeed;
+        uint16_t throttle;
+        {
+            WebState::Lock lock;
+            armReq     = WebState::motor.armRequest;
+            disarmReq  = WebState::motor.disarmRequest;
+            beepReq    = WebState::motor.beepRequest;
+            armed      = WebState::motor.armed;
+            dshotSpeed = WebState::motor.dshotSpeed;
+            throttle   = WebState::motor.throttle;
             WebState::motor.armRequest = false;
-            if (!WebState::motor.armed) {
-                DShotSpeed s = (WebState::motor.dshotSpeed == 150) ? DSHOT150 :
-                               (WebState::motor.dshotSpeed == 600) ? DSHOT600 : DSHOT300;
-                if (DShot::init(SIGNAL_OUT, s)) {
-                    DShot::arm();
-                    WebState::motor.armed = true;
-                }
+            WebState::motor.disarmRequest = false;
+            WebState::motor.beepRequest = false;
+        }
+        if (armReq && !armed) {
+            DShotSpeed s = (dshotSpeed == 150) ? DSHOT150 :
+                           (dshotSpeed == 600) ? DSHOT600 : DSHOT300;
+            if (DShot::init(SIGNAL_OUT, s)) {
+                DShot::arm();
+                WebState::Lock lock;
+                WebState::motor.armed = true;
             }
         }
-        if (WebState::motor.disarmRequest) {
-            WebState::motor.disarmRequest = false;
-            WebState::motor.throttle = 0;
+        if (disarmReq) {
             for (int i = 0; i < 50; i++) {
                 DShot::sendThrottle(0);
                 delayMicroseconds(2000);
             }
             DShot::stop();
+            WebState::Lock lock;
+            WebState::motor.throttle = 0;
             WebState::motor.armed = false;
         }
-        if (WebState::motor.beepRequest) {
-            WebState::motor.beepRequest = false;
-            if (WebState::motor.armed) DShot::sendCommand(1);
-        }
-        if (WebState::motor.armed) {
+        if (beepReq && armed) DShot::sendCommand(1);
+        if (armed) {
             static uint32_t lastSend = 0;
             if (micros() - lastSend > 2000) {
-                uint16_t t = WebState::motor.throttle;
-                uint16_t dsVal = (t == 0) ? 0 : constrain(t + 47, 48, 2047);
+                uint16_t dsVal = (throttle == 0) ? 0 : constrain(throttle + 47, 48, 2047);
                 DShot::sendThrottle(dsVal);
                 lastSend = micros();
             }

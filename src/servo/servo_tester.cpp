@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "wdt.h"
 
 // === Servo config ===
 static const int SERVO_PIN = SIGNAL_OUT;  // GPIO 1
@@ -258,6 +259,7 @@ void runServoTester() {
     uint32_t lastSweep = 0;
 
     while (true) {
+        feed_wdt();
         ButtonEvent evt = Button::poll();
 
         if (evt == BTN_LONG_PRESS) {

@@ -4,6 +4,7 @@
 #include "ui/display.h"
 #include "ui/button.h"
 #include "dji_battery.h"
+#include "wdt.h"
 
 enum BattPage {
     BP_INFO,       // Main: SOC, V, I, T, cycles
@@ -492,6 +493,7 @@ void runBatteryTool() {
     uint32_t lastRefresh = 0;
 
     while (true) {
+        feed_wdt();
         ButtonEvent evt = Button::poll();
 
         if (evt == BTN_CLICK) {

@@ -4,6 +4,7 @@
 #include "ui/display.h"
 #include "ui/button.h"
 #include "dshot.h"
+#include "wdt.h"
 
 static const int MOTOR_PIN = SIGNAL_OUT;
 
@@ -290,6 +291,7 @@ void runMotorTester() {
     uint32_t lastSend = 0;
 
     while (true) {
+        feed_wdt();
         ButtonEvent evt = Button::poll();
 
         if (!s_armed) {

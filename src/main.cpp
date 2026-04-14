@@ -1,6 +1,7 @@
 // ESP32-S3 FPV MultiTool
 // Main entry: menu + app switching
 #include <Arduino.h>
+#include <esp_task_wdt.h>
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
@@ -37,39 +38,49 @@ static void autoStartWifi() {
 static void webBackgroundTask() {
     WebServer::loop();
 
-    // Motor arm/disarm requests from web
-    if (WebState::motor.armRequest) {
+    // Snapshot motor state under lock, then execute heavy ops outside lock
+    bool armReq, disarmReq, beepReq, armed;
+    int dshotSpeed;
+    uint16_t throttle;
+    {
+        WebState::Lock lock;
+        armReq    = WebState::motor.armRequest;
+        disarmReq = WebState::motor.disarmRequest;
+        beepReq   = WebState::motor.beepRequest;
+        armed     = WebState::motor.armed;
+        dshotSpeed = WebState::motor.dshotSpeed;
+        throttle  = WebState::motor.throttle;
         WebState::motor.armRequest = false;
-        if (!WebState::motor.armed && currentApp != APP_MOTOR) {
-            DShotSpeed s = (WebState::motor.dshotSpeed == 150) ? DSHOT150 :
-                           (WebState::motor.dshotSpeed == 600) ? DSHOT600 : DSHOT300;
-            if (DShot::init(SIGNAL_OUT, s)) {
-                DShot::arm();
-                WebState::motor.armed = true;
-            }
+        WebState::motor.disarmRequest = false;
+        WebState::motor.beepRequest = false;
+    }
+
+    if (armReq && !armed && currentApp != APP_MOTOR) {
+        DShotSpeed s = (dshotSpeed == 150) ? DSHOT150 :
+                       (dshotSpeed == 600) ? DSHOT600 : DSHOT300;
+        if (DShot::init(SIGNAL_OUT, s)) {
+            DShot::arm();
+            WebState::Lock lock;
+            WebState::motor.armed = true;
         }
     }
-    if (WebState::motor.disarmRequest) {
-        WebState::motor.disarmRequest = false;
-        WebState::motor.throttle = 0;
+    if (disarmReq) {
         for (int i = 0; i < 50; i++) {
             DShot::sendThrottle(0);
             delayMicroseconds(2000);
         }
         DShot::stop();
+        WebState::Lock lock;
+        WebState::motor.throttle = 0;
         WebState::motor.armed = false;
     }
-    if (WebState::motor.beepRequest) {
-        WebState::motor.beepRequest = false;
-        if (WebState::motor.armed) DShot::sendCommand(1);
-    }
+    if (beepReq && armed) DShot::sendCommand(1);
 
     // Continuous DShot frame when armed via web
-    if (WebState::motor.armed) {
+    if (armed) {
         static uint32_t lastSend = 0;
         if (micros() - lastSend > 2000) {
-            uint16_t t = WebState::motor.throttle;
-            uint16_t dsVal = (t == 0) ? 0 : constrain(t + 47, 48, 2047);
+            uint16_t dsVal = (throttle == 0) ? 0 : constrain(throttle + 47, 48, 2047);
             DShot::sendThrottle(dsVal);
             lastSend = micros();
         }
@@ -78,6 +89,17 @@ static void webBackgroundTask() {
 
 void setup() {
     Serial.begin(115200);
+
+    WebState::initMutex();  // Must be first — protects shared state
+
+    // Watchdog: 30s max task block, panic+reset on timeout
+    esp_task_wdt_config_t wdt_cfg = {
+        .timeout_ms = 30000,
+        .idle_core_mask = 0,
+        .trigger_panic = true,
+    };
+    esp_task_wdt_reconfigure(&wdt_cfg);
+    esp_task_wdt_add(NULL);  // monitor main task
 
     Display::init();
     Button::init(BTN_BOOT);
@@ -91,6 +113,7 @@ void setup() {
 }
 
 void loop() {
+    esp_task_wdt_reset();  // feed watchdog
     ButtonEvent evt = Button::poll();
 
     if (currentApp == APP_NONE) {

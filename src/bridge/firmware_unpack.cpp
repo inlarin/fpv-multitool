@@ -73,21 +73,39 @@ uint8_t* gunzip(const uint8_t *gz_data, size_t gz_size, size_t *out_size) {
                      (gz_data[gz_size-2] << 16) |
                      (gz_data[gz_size-1] << 24);
 
-    // Allocate output in PSRAM
-    uint8_t *out = (uint8_t*)ps_malloc(isize + 256); // +256 safety
+    // Sanity: ISIZE must be reasonable for an ELRS firmware
+    // Typical ELRS RX firmware: 200-500 KB. Cap at 4 MB to catch corruption.
+    static const uint32_t MAX_DECOMPRESSED = 4 * 1024 * 1024;
+    if (isize == 0 || isize > MAX_DECOMPRESSED) {
+        Serial.printf("[gunzip] suspicious ISIZE %u — refusing to allocate\n", isize);
+        return nullptr;
+    }
+
+    // Allocate output in PSRAM with overflow-safe size calculation
+    if (isize > SIZE_MAX - 512) return nullptr;
+    size_t alloc_size = isize + 512; // +512 safety for tinfl overread
+    uint8_t *out = (uint8_t*)ps_malloc(alloc_size);
     if (!out) {
-        Serial.printf("[gunzip] ps_malloc failed for %u bytes\n", isize);
+        Serial.printf("[gunzip] ps_malloc(%u) failed\n", alloc_size);
         return nullptr;
     }
 
     // Deflate stream starts at hdr, ends at gz_size-8
     size_t deflate_size = gz_size - 8 - hdr;
 
-    mz_ulong out_len = isize + 256;
+    // Bound the decompression to allocated size (defense against ISIZE lie)
+    mz_ulong out_len = alloc_size;
     int r = tinfl_decompress_mem_to_mem(out, out_len, gz_data + hdr, deflate_size, 0);
 
     if (r == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
         Serial.println("[gunzip] tinfl decompress failed");
+        free(out);
+        return nullptr;
+    }
+
+    // Verify actual decompressed size matches ISIZE (detect tampered gz)
+    if ((uint32_t)r != isize) {
+        Serial.printf("[gunzip] size mismatch: expected %u, got %d\n", isize, r);
         free(out);
         return nullptr;
     }

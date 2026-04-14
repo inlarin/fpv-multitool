@@ -13,12 +13,22 @@ bool SMBus::devicePresent(uint8_t addr) {
     return s_wire->endTransmission() == 0;
 }
 
+// Wait for N bytes in RX FIFO with timeout
+static bool waitBytes(TwoWire *w, int n, uint32_t timeout_ms) {
+    uint32_t start = millis();
+    while (w->available() < n) {
+        if (millis() - start > timeout_ms) return false;
+        delay(1);
+    }
+    return true;
+}
+
 uint16_t SMBus::readWord(uint8_t addr, uint8_t reg) {
     s_wire->beginTransmission(addr);
     s_wire->write(reg);
     if (s_wire->endTransmission(false) != 0) return 0xFFFF;
     s_wire->requestFrom(addr, (uint8_t)2);
-    if (s_wire->available() < 2) return 0xFFFF;
+    if (!waitBytes(s_wire, 2, 100)) return 0xFFFF;
     uint16_t lo = s_wire->read();
     uint16_t hi = s_wire->read();
     return (hi << 8) | lo;
@@ -37,9 +47,10 @@ int SMBus::readBlock(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t maxLen) {
     s_wire->write(reg);
     if (s_wire->endTransmission(false) != 0) return -1;
     s_wire->requestFrom(addr, (uint8_t)(maxLen + 1));
-    if (!s_wire->available()) return -1;
+    if (!waitBytes(s_wire, 1, 100)) return -1;
     uint8_t len = s_wire->read();
     if (len > maxLen) len = maxLen;
+    if (len > 0) waitBytes(s_wire, len, 100);
     for (int i = 0; i < len && s_wire->available(); i++) {
         buf[i] = s_wire->read();
     }

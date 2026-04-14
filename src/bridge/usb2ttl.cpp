@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "wdt.h"
 
 // USB CDC access for DTR/RTS signals
 #if ARDUINO_USB_CDC_ON_BOOT
@@ -272,6 +273,7 @@ void runUSB2TTL() {
     uint32_t lastUpdate = 0;
 
     while (true) {
+        feed_wdt();
         ButtonEvent evt = Button::poll();
 
         // --- Navigation ---

@@ -29,6 +29,8 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
     const char* cmd = doc["cmd"];
     if (!cmd) return;
 
+    WebState::Lock lock;  // protect all writes to shared state
+
     if (strcmp(cmd, "servo") == 0) {
         WebState::servo.pulseUs = doc["us"] | 1500;
         WebState::servo.active = true;
@@ -54,6 +56,7 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
     } else if (strcmp(cmd, "motorDisarm") == 0) {
         WebState::motor.disarmRequest = true;
     } else if (strcmp(cmd, "throttle") == 0) {
+        // DShot range 48-2047; UI sends 0-2000 (we add 47 offset later)
         WebState::motor.throttle = constrain((int)(doc["value"] | 0), 0, 2000);
     } else if (strcmp(cmd, "dshotSpeed") == 0) {
         WebState::motor.dshotSpeed = doc["speed"] | 300;
@@ -333,9 +336,20 @@ static void executeFlash() {
 
     if (decompressed) free(decompressed);
 
-    WebState::flashState.in_progress = false;
-    WebState::flashState.lastResult = ESPFlasher::errorString(r);
-    Serial.printf("[Flash] Result: %s\n", WebState::flashState.lastResult.c_str());
+    // Free the uploaded firmware buffer after flashing — successful or not
+    // (user can re-upload to try again)
+    {
+        WebState::Lock lock;
+        if (WebState::flashState.fw_data) {
+            free(WebState::flashState.fw_data);
+            WebState::flashState.fw_data = nullptr;
+        }
+        WebState::flashState.fw_size = 0;
+        WebState::flashState.fw_received = 0;
+        WebState::flashState.in_progress = false;
+        WebState::flashState.lastResult = ESPFlasher::errorString(r);
+    }
+    Serial.printf("[Flash] Result: %s (buffer freed)\n", ESPFlasher::errorString(r));
 }
 
 void WebServer::start() {
@@ -416,6 +430,9 @@ void WebServer::start() {
     });
 
     // ELRS firmware upload
+    // Max accepted firmware size (ELRS is ~400KB, headroom for big builds)
+    static const size_t MAX_FW_SIZE = 2 * 1024 * 1024;
+
     s_server->on("/api/flash/upload", HTTP_POST,
         [](AsyncWebServerRequest *req) {
             if (WebState::flashState.fw_size > 0) {
@@ -426,21 +443,33 @@ void WebServer::start() {
         },
         [](AsyncWebServerRequest *req, String filename, size_t index, uint8_t *data, size_t len, bool final) {
             if (index == 0) {
-                // Free previous buffer
+                WebState::Lock lock;
+                // Free previous buffer (critical — prevents PSRAM leak)
                 if (WebState::flashState.fw_data) {
                     free(WebState::flashState.fw_data);
                     WebState::flashState.fw_data = nullptr;
                 }
                 WebState::flashState.fw_size = 0;
                 WebState::flashState.fw_received = 0;
-                // Allocate in PSRAM (up to 2MB firmware)
-                WebState::flashState.fw_data = (uint8_t*)ps_malloc(2 * 1024 * 1024);
+                WebState::flashState.lastResult = "";
+
+                // Determine content length from Content-Length header
+                size_t alloc_size = MAX_FW_SIZE;
+                if (req->hasHeader("Content-Length")) {
+                    size_t cl = req->header("Content-Length").toInt();
+                    // Multipart has some overhead, add small margin
+                    if (cl > 0 && cl < MAX_FW_SIZE) alloc_size = cl + 256;
+                }
+
+                WebState::flashState.fw_data = (uint8_t*)ps_malloc(alloc_size);
                 if (!WebState::flashState.fw_data) {
-                    Serial.println("[Flash] ps_malloc failed");
+                    Serial.printf("[Flash] ps_malloc(%u) failed\n", alloc_size);
+                    WebState::flashState.lastResult = "Out of PSRAM";
                     return;
                 }
             }
             if (!WebState::flashState.fw_data) return;
+            if (index + len > MAX_FW_SIZE) return;  // overflow guard
             memcpy(WebState::flashState.fw_data + index, data, len);
             WebState::flashState.fw_received = index + len;
             if (final) {

@@ -1,9 +1,24 @@
 #pragma once
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // Shared state between web server and hardware modules
 // Web handlers set commands, hardware modules execute them
+// All access must go through Lock guard or take/give explicitly
 namespace WebState {
+
+// ===== Mutex for thread-safe access =====
+extern SemaphoreHandle_t mutex;
+
+void initMutex();
+
+// RAII guard
+class Lock {
+public:
+    Lock()  { xSemaphoreTake(mutex, portMAX_DELAY); }
+    ~Lock() { xSemaphoreGive(mutex); }
+};
 
 // ===== Servo =====
 struct ServoState {
