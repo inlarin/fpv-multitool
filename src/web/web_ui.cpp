@@ -455,6 +455,85 @@ function crsfEnterWifi() {
   if (!confirm('Switch RX to WiFi update mode? Link will drop; RX will start its own AP.')) return;
   fetch('/api/crsf/wifi', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t));
 }
+
+// Render CRSF parameter tree: group by parent_id, folders expand, commands are state-aware.
+// ELRS COMMAND status codes: 0=READY, 1=START, 2=PROGRESS, 3=CONFIRM_NEEDED, 4=CONFIRM, 5=CANCEL, 6=QUERY.
+function renderCrsfCommand(p) {
+  const info = p.info || '';
+  const s = p.status | 0;
+  if (s === 2) { // PROGRESS
+    return `<span style="color:#fc0">${info || 'Executing...'}</span> `
+         + `<button onclick="crsfWriteParam(${p.id}, 5)">Abort</button>`;
+  }
+  if (s === 3) { // CONFIRMATION_NEEDED
+    return `<span style="color:#f80">${info || 'Confirm?'}</span> `
+         + `<button onclick="crsfWriteParam(${p.id}, 4)">Confirm</button> `
+         + `<button onclick="crsfWriteParam(${p.id}, 5)">Cancel</button>`;
+  }
+  if (s === 4) return `<span style="color:#0f0">Done</span>`;
+  if (s === 5) return `<span style="color:#888">Cancelled</span>`;
+  // READY (0) / QUERY (6) / unknown → show Execute button
+  return `<button onclick="crsfWriteParam(${p.id}, 1)">Execute</button>`
+       + (info ? ` <span style="color:#888;font-size:11px">${info}</span>` : '');
+}
+
+function renderCrsfParamValue(p) {
+  if (p.type === 9) { // TEXT_SELECTION
+    const opts = (p.opts || '').split(';');
+    let sel = `<select onchange="crsfWriteParam(${p.id}, this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;">`;
+    opts.forEach((o,i) => {
+      sel += `<option value="${i}"${i === p.idx ? ' selected' : ''}>${o}</option>`;
+    });
+    return sel + '</select>';
+  }
+  if (p.type === 10) return `<input type="text" value="${p.value || ''}" onchange="crsfWriteParam(${p.id}, this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;width:120px;">`;
+  if (p.type === 12) return `<span style="color:#aaa">${p.value || ''}</span>`;
+  if (p.type === 13) return renderCrsfCommand(p);
+  // Numeric
+  return `<input type="number" value="${p.value}" min="${p.min||0}" max="${p.max||255}" onchange="crsfWriteParam(${p.id}, this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;width:80px;">`;
+}
+
+function renderCrsfParams(params) {
+  // Index by id, bucket children by parent
+  const byId = {};
+  const children = {};
+  params.forEach(p => {
+    byId[p.id] = p;
+    const pp = p.parent | 0;
+    (children[pp] = children[pp] || []).push(p);
+  });
+
+  // Depth-first rendering with indentation
+  function renderGroup(parentId, depth) {
+    const list = children[parentId] || [];
+    let html = '';
+    list.forEach(p => {
+      const indent = depth * 14;
+      const nameCol = `<b>${p.name}</b>` + (p.unit ? ` <span style="color:#888">(${p.unit})</span>` : '');
+      if (p.type === 11) {
+        // Folder header
+        html += `<div class="row" style="padding-left:${indent}px;background:#1a1a2a;margin-top:4px;border-left:3px solid #55a;">`
+              + `<span style="color:#8af">▾ ${p.name}</span></div>`;
+        html += renderGroup(p.id, depth + 1);
+      } else {
+        html += `<div class="row" style="padding-left:${indent}px;">`
+              + `<span class="label" style="flex:1">${nameCol}</span>`
+              + `<span>${renderCrsfParamValue(p)}</span></div>`;
+      }
+    });
+    return html;
+  }
+
+  // Roots: anything whose parent is 0 or not in byId
+  // (ELRS uses parent_id=0 for root-level params)
+  let html = renderGroup(0, 0);
+  // Orphans — params pointing to an unknown parent
+  Object.keys(children).forEach(pid => {
+    const p = pid | 0;
+    if (p !== 0 && !byId[p]) html += renderGroup(p, 0);
+  });
+  return html || '<div style="color:#888">No visible parameters.</div>';
+}
 function crsfWriteParam(id, value) {
   fetch(`/api/crsf/write?id=${id}&value=${encodeURIComponent(value)}`, {method:'POST'})
     .then(r=>r.text()).then(t=>showCmdResult(t));
@@ -677,34 +756,9 @@ function handleMsg(m) {
       document.getElementById('crsfDevFields').textContent = m.device.fields;
     }
 
-    // Parameters
+    // Parameters (hierarchical by parent_id, state-aware COMMAND)
     if (m.params && m.params.length > 0) {
-      let html = '';
-      m.params.forEach(p => {
-        const nameCol = '<b>' + p.name + '</b>' + (p.unit ? ' <span style="color:#888">(' + p.unit + ')</span>' : '');
-        let valCol = '';
-        if (p.type === 9) { // TEXT_SELECTION
-          const opts = (p.opts || '').split(';');
-          let sel = '<select onchange="crsfWriteParam(' + p.id + ', this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;">';
-          opts.forEach((o,i) => {
-            sel += '<option value="'+i+'"' + (i === p.idx ? ' selected' : '') + '>' + o + '</option>';
-          });
-          sel += '</select>';
-          valCol = sel;
-        } else if (p.type === 11) { // FOLDER
-          valCol = '<span style="color:#888">[folder]</span>';
-        } else if (p.type === 12) { // INFO
-          valCol = '<span style="color:#aaa">' + (p.value || '') + '</span>';
-        } else if (p.type === 13) { // COMMAND
-          valCol = '<button onclick="crsfWriteParam(' + p.id + ', 1)">Execute</button>';
-        } else if (p.type === 10) { // STRING
-          valCol = '<input type="text" value="' + (p.value || '') + '" onchange="crsfWriteParam(' + p.id + ', this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;width:120px;">';
-        } else {
-          valCol = '<input type="number" value="' + p.value + '" min="' + (p.min||0) + '" max="' + (p.max||255) + '" onchange="crsfWriteParam(' + p.id + ', this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;width:80px;">';
-        }
-        html += '<div class="row">' + nameCol + valCol + '</div>';
-      });
-      document.getElementById('crsfParams').innerHTML = html;
+      document.getElementById('crsfParams').innerHTML = renderCrsfParams(m.params);
     }
   }
   else if (m.type === 'flash') {

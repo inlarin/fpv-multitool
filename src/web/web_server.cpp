@@ -258,6 +258,7 @@ static void broadcastTelemetry() {
             for (int i = 0; i < CRSFConfig::paramCount(); i++) {
                 const auto &p = CRSFConfig::param(i);
                 if (!p.complete) continue;
+                if (p.hidden) continue;  // skip debug/internal entries
                 JsonObject o = params.add<JsonObject>();
                 o["id"]     = p.id;
                 o["parent"] = p.parent_id;
@@ -272,7 +273,10 @@ static void broadcastTelemetry() {
                 } else if (p.type == 11) {  // FOLDER
                     // no value
                 } else if (p.type == 13) {  // COMMAND
-                    o["value"] = p.value_text;
+                    // ELRS lifecycle: status + info, rendered as state-aware button(s).
+                    o["status"]  = p.value_num;   // 0=READY,2=PROG,3=CONFIRM_NEEDED,...
+                    o["timeout"] = p.max_val;     // in 10ms units
+                    o["info"]    = p.value_text;
                 } else {
                     o["value"] = p.value_num;
                     o["min"] = p.min_val;
