@@ -215,6 +215,21 @@ const Param* paramById(uint8_t id) {
     return nullptr;
 }
 
+const Param* findCommandParamByName(const char* substr) {
+    if (!substr) return nullptr;
+    String needle(substr);
+    needle.toLowerCase();
+    for (int i = 0; i < s_param_count; i++) {
+        const Param &p = s_params[i];
+        if (!p.complete) continue;
+        if (p.type != CRSF::PARAM_COMMAND) continue;
+        String name = p.name;
+        name.toLowerCase();
+        if (name.indexOf(needle) >= 0) return &s_params[i];
+    }
+    return nullptr;
+}
+
 // Request all params — iterate through known field_count, request one by one
 static uint8_t s_next_request_id = 0;
 static uint32_t s_next_request_ms = 0;

@@ -307,6 +307,14 @@ button:disabled { background: #444; cursor: not-allowed; }
       <button class="danger" onclick="crsfBind()">Bind Mode</button>
       <button class="danger" onclick="crsfReboot()">Reboot RX</button>
     </div>
+    <div class="warning" style="margin-top:10px;">
+      Для смены <b>bind phrase</b> — запусти WiFi mode на приёмнике,
+      подключись к его AP <code>ExpressLRS RX</code> (pass <code>expresslrs</code>)
+      и открой <code>http://10.0.0.1</code>. Требует сначала <b>Read Params</b>.
+    </div>
+    <div class="grid">
+      <button onclick="crsfEnterWifi()">Enter WiFi Update Mode</button>
+    </div>
     <div id="crsfCmdResult" style="margin-top:10px;color:#ff0;"></div>
   </div>
 </div>
@@ -443,6 +451,10 @@ function crsfPing()  { fetch('/api/crsf/ping',  {method:'POST'}).then(r=>r.text(
 function crsfReadParams() { fetch('/api/crsf/params', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
 function crsfBind()   { if (confirm('Send bind command?')) fetch('/api/crsf/bind',   {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
 function crsfReboot() { if (confirm('Reboot receiver?'))   fetch('/api/crsf/reboot', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
+function crsfEnterWifi() {
+  if (!confirm('Switch RX to WiFi update mode? Link will drop; RX will start its own AP.')) return;
+  fetch('/api/crsf/wifi', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t));
+}
 function crsfWriteParam(id, value) {
   fetch(`/api/crsf/write?id=${id}&value=${encodeURIComponent(value)}`, {method:'POST'})
     .then(r=>r.text()).then(t=>showCmdResult(t));

@@ -560,6 +560,34 @@ void WebServer::start() {
         req->send(200, "text/plain", "Bind command sent");
     });
 
+    s_server->on("/api/crsf/wifi", HTTP_POST, [](AsyncWebServerRequest *req) {
+        // ELRS exposes "Enable WiFi" as a PARAM_COMMAND on the receiver.
+        // To trigger it we need the param tree loaded (via /api/crsf/params),
+        // then write value=1 (click/start) to its id.
+        if (!CRSFService::isRunning()) {
+            req->send(400, "text/plain", "CRSF not running");
+            return;
+        }
+        if (CRSFConfig::paramCount() == 0) {
+            req->send(400, "text/plain", "Read parameters first (Read Params)");
+            return;
+        }
+        const CRSFConfig::Param *p = CRSFConfig::findCommandParamByName("wifi");
+        if (!p) {
+            req->send(404, "text/plain", "WiFi command param not found — check RX firmware");
+            return;
+        }
+        bool ok = CRSFConfig::writeParamByte(p->id, 1);  // 1 = start/click
+        if (!ok) {
+            req->send(500, "text/plain", "Failed to send param write");
+            return;
+        }
+        String msg = "Triggered: ";
+        msg += p->name;
+        msg += " (id=" + String(p->id) + ")";
+        req->send(200, "text/plain", msg);
+    });
+
     s_server->on("/api/crsf/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!CRSFService::isRunning()) { req->send(400, "text/plain", "CRSF not running"); return; }
         CRSFService::cmdReboot();

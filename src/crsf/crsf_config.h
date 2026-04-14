@@ -58,6 +58,10 @@ int paramCount();
 const Param& param(int index);
 const Param* paramById(uint8_t id);
 
+// Find first COMMAND-type parameter whose name contains substring (case-insensitive).
+// Used to locate ELRS "Enable WiFi" action without hardcoding IDs.
+const Param* findCommandParamByName(const char* substr);
+
 // Call from loop() — handles timeouts and chunked receives
 void loop();
 
