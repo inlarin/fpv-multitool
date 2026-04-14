@@ -22,10 +22,11 @@ static const uint8_t DSHOT_CMD_3D_MODE_ON = 10;
 enum MotorPage { MPAGE_CONTROL, MPAGE_SETUP, MPAGE_COUNT };
 
 static DShotSpeed s_dshotSpeed = DSHOT300;
-static uint16_t s_throttle = 0;     // 0-2047
+static uint16_t s_throttle = 0;     // 0-2000 (UI), maps to DShot 48-2047
 static bool s_armed = false;
-static bool s_safetyLock = true;     // Prevent accidental throttle
-static int s_throttleStep = 50;
+static bool s_safetyLock = true;    // Prevent accidental throttle
+static int s_throttleStep = 20;     // default 1% of 2000
+static uint16_t s_maxThrottle = 2000; // safety cap
 
 static const char* speedName(DShotSpeed s) {
     switch(s) {
@@ -54,8 +55,8 @@ static void drawStateBar() {
     g->setTextColor(RGB565_WHITE);
     g->setCursor(5, 7);
     g->print(state);
-    // Throttle % in top-right
-    int pct = s_throttle * 100 / 2047;
+    // Throttle % in top-right (relative to full UI range 2000)
+    int pct = s_throttle * 100 / 2000;
     char buf[10];
     snprintf(buf, sizeof(buf), "%3d%%", pct);
     g->setCursor(LCD_WIDTH - 30, 7);
@@ -95,7 +96,7 @@ static void drawControl() {
     g->printf("%4d", s_throttle);
 
     // Percentage
-    int pct = s_throttle * 100 / 2047;
+    int pct = s_throttle * 100 / 2000;
     g->setTextSize(2);
     g->setTextColor(RGB565_CYAN);
     g->setCursor(60, 115);
@@ -107,11 +108,17 @@ static void drawControl() {
     int barW = LCD_WIDTH - 20;
     g->drawRect(9, barY - 1, barW + 2, barH + 2, RGB565_DARKGREY);
 
-    int fillW = s_throttle * barW / 2047;
+    int fillW = s_throttle * barW / 2000;
     uint16_t barColor = RGB565_GREEN;
     if (pct > 50) barColor = RGB565_YELLOW;
     if (pct > 80) barColor = RGB565_RED;
     if (fillW > 0) g->fillRect(10, barY, fillW, barH, barColor);
+
+    // Cap marker (vertical line showing s_maxThrottle position)
+    if (s_maxThrottle < 2000) {
+        int capX = 10 + s_maxThrottle * barW / 2000;
+        g->drawFastVLine(capX, barY - 2, barH + 4, RGB565_ORANGE);
+    }
 
     // Scale
     g->setTextSize(1);
@@ -119,9 +126,9 @@ static void drawControl() {
     g->setCursor(5, barY + barH + 4);
     g->print("0");
     g->setCursor(70, barY + barH + 4);
-    g->print("1024");
+    g->print("1000");
     g->setCursor(140, barY + barH + 4);
-    g->print("2047");
+    g->print("2000");
 
     // Safety warning
     if (s_throttle > 0 && s_armed) {
@@ -165,7 +172,7 @@ static void updateThrottleDisplay() {
     g->printf("%4d", s_throttle);
 
     // Percentage
-    int pct = s_throttle * 100 / 2047;
+    int pct = s_throttle * 100 / 2000;
     g->fillRect(60, 115, 80, 20, RGB565_BLACK);
     g->setTextSize(2);
     g->setTextColor(RGB565_CYAN);
@@ -177,15 +184,27 @@ static void updateThrottleDisplay() {
     int barH = 16;
     int barW = LCD_WIDTH - 20;
     g->fillRect(10, barY, barW, barH, RGB565_BLACK);
-    int fillW = s_throttle * barW / 2047;
+    int fillW = s_throttle * barW / 2000;
     uint16_t barColor = RGB565_GREEN;
     if (pct > 50) barColor = RGB565_YELLOW;
     if (pct > 80) barColor = RGB565_RED;
     if (fillW > 0) g->fillRect(10, barY, fillW, barH, barColor);
+
+    // Cap marker
+    if (s_maxThrottle < 2000) {
+        int capX = 10 + s_maxThrottle * barW / 2000;
+        g->drawFastVLine(capX, barY - 2, barH + 4, RGB565_ORANGE);
+    }
 }
 
-// Setup menu: speed, arm, commands, exit
-enum SetupItem { SI_ARM, SI_SPEED, SI_BEEP, SI_STEP, SI_BACK, SI_COUNT };
+// Setup menu: expanded with direction, 3D mode, power limit
+enum SetupItem {
+    SI_ARM, SI_SPEED, SI_BEEP,
+    SI_DIR_CW, SI_DIR_CCW,
+    SI_3D_ON, SI_3D_OFF,
+    SI_STEP, SI_MAX_THROTTLE,
+    SI_BACK, SI_COUNT
+};
 
 static bool runSetup() {
     int sel = 0;
@@ -203,27 +222,38 @@ static bool runSetup() {
         labels[SI_ARM] = s_armed ? "Disarm" : "Arm ESC";
         labels[SI_SPEED] = speedName(s_dshotSpeed);
         labels[SI_BEEP] = "Beep ESC";
-        labels[SI_STEP] = "Step size";
-        labels[SI_BACK] = "<< Menu";
+        labels[SI_DIR_CW]  = "Dir: CW (normal)";
+        labels[SI_DIR_CCW] = "Dir: CCW (reverse)";
+        labels[SI_3D_ON]   = "3D mode ON";
+        labels[SI_3D_OFF]  = "3D mode OFF";
+        labels[SI_STEP]    = "Step size";
+        labels[SI_MAX_THROTTLE] = "Max throttle";
+        labels[SI_BACK]    = "<< Menu";
+
+        // Compact layout for 10 items: smaller rows
+        int itemH = (LCD_HEIGHT - 40 - 20) / SI_COUNT;
+        if (itemH < 16) itemH = 16;
 
         for (int i = 0; i < SI_COUNT; i++) {
-            int y = 35 + i * 32;
+            int y = 30 + i * itemH;
             if (i == sel) {
                 uint16_t bg = (i == SI_BACK) ? RGB565_MAROON : RGB565_NAVY;
-                g->fillRoundRect(6, y, LCD_WIDTH - 12, 26, 4, bg);
+                g->fillRoundRect(4, y - 1, LCD_WIDTH - 8, itemH - 2, 3, bg);
                 g->setTextColor(RGB565_WHITE);
             } else {
                 g->setTextColor(RGB565_DARKGREY);
             }
-            g->setTextSize(2);
-            g->setCursor(14, y + 4);
+            g->setTextSize(1);
+            g->setCursor(10, y + (itemH - 8) / 2);
             g->print(labels[i]);
 
             // Show current values
             if (i == SI_STEP) {
-                g->setTextSize(1);
-                g->setCursor(130, y + 8);
+                g->setCursor(130, y + (itemH - 8) / 2);
                 g->printf("=%d", s_throttleStep);
+            } else if (i == SI_MAX_THROTTLE) {
+                g->setCursor(130, y + (itemH - 8) / 2);
+                g->printf("=%d", s_maxThrottle);
             }
         }
 
@@ -281,10 +311,48 @@ static bool runSetup() {
                             }
                         }
                         break;
+                    case SI_DIR_CW:
+                    case SI_DIR_CCW: {
+                        // Spin direction commands require ESC armed (zero throttle pulses).
+                        // Must be sent >=6 times to be accepted; we send 10 to be safe.
+                        if (s_armed) {
+                            uint8_t cmd = (sel == SI_DIR_CW) ? DSHOT_CMD_SPIN_DIR_1
+                                                             : DSHOT_CMD_SPIN_DIR_2;
+                            for (int i = 0; i < 10; i++) {
+                                DShot::sendCommand(cmd);
+                                delay(1);
+                            }
+                        }
+                        break;
+                    }
+                    case SI_3D_ON:
+                    case SI_3D_OFF: {
+                        if (s_armed) {
+                            uint8_t cmd = (sel == SI_3D_ON) ? DSHOT_CMD_3D_MODE_ON
+                                                            : DSHOT_CMD_3D_MODE_OFF;
+                            for (int i = 0; i < 10; i++) {
+                                DShot::sendCommand(cmd);
+                                delay(1);
+                            }
+                        }
+                        break;
+                    }
                     case SI_STEP:
-                        if (s_throttleStep >= 100) s_throttleStep = 10;
-                        else if (s_throttleStep >= 50) s_throttleStep = 100;
-                        else s_throttleStep = 50;
+                        // Cycle: 10 → 20 → 50 → 100 → 200 → 10
+                        if (s_throttleStep < 20) s_throttleStep = 20;
+                        else if (s_throttleStep < 50) s_throttleStep = 50;
+                        else if (s_throttleStep < 100) s_throttleStep = 100;
+                        else if (s_throttleStep < 200) s_throttleStep = 200;
+                        else s_throttleStep = 10;
+                        break;
+                    case SI_MAX_THROTTLE:
+                        // Cycle: 500 → 1000 → 1500 → 2000 → 500
+                        if (s_maxThrottle < 1000) s_maxThrottle = 1000;
+                        else if (s_maxThrottle < 1500) s_maxThrottle = 1500;
+                        else if (s_maxThrottle < 2000) s_maxThrottle = 2000;
+                        else s_maxThrottle = 500;
+                        // Clamp current throttle if now above cap
+                        if (s_throttle > s_maxThrottle) s_throttle = s_maxThrottle;
                         break;
                     case SI_BACK:
                         if (s_armed) {
@@ -348,7 +416,7 @@ void runMotorTester() {
         } else {
             // Armed + unlocked (LIVE) — throttle control
             if (evt == BTN_CLICK) {
-                s_throttle = min((int)s_throttle + s_throttleStep, 2047);
+                s_throttle = min((int)s_throttle + s_throttleStep, (int)s_maxThrottle);
                 updateThrottleDisplay();
             } else if (evt == BTN_DOUBLE_CLICK) {
                 s_throttle = max((int)s_throttle - s_throttleStep, 0);
