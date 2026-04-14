@@ -1,0 +1,30 @@
+# PlatformIO
+.pio
+.pioenvs
+.piolibdeps
+
+# VSCode
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch
+
+# Playwright temp
+.playwright-mcp
+
+# Claude Code local settings
+.claude/
+
+# AliExpress product images (not source)
+S*.webp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+
+# Python
+__pycache__
+*.pyc
