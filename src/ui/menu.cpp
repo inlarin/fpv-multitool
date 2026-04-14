@@ -8,6 +8,7 @@ static const char* APP_NAMES[] = {
     "Motor DShot",
     "Battery Tool",
     "WiFi / Web",
+    "CRSF Telem",
 };
 
 static int s_selected = 0;

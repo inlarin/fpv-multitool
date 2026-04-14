@@ -16,6 +16,7 @@
 #include "web/web_state.h"
 #include "battery/dji_battery.h"
 #include "motor/dshot.h"
+#include "crsf/crsf_tester.h"
 
 static AppId currentApp = APP_NONE;
 
@@ -40,19 +41,35 @@ static void webBackgroundTask() {
 
     // Snapshot motor state under lock, then execute heavy ops outside lock
     bool armReq, disarmReq, beepReq, armed;
+    bool dirCwReq, dirCcwReq, mode3DOnReq, mode3DOffReq;
     int dshotSpeed;
     uint16_t throttle;
+    int maxThrottle;
     {
         WebState::Lock lock;
         armReq    = WebState::motor.armRequest;
         disarmReq = WebState::motor.disarmRequest;
         beepReq   = WebState::motor.beepRequest;
+        dirCwReq  = WebState::motor.dirCwRequest;
+        dirCcwReq = WebState::motor.dirCcwRequest;
+        mode3DOnReq  = WebState::motor.mode3DOnRequest;
+        mode3DOffReq = WebState::motor.mode3DOffRequest;
         armed     = WebState::motor.armed;
         dshotSpeed = WebState::motor.dshotSpeed;
         throttle  = WebState::motor.throttle;
+        maxThrottle = WebState::motor.maxThrottle;
         WebState::motor.armRequest = false;
         WebState::motor.disarmRequest = false;
         WebState::motor.beepRequest = false;
+        WebState::motor.dirCwRequest = false;
+        WebState::motor.dirCcwRequest = false;
+        WebState::motor.mode3DOnRequest = false;
+        WebState::motor.mode3DOffRequest = false;
+        // Clamp throttle to cap right here (also makes telemetry consistent)
+        if (throttle > maxThrottle) {
+            throttle = maxThrottle;
+            WebState::motor.throttle = maxThrottle;
+        }
     }
 
     if (armReq && !armed && currentApp != APP_MOTOR) {
@@ -75,6 +92,20 @@ static void webBackgroundTask() {
         WebState::motor.armed = false;
     }
     if (beepReq && armed) DShot::sendCommand(1);
+
+    // Direction & 3D mode require ESC armed. Send command >=6 times to latch.
+    auto sendLatchCmd = [](uint8_t cmd) {
+        for (int i = 0; i < 10; i++) {
+            DShot::sendCommand(cmd);
+            delay(1);
+        }
+    };
+    if (armed) {
+        if (dirCwReq)     sendLatchCmd(7);   // SPIN_DIR_1
+        if (dirCcwReq)    sendLatchCmd(8);   // SPIN_DIR_2
+        if (mode3DOnReq)  sendLatchCmd(10);  // 3D_MODE_ON
+        if (mode3DOffReq) sendLatchCmd(9);   // 3D_MODE_OFF
+    }
 
     // Continuous DShot frame when armed via web
     if (armed) {
@@ -131,6 +162,7 @@ void loop() {
                 case APP_MOTOR:      runMotorTester(); break;
                 case APP_BATTERY:    runBatteryTool(); break;
                 case APP_WIFI:       runWifiApp(); break;
+                case APP_CRSF:       runCRSFTester(); break;
                 default: break;
             }
 

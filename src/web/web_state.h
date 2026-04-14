@@ -36,7 +36,12 @@ struct MotorState {
     bool disarmRequest = false;
     bool beepRequest = false;
     int throttle = 0;      // 0-2000
+    int maxThrottle = 2000; // safety cap (0-2000)
     int dshotSpeed = 300;  // 150/300/600
+    bool dirCwRequest = false;
+    bool dirCcwRequest = false;
+    bool mode3DOnRequest = false;
+    bool mode3DOffRequest = false;
 };
 extern MotorState motor;
 

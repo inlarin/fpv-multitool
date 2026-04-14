@@ -5,6 +5,7 @@
 #include "ui/button.h"
 #include "dshot.h"
 #include "wdt.h"
+#include "web/web_state.h"
 
 static const int MOTOR_PIN = SIGNAL_OUT;
 
@@ -353,6 +354,8 @@ static bool runSetup() {
                         else s_maxThrottle = 500;
                         // Clamp current throttle if now above cap
                         if (s_throttle > s_maxThrottle) s_throttle = s_maxThrottle;
+                        // Propagate to web shared state
+                        { WebState::Lock lock; WebState::motor.maxThrottle = s_maxThrottle; }
                         break;
                     case SI_BACK:
                         if (s_armed) {
@@ -377,6 +380,11 @@ void runMotorTester() {
     s_armed = false;
     s_safetyLock = true;
     s_dshotSpeed = DSHOT300;
+    // Inherit max throttle from shared state (web may have set it)
+    {
+        WebState::Lock lock;
+        s_maxThrottle = constrain(WebState::motor.maxThrottle, 100, 2000);
+    }
 
     drawControl();
 

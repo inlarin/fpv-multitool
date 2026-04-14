@@ -9,6 +9,7 @@ enum AppId {
     APP_MOTOR,
     APP_BATTERY,
     APP_WIFI,
+    APP_CRSF,
     APP_COUNT
 };
 

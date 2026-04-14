@@ -163,7 +163,11 @@ static void updatePulseDisplay() {
 // Returns true = mode selected, false = exit to menu
 static bool selectMode() {
     int sel = (int)s_mode;
-    int itemCount = MODE_COUNT + 2; // modes + freq + back
+    // Items: [modes...] + freq + step + back
+    const int ITEM_FREQ = MODE_COUNT;
+    const int ITEM_STEP = MODE_COUNT + 1;
+    const int ITEM_BACK = MODE_COUNT + 2;
+    const int itemCount = MODE_COUNT + 3;
     auto *g = Display::gfx();
 
     while (true) {
@@ -174,42 +178,31 @@ static bool selectMode() {
         g->println("Servo Setup");
         g->drawFastHLine(0, 32, LCD_WIDTH, RGB565_DARKGREY);
 
-        for (int i = 0; i < MODE_COUNT; i++) {
-            int y = 42 + i * 34;
-            if (i == sel) {
-                g->fillRoundRect(6, y, LCD_WIDTH - 12, 28, 4, RGB565_NAVY);
+        auto drawItem = [&](int idx, int y, const char* label, bool backStyle = false) {
+            if (idx == sel) {
+                uint16_t bg = backStyle ? RGB565_MAROON : RGB565_NAVY;
+                g->fillRoundRect(6, y, LCD_WIDTH - 12, 28, 4, bg);
                 g->setTextColor(RGB565_WHITE);
             } else {
                 g->setTextColor(RGB565_DARKGREY);
             }
             g->setTextSize(2);
             g->setCursor(14, y + 5);
-            g->print(MODE_NAMES[i]);
+            g->print(label);
+        };
+
+        for (int i = 0; i < MODE_COUNT; i++) {
+            drawItem(i, 42 + i * 30, MODE_NAMES[i]);
         }
 
-        // Freq toggle
-        int fy = 42 + MODE_COUNT * 34;
-        if (sel == MODE_COUNT) {
-            g->fillRoundRect(6, fy, LCD_WIDTH - 12, 28, 4, RGB565_NAVY);
-            g->setTextColor(RGB565_WHITE);
-        } else {
-            g->setTextColor(RGB565_DARKGREY);
-        }
-        g->setTextSize(2);
-        g->setCursor(14, fy + 5);
-        g->printf("Freq:%dHz", s_freq);
+        char buf[20];
+        snprintf(buf, sizeof(buf), "Freq:%dHz", s_freq);
+        drawItem(ITEM_FREQ, 42 + ITEM_FREQ * 30, buf);
 
-        // Back option
-        int by = 42 + (MODE_COUNT + 1) * 34;
-        if (sel == MODE_COUNT + 1) {
-            g->fillRoundRect(6, by, LCD_WIDTH - 12, 28, 4, RGB565_MAROON);
-            g->setTextColor(RGB565_WHITE);
-        } else {
-            g->setTextColor(RGB565_DARKGREY);
-        }
-        g->setTextSize(2);
-        g->setCursor(14, by + 5);
-        g->print("<< Menu");
+        snprintf(buf, sizeof(buf), "Step:%dus", s_stepSize);
+        drawItem(ITEM_STEP, 42 + ITEM_STEP * 30, buf);
+
+        drawItem(ITEM_BACK, 42 + ITEM_BACK * 30, "<< Menu", true);
 
         g->setTextSize(1);
         g->setTextColor(RGB565_DARKGREY);
@@ -229,12 +222,20 @@ static bool selectMode() {
                     s_mode = (ServoMode)sel;
                     if (s_mode == MODE_CENTER) s_pulseUs = PULSE_CENTER;
                     return true;
-                } else if (sel == MODE_COUNT) {
+                } else if (sel == ITEM_FREQ) {
                     // Stop PWM before changing frequency
                     pwmStop();
                     s_freq = (s_freq == 50) ? 330 : 50;
                     pwmSetup();
                     pwmUpdate();
+                    break;
+                } else if (sel == ITEM_STEP) {
+                    // Cycle: 1 → 5 → 10 → 50 → 100 → 1
+                    if (s_stepSize < 5) s_stepSize = 5;
+                    else if (s_stepSize < 10) s_stepSize = 10;
+                    else if (s_stepSize < 50) s_stepSize = 50;
+                    else if (s_stepSize < 100) s_stepSize = 100;
+                    else s_stepSize = 1;
                     break;
                 } else {
                     return false; // back to main menu

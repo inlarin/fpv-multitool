@@ -57,11 +57,25 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
         WebState::motor.disarmRequest = true;
     } else if (strcmp(cmd, "throttle") == 0) {
         // DShot range 48-2047; UI sends 0-2000 (we add 47 offset later)
-        WebState::motor.throttle = constrain((int)(doc["value"] | 0), 0, 2000);
+        int req = constrain((int)(doc["value"] | 0), 0, 2000);
+        if (req > WebState::motor.maxThrottle) req = WebState::motor.maxThrottle;
+        WebState::motor.throttle = req;
     } else if (strcmp(cmd, "dshotSpeed") == 0) {
         WebState::motor.dshotSpeed = doc["speed"] | 300;
     } else if (strcmp(cmd, "motorBeep") == 0) {
         WebState::motor.beepRequest = true;
+    } else if (strcmp(cmd, "motorMaxThrottle") == 0) {
+        int v = constrain((int)(doc["value"] | 2000), 100, 2000);
+        WebState::motor.maxThrottle = v;
+        if (WebState::motor.throttle > v) WebState::motor.throttle = v;
+    } else if (strcmp(cmd, "motorDirCW") == 0) {
+        WebState::motor.dirCwRequest = true;
+    } else if (strcmp(cmd, "motorDirCCW") == 0) {
+        WebState::motor.dirCcwRequest = true;
+    } else if (strcmp(cmd, "motor3DOn") == 0) {
+        WebState::motor.mode3DOnRequest = true;
+    } else if (strcmp(cmd, "motor3DOff") == 0) {
+        WebState::motor.mode3DOffRequest = true;
     }
 }
 

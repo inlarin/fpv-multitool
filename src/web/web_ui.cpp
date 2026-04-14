@@ -104,6 +104,23 @@ button:disabled { background: #444; cursor: not-allowed; }
       <button onclick="motorBeep()">Beep ESC</button>
       <button onclick="setThrottle(0)">Zero</button>
     </div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid #333;">
+      <div class="row">
+        <span class="label">Max throttle:</span>
+        <span class="value"><span id="maxThrottleVal">2000</span> / 2000</span>
+      </div>
+      <input type="range" id="maxThrottleSlider" min="100" max="2000" step="100" value="2000" oninput="onMaxThrottle()">
+      <div class="row" style="margin-top:8px"><span class="label">Direction (armed):</span></div>
+      <div class="grid">
+        <button onclick="motorDirCW()">Dir CW</button>
+        <button onclick="motorDirCCW()">Dir CCW</button>
+      </div>
+      <div class="row" style="margin-top:8px"><span class="label">3D mode (armed):</span></div>
+      <div class="grid">
+        <button onclick="motor3DOn()">3D ON</button>
+        <button onclick="motor3DOff()">3D OFF</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -386,6 +403,18 @@ function setDshotSpeed() {
   send({cmd:'dshotSpeed', speed: +document.getElementById('dshotSpeed').value});
 }
 function motorBeep() { send({cmd:'motorBeep'}); }
+function onMaxThrottle() {
+  const v = +document.getElementById('maxThrottleSlider').value;
+  document.getElementById('maxThrottleVal').textContent = v;
+  const slider = document.getElementById('throttleSlider');
+  slider.max = v;
+  if (+slider.value > v) { slider.value = v; onThrottle(); }
+  send({cmd:'motorMaxThrottle', value: v});
+}
+function motorDirCW()  { if (confirm('Set direction CW (normal)? ESC must be armed.'))  send({cmd:'motorDirCW'}); }
+function motorDirCCW() { if (confirm('Set direction CCW (reverse)? ESC must be armed.')) send({cmd:'motorDirCCW'}); }
+function motor3DOn()   { if (confirm('Enable 3D mode? ESC must be armed.'))  send({cmd:'motor3DOn'}); }
+function motor3DOff()  { if (confirm('Disable 3D mode? ESC must be armed.')) send({cmd:'motor3DOff'}); }
 
 // === BATTERY ===
 function battAction(action) {
