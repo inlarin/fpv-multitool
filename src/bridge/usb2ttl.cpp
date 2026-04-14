@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "ui/status_led.h"
 #include "wdt.h"
 
 // USB CDC access for DTR/RTS signals
@@ -274,6 +275,7 @@ void runUSB2TTL() {
 
     while (true) {
         feed_wdt();
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
 
         // --- Navigation ---

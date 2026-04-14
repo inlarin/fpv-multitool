@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "ui/status_led.h"
 #include "wdt.h"
 #include "crsf_service.h"
 #include "web/web_state.h"
@@ -251,6 +252,7 @@ void runCRSFTester() {
         feed_wdt();
         CRSFService::loop();  // pump CRSF UART
 
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
         if (evt == BTN_CLICK) {
             page = (CrsfPage)((page + 1) % PG_COUNT);

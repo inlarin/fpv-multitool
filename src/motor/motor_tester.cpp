@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "ui/status_led.h"
 #include "dshot.h"
 #include "wdt.h"
 #include "web/web_state.h"
@@ -264,7 +265,9 @@ static bool runSetup() {
         g->print("Clk=next Dbl=prev Hld=select");
 
         while (true) {
-            ButtonEvent evt = Button::poll();
+            StatusLed::loop();
+            StatusLed::loop();
+        ButtonEvent evt = Button::poll();
             if (evt == BTN_CLICK) { sel = (sel + 1) % SI_COUNT; break; }
             if (evt == BTN_DOUBLE_CLICK) { sel = (sel - 1 + SI_COUNT) % SI_COUNT; break; }
             if (evt == BTN_LONG_PRESS) {
@@ -392,6 +395,7 @@ void runMotorTester() {
 
     while (true) {
         feed_wdt();
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
 
         if (!s_armed) {

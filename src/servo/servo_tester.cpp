@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "ui/status_led.h"
 #include "wdt.h"
 
 // === Servo config ===
@@ -210,7 +211,9 @@ static bool selectMode() {
         g->print("Clk=next Dbl=prev Hld=select");
 
         while (true) {
-            ButtonEvent evt = Button::poll();
+            StatusLed::loop();
+            StatusLed::loop();
+        ButtonEvent evt = Button::poll();
             if (evt == BTN_CLICK) {
                 sel = (sel + 1) % itemCount;
                 break;
@@ -261,6 +264,7 @@ void runServoTester() {
 
     while (true) {
         feed_wdt();
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
 
         if (evt == BTN_LONG_PRESS) {

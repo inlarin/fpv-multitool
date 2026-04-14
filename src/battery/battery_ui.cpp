@@ -3,6 +3,7 @@
 #include "pin_config.h"
 #include "ui/display.h"
 #include "ui/button.h"
+#include "ui/status_led.h"
 #include "dji_battery.h"
 #include "wdt.h"
 
@@ -459,6 +460,7 @@ static bool confirmDanger(const char* title, const char* line1, const char* line
 
     while (true) {
         feed_wdt();
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
         if (evt == BTN_LONG_PRESS) return true;
         if (evt == BTN_DOUBLE_CLICK) return false;
@@ -572,6 +574,7 @@ void runBatteryTool() {
 
     while (true) {
         feed_wdt();
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
 
         if (evt == BTN_CLICK) {

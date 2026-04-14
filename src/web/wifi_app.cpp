@@ -3,6 +3,7 @@
 #include <qrcode.h>
 #include "ui/display.h"
 #include "ui/button.h"
+#include "ui/status_led.h"
 #include "wifi_manager.h"
 #include "web_server.h"
 #include "web_state.h"
@@ -148,6 +149,7 @@ void runWifiApp() {
 
     while (true) {
         feed_wdt();
+        StatusLed::loop();
         ButtonEvent evt = Button::poll();
 
         if (evt == BTN_DOUBLE_CLICK) {
