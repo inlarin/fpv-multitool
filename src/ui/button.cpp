@@ -7,9 +7,13 @@ static uint32_t s_releaseTime = 0;
 static uint8_t s_clickCount = 0;
 static bool s_longFired = false;
 
+// Tuned for comfortable single-button use:
+//   DEBOUNCE: filter out contact bounce
+//   LONG_PRESS: hold longer to avoid accidental long-press during double-tap
+//   DOUBLE_CLICK: wider window tolerates slower users
 static const uint32_t DEBOUNCE_MS = 30;
-static const uint32_t LONG_PRESS_MS = 600;
-static const uint32_t DOUBLE_CLICK_MS = 400;
+static const uint32_t LONG_PRESS_MS = 800;
+static const uint32_t DOUBLE_CLICK_MS = 500;
 
 void Button::init(uint8_t pin) {
     s_pin = pin;

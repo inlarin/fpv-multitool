@@ -36,35 +36,56 @@ static const char* speedName(DShotSpeed s) {
     }
 }
 
+// Persistent state bar: always visible at top, color-coded
+static void drawStateBar() {
+    auto *g = Display::gfx();
+    // Color-coded state bar across top
+    uint16_t bg = RGB565_MAROON;  // disarmed = dark red
+    const char* state = "DISARMED";
+    if (s_armed && s_safetyLock) {
+        bg = RGB565_OLIVE;        // armed+locked = dark yellow
+        state = "ARMED (LOCKED)";
+    } else if (s_armed && !s_safetyLock) {
+        bg = RGB565_DARKGREEN;    // live = dark green
+        state = "LIVE — motor may spin";
+    }
+    g->fillRect(0, 0, LCD_WIDTH, 22, bg);
+    g->setTextSize(1);
+    g->setTextColor(RGB565_WHITE);
+    g->setCursor(5, 7);
+    g->print(state);
+    // Throttle % in top-right
+    int pct = s_throttle * 100 / 2047;
+    char buf[10];
+    snprintf(buf, sizeof(buf), "%3d%%", pct);
+    g->setCursor(LCD_WIDTH - 30, 7);
+    g->print(buf);
+}
+
 static void drawControl() {
     auto *g = Display::gfx();
     g->fillScreen(RGB565_BLACK);
 
-    // Title
-    g->setTextSize(2);
-    g->setTextColor(RGB565_ORANGE);
-    g->setCursor(5, 4);
-    g->print("Motor Test");
-    g->drawFastHLine(0, 24, LCD_WIDTH, RGB565_DARKGREY);
+    drawStateBar();
 
-    // Protocol
+    // Title row (below state bar)
     g->setTextSize(1);
     g->setTextColor(RGB565_DARKGREY);
-    g->setCursor(5, 30);
+    g->setCursor(5, 28);
     g->printf("%s  GPIO%d", speedName(s_dshotSpeed), MOTOR_PIN);
 
-    // Armed status
-    g->setTextSize(2);
-    g->setCursor(5, 48);
+    // Large "what to press next" hint
+    g->setTextSize(1);
+    g->setCursor(5, 42);
     if (!s_armed) {
-        g->setTextColor(RGB565_RED);
-        g->print("DISARMED");
+        g->setTextColor(RGB565_CYAN);
+        g->print("Hold = setup / arm");
     } else if (s_safetyLock) {
         g->setTextColor(RGB565_YELLOW);
-        g->print("ARMED lock");
+        g->print("Click = UNLOCK throttle");
     } else {
         g->setTextColor(RGB565_GREEN);
-        g->print("ARMED");
+        g->print("Clk/Dbl = throttle +/-");
     }
 
     // Throttle value
@@ -132,6 +153,9 @@ static void drawControl() {
 
 static void updateThrottleDisplay() {
     auto *g = Display::gfx();
+
+    // Redraw state bar (pct in header changes too)
+    drawStateBar();
 
     // Throttle number
     g->fillRect(20, 80, 140, 28, RGB565_BLACK);
@@ -301,22 +325,28 @@ void runMotorTester() {
                 drawControl();
             }
         } else if (s_safetyLock) {
-            // Armed but locked — click to unlock
+            // Armed but locked — click to unlock, DblClk to disarm
             if (evt == BTN_CLICK) {
                 s_safetyLock = false;
                 drawControl();
-            } else if (evt == BTN_LONG_PRESS) {
-                // Disarm
+            } else if (evt == BTN_DOUBLE_CLICK) {
+                // Disarm (quick exit from locked state)
                 s_throttle = 0;
-                DShot::sendThrottle(0);
-                delay(100);
+                for (int i = 0; i < 50; i++) {
+                    DShot::sendThrottle(0);
+                    delayMicroseconds(2000);
+                }
                 DShot::stop();
                 s_armed = false;
                 s_safetyLock = true;
                 drawControl();
+            } else if (evt == BTN_LONG_PRESS) {
+                // Open setup (with disarm option inside)
+                if (!runSetup()) return; // exit to menu
+                drawControl();
             }
         } else {
-            // Armed and unlocked — throttle control
+            // Armed + unlocked (LIVE) — throttle control
             if (evt == BTN_CLICK) {
                 s_throttle = min((int)s_throttle + s_throttleStep, 2047);
                 updateThrottleDisplay();
@@ -324,14 +354,16 @@ void runMotorTester() {
                 s_throttle = max((int)s_throttle - s_throttleStep, 0);
                 updateThrottleDisplay();
             } else if (evt == BTN_LONG_PRESS) {
-                // Emergency stop + setup
+                // Emergency stop + setup (motor always stopped first)
                 s_throttle = 0;
-                DShot::sendThrottle(0);
+                for (int i = 0; i < 20; i++) {
+                    DShot::sendThrottle(0);
+                    delayMicroseconds(2000);
+                }
+                s_safetyLock = true;  // auto re-lock on leaving live mode
                 updateThrottleDisplay();
                 delay(200);
-                if (!runSetup()) {
-                    return; // exit to menu
-                }
+                if (!runSetup()) return; // exit to menu
                 drawControl();
             }
         }

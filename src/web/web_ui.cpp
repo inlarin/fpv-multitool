@@ -389,6 +389,14 @@ function motorBeep() { send({cmd:'motorBeep'}); }
 
 // === BATTERY ===
 function battAction(action) {
+  const confirmMsgs = {
+    unseal:      'Unseal battery? Tries TI default key.\nMavic 2+/3/4 will likely fail (no public key).',
+    clearpf:     'Clear Permanent Failure flags?\nBattery MUST be unsealed first.\nOperation can take 2-3 seconds.',
+    seal:        'Seal battery (lock config)?',
+    reset:       'Send soft reset to BMS?',
+    fullservice: 'FULL SERVICE: unseal + clear PF + seal.\nPotentially destructive. Continue only if you know what you are doing.'
+  };
+  if (confirmMsgs[action] && !confirm(confirmMsgs[action])) return;
   document.getElementById('battActionResult').textContent = '...';
   fetch('/api/batt?action='+action).then(r=>r.text()).then(t=>{
     document.getElementById('battActionResult').textContent = t;

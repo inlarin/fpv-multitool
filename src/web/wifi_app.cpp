@@ -15,7 +15,7 @@ static const char* AP_SSID = "FPV-MultiTool";
 static const char* AP_PASS = "fpv12345";
 
 // Draw QR code at x,y with given pixel scale
-static void drawQR(int x, int y, const char *text, int scale = 3) {
+static void drawQR(int x, int y, const char *text, int scale = 4) {
     auto *g = Display::gfx();
 
     // QR version 4 (33x33) with ECC_LOW fits ~78 alphanumeric or ~62 chars
@@ -88,8 +88,8 @@ static void drawStatus() {
     // QR code
     // For AP: WiFi QR auto-joins network when scanned
     // For STA: URL QR opens browser directly
-    int qrScale = 3;
-    int qrSize = 33 * qrScale; // v4 = 33 modules
+    int qrScale = 4;
+    int qrSize = 33 * qrScale; // v4 = 33 modules × 4 = 132px
     int qrX = (LCD_WIDTH - qrSize) / 2;
     int qrY = y + 2;
 

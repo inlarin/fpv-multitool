@@ -412,6 +412,79 @@ static void runScan() {
     g->printf("Found %d device(s)", found);
 }
 
+// Confirm dialog: shows warning, requires Hold to proceed, DblClk to cancel
+// Returns true if user confirmed, false if cancelled
+static bool confirmDanger(const char* title, const char* line1, const char* line2 = nullptr) {
+    auto *g = Display::gfx();
+    g->fillScreen(RGB565_BLACK);
+
+    // Warning icon area
+    g->fillRect(0, 0, LCD_WIDTH, 30, RGB565_MAROON);
+    g->setTextSize(2);
+    g->setTextColor(RGB565_WHITE);
+    g->setCursor(10, 7);
+    g->print("!! CONFIRM");
+
+    g->setTextSize(1);
+    g->setTextColor(RGB565_YELLOW);
+    g->setCursor(5, 40);
+    g->print(title);
+
+    g->setTextColor(RGB565_WHITE);
+    g->setCursor(5, 60);
+    g->print(line1);
+    if (line2) {
+        g->setCursor(5, 72);
+        g->print(line2);
+    }
+
+    g->setTextColor(RGB565_DARKGREY);
+    g->setCursor(5, 100);
+    g->print("Make sure battery V>3.3/cell");
+    g->setCursor(5, 114);
+    g->print("and delta <50mV");
+
+    // Big instruction
+    g->setTextSize(2);
+    g->setTextColor(RGB565_GREEN);
+    g->setCursor(5, 150);
+    g->print("Hold = OK");
+    g->setTextColor(RGB565_RED);
+    g->setCursor(5, 180);
+    g->print("DblClk=cancel");
+    g->setCursor(5, 210);
+    g->setTextSize(1);
+    g->setTextColor(RGB565_DARKGREY);
+    g->print("Click = ignore");
+
+    while (true) {
+        feed_wdt();
+        ButtonEvent evt = Button::poll();
+        if (evt == BTN_LONG_PRESS) return true;
+        if (evt == BTN_DOUBLE_CLICK) return false;
+        delay(10);
+    }
+}
+
+// Simple progress bar (x/xmax) + optional text
+static void drawProgress(int step, int total, const char* label) {
+    auto *g = Display::gfx();
+    // Progress bar at bottom
+    int y = LCD_HEIGHT - 40;
+    g->fillRect(0, y, LCD_WIDTH, 30, RGB565_BLACK);
+
+    g->setTextSize(1);
+    g->setTextColor(RGB565_CYAN);
+    g->setCursor(5, y);
+    g->printf("[%d/%d] %s", step, total, label);
+
+    int barW = LCD_WIDTH - 20;
+    int barY = y + 14;
+    g->drawRect(9, barY, barW + 2, 10, RGB565_DARKGREY);
+    int fillW = step * barW / total;
+    g->fillRect(10, barY + 1, fillW, 8, RGB565_GREEN);
+}
+
 // Full service sequence: unseal + clear PF + reseal
 static void runFullService() {
     auto *g = Display::gfx();
@@ -421,6 +494,7 @@ static void runFullService() {
     int y = 30;
     g->setTextSize(1);
 
+    drawProgress(1, 5, "Unsealing");
     g->setTextColor(RGB565_YELLOW);
     g->setCursor(5, y); g->print("[1/5] Unsealing..."); y += 14;
     UnsealResult ur = DJIBattery::unseal();
@@ -445,8 +519,11 @@ static void runFullService() {
     y += 14;
 
     g->setTextColor(RGB565_YELLOW);
+    drawProgress(2, 5, "MAC 0x29 PF reset");
     g->setCursor(5, y); g->print("[2/5] MAC 0x29 PF reset"); y += 14;
+    drawProgress(3, 5, "MAC 0x54 clear");
     g->setCursor(5, y); g->print("[3/5] MAC 0x54 clear"); y += 14;
+    drawProgress(4, 5, "Verify + reset");
     g->setCursor(5, y); g->print("[4/5] Verify + reset"); y += 14;
 
     if (DJIBattery::clearPFProper()) {
@@ -458,6 +535,7 @@ static void runFullService() {
     }
 
     g->setTextColor(RGB565_YELLOW);
+    drawProgress(5, 5, "Sealing");
     g->setCursor(5, y); g->print("[5/5] Sealing..."); y += 14;
     DJIBattery::seal();
     g->setTextColor(RGB565_GREEN);
@@ -505,8 +583,14 @@ void runBatteryTool() {
             if (s_page == BP_SCAN) {
                 runScan();
             } else if (s_page == BP_SERVICE && s_connected) {
-                runFullService();
-                s_info = DJIBattery::readAll();
+                // Require explicit confirmation before dangerous ops
+                if (confirmDanger("Full Service", "Unseal + Clear PF + Seal",
+                                  DJIBattery::modelNeedsDjiKey(s_info.model) ?
+                                      "May fail: Mavic 3/4 needs DJI key" :
+                                      "TI default key will be tried")) {
+                    runFullService();
+                    s_info = DJIBattery::readAll();
+                }
                 redrawPage();
             } else {
                 // Refresh
