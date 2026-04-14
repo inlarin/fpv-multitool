@@ -9,8 +9,13 @@
 .vscode/launch.json
 .vscode/ipch
 
-# Playwright temp
+# Playwright temp + ad-hoc screenshots from responsive testing
 .playwright-mcp
+/mobile-*.png
+/1080p-*.png
+/720p-*.png
+/2k-*.png
+/4k-*.png
 
 # Claude Code local settings
 .claude/

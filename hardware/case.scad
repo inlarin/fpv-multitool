@@ -1,127 +1,159 @@
 // ESP32-S3-LCD-1.47B enclosure — parametric
-// Units: millimeters
-// Render: F6, then File → Export → Export as STL
+// Frame-on-legs case: pins soldered DOWN (5.5 mm tails), Dupont access from below.
 //
-// VERIFY BEFORE PRINTING:
-//   - Measure total stack height (USB-C bottom to LCD glass top) with calipers
-//   - Confirm JST battery connector position (not accounted for below)
-//   - Confirm USB-C cutout height matches your cable's overmold
+// Units: millimeters. Render: F6, File → Export → Export as STL.
+//
+// ARCHITECTURE:
+//   - 4 tall corner legs raise the PCB ~21 mm above the desk, so pin tails
+//     (5.5 mm) + Dupont housings (~14 mm) fit underneath freely.
+//   - Between the legs the sides are fully open → wires exit in any direction.
+//   - Above the PCB: a short frame hugs the board, LCD faces up.
+//   - Snap-on lid with LCD window and holes for BOOT / RST buttons.
+//   - Optional cutout on the left short end for an external connector
+//     (XT30 / JST / etc.) — disabled by default.
+//
+// VERIFY ON REAL BOARD BEFORE PRINTING:
+//   - Pin-tail length (default 5.5 mm, per user)
+//   - LCD module thickness above PCB (default 2.2 mm)
+//   - USB-C cutout vs. your cable's overmold
+//   - BOOT / RST button positions on lid (test by eye against the board)
 
-/* [What to render] */
-part = "both"; // [tray, lid, both]
+/* [Render] */
+part = "both";  // [tray, lid, both]
 
-/* [PCB] */
+/* [PCB (Waveshare ESP32-S3-LCD-1.47B)] */
 pcb_len       = 36.37;
 pcb_wid       = 20.32;
 pcb_thk       = 1.60;
 
-// Mounting hole pattern (center-to-center)
-hole_pattern_x = 32.43;   // pcb_len - 2*1.97
-hole_pattern_y = 15.92;   // pcb_wid - 2*2.20
-hole_dia       = 2.20;    // M2 clearance
-standoff_dia   = 4.00;
-standoff_h     = 2.00;    // PCB sits this high above tray floor
+// M2 mounting hole pattern (informational — not used in frame design)
+hole_pattern_x = 32.43;
+hole_pattern_y = 15.92;
 
-/* [LCD — on top face of PCB] */
-lcd_active_x   = 30.72;   // long axis of 172x320 display
+/* [Pin headers — soldered pointing DOWN for Dupont] */
+// User-measured projection of the soldered pin header below PCB:
+//   total 9.5 mm below PCB bottom, of which
+//   first 2.5 mm is the black plastic header body,
+//   remaining 7.0 mm is exposed metal pin (where Dupont contacts grip).
+pin_total_below_pcb = 9.5;
+pin_plastic_height  = 2.5;
+pin_metal_exposed   = pin_total_below_pcb - pin_plastic_height;  // = 7.0
+// Dupont female housing seats against the plastic body and hangs below:
+dupont_housing_h   = 14.0;
+dupont_margin      = 2.0;   // gap between bottom of Dupont and desk
+
+/* [LCD — 1.47" module on top face] */
+lcd_active_x   = 30.72;
 lcd_active_y   = 25.04;
-lcd_module_thk = 2.20;    // FPC + panel + glass above PCB surface
+lcd_module_thk = 2.20;
 
-/* [Enclosure] */
-wall       = 1.60;
-floor_thk  = 1.50;
-lid_thk    = 1.50;
-clearance  = 0.20;        // gap between PCB and cavity wall
-corner_r   = 2.00;        // outer corner radius
+/* [Enclosure geometry] */
+wall      = 1.80;
+lid_thk   = 1.60;
+clearance = 0.25;    // PCB ↔ inner wall gap
+corner_r  = 2.00;
 
-// Internal cavity (bottom tray)
+// Cavity (inside the upper frame)
 cav_x = pcb_len + 2*clearance;
 cav_y = pcb_wid + 2*clearance;
-cav_z = standoff_h + pcb_thk + lcd_module_thk + 0.5;  // headroom
-
-// Outer dimensions
 out_x = cav_x + 2*wall;
 out_y = cav_y + 2*wall;
 
-tray_h = floor_thk + cav_z;
-lid_skirt_h = 3.0;
+// Corner leg cross-section (how thick the corner pillars are)
+leg_w = wall + 2.5;  // outer wall + inward shelf that supports PCB
+
+// Under-PCB clearance height (legs):
+// Dupont top butts against pin-header plastic, not against bare pin tip,
+// so clearance is measured from PCB bottom → plastic → housing → margin.
+leg_h = pin_plastic_height + dupont_housing_h + dupont_margin;  // = 18.5 mm
+
+// Shelf thickness under PCB (formed by the step from "solid corner" to cavity)
+shelf_thk = 1.5;
+
+// Upper-frame height above PCB
+headroom_above_lcd = 0.6;
+frame_h_above_pcb  = pcb_thk + lcd_module_thk + headroom_above_lcd;
+
+// Z reference planes (desk at z=0)
+z_shelf_top   = leg_h;               // PCB bottom sits here
+z_pcb_top     = z_shelf_top + pcb_thk;
+total_h       = leg_h + shelf_thk + frame_h_above_pcb;
+//  (the shelf is below PCB by shelf_thk — we subtract it from the step)
 
 /* [USB-C cutout — right short end] */
-usbc_w = 10.0;   // width of cutout
-usbc_h = 4.0;    // height of cutout (allow overmold)
-// Vertical position: cable axis at PCB top surface
-usbc_z_center = floor_thk + standoff_h + pcb_thk/2;
+usbc_w = 10.0;
+usbc_h = 5.0;
+usbc_z_center = z_shelf_top + pcb_thk/2;  // cable axis at mid-PCB thickness
 
-/* [Buttons — BOOT (top-right corner) and RST (right end, near USB-C)] */
-// Since both are near the right end, use two small access holes on the top
-// face of the tray wall or on the lid side. Here: lid side cutouts.
-btn_dia = 3.0;
-btn_gap = 4.0;    // spacing between BOOT and RST
-btn_inset_from_usb_end = 6.0;  // from right short wall, inward
+/* [Optional external-connector cutout on LEFT short end] */
+// Set ext_conn_enable=1 and tune size/position for XT30, JST, screw terminal, etc.
+ext_conn_enable = 0;
+ext_conn_w      = 8.0;
+ext_conn_h      = 8.0;
+ext_conn_z_ctr  = leg_h - 6.0;    // lowered into the leg zone (open face)
 
-/* [Pin-header access slots on long sides — optional, set to 0 to disable] */
-pin_slot_len = 30.0;
-pin_slot_h   = 2.5;
-pin_slot_enable = 1;
+/* [Button access holes on lid — near USB-C end (right short side)] */
+// Waveshare board: BOOT top-right corner, RST near USB-C on right edge.
+// Holes pierce the lid top plate; use pointed tool or pin.
+boot_enable = 1;
+rst_enable  = 1;
+btn_dia     = 3.0;
+btn_inset_x = 4.5;    // from right short edge
+boot_y_off  = 6.0;    // from lid center along short axis (+Y)
+rst_y_off   = -6.0;   // (−Y)
 
 /* [Snap fit] */
 snap_enable = 1;
 snap_h = 1.0;
 snap_w = 4.0;
-snap_t = 0.6;   // protrusion
+snap_t = 0.6;
 
-$fn = 48;
+$fn = 56;
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 module rounded_box(x, y, z, r) {
-    hull() {
-        for (dx = [r, x-r], dy = [r, y-r])
-            translate([dx, dy, 0]) cylinder(h=z, r=r);
-    }
+    hull() for (dx = [r, x-r], dy = [r, y-r])
+        translate([dx, dy, 0]) cylinder(h=z, r=r);
 }
 
-module mounting_holes_2d() {
-    // pattern centered on cavity
-    cx = out_x/2;
-    cy = out_y/2;
-    for (sx = [-1, 1], sy = [-1, 1])
-        translate([cx + sx*hole_pattern_x/2, cy + sy*hole_pattern_y/2])
-            children();
-}
-
-// ─── tray ─────────────────────────────────────────────────────────────────
+// ─── tray: 4 corner legs + upper frame with inward shelf ─────────────────
 
 module tray() {
     difference() {
-        // outer shell
-        rounded_box(out_x, out_y, tray_h, corner_r);
+        // Solid outer block (legs + frame as one piece)
+        rounded_box(out_x, out_y, total_h, corner_r);
 
-        // internal cavity
-        translate([wall, wall, floor_thk])
-            rounded_box(cav_x, cav_y, cav_z + 1, corner_r - wall);
+        // --- carve out the open leg zone (everything between 4 corners) ---
+        // Long-side openings (cut through Y)
+        translate([leg_w, -0.1, -0.1])
+            cube([out_x - 2*leg_w, out_y + 0.2, leg_h + 0.01]);
+        // Short-side openings (cut through X)
+        translate([-0.1, leg_w, -0.1])
+            cube([out_x + 0.2, out_y - 2*leg_w, leg_h + 0.01]);
 
-        // USB-C cutout in right short wall
+        // --- carve PCB cavity full-height (no floor) ---
+        // Wires/pins pass freely from z=0 up to PCB bottom and beyond.
+        translate([wall, wall, -0.1])
+            rounded_box(cav_x, cav_y, total_h + 0.2, corner_r - wall);
+
+        // USB-C cutout (right short end)
         translate([out_x - wall - 0.1,
                    out_y/2 - usbc_w/2,
                    usbc_z_center - usbc_h/2])
             cube([wall + 0.2, usbc_w, usbc_h]);
 
-        // Pin-header slots on both long walls at PCB top-surface level
-        if (pin_slot_enable) {
-            z_pin = floor_thk + standoff_h + pcb_thk - 0.3;
-            // front long wall (y = 0)
-            translate([(out_x - pin_slot_len)/2, -0.1, z_pin])
-                cube([pin_slot_len, wall + 0.2, pin_slot_h]);
-            // back long wall
-            translate([(out_x - pin_slot_len)/2, out_y - wall - 0.1, z_pin])
-                cube([pin_slot_len, wall + 0.2, pin_slot_h]);
-        }
+        // Optional external connector cutout (left short end)
+        if (ext_conn_enable)
+            translate([-0.1,
+                       out_y/2 - ext_conn_w/2,
+                       ext_conn_z_ctr - ext_conn_h/2])
+                cube([wall + 0.2, ext_conn_w, ext_conn_h]);
 
-        // snap dimples (female) on long walls to mate with lid bumps
+        // Snap dimples (female) on long walls of the upper frame
         if (snap_enable) {
-            z_snap = tray_h - snap_h/2 - 0.5;
-            for (ox = [6, out_x - 6], sy = [0, 1]) {
+            z_snap = total_h - 1.5;
+            for (ox = [out_x*0.28, out_x*0.72], sy = [0, 1]) {
                 translate([ox - snap_w/2,
                            sy == 0 ? wall - 0.3 : out_y - wall - snap_t + 0.3,
                            z_snap - snap_h/2])
@@ -130,64 +162,70 @@ module tray() {
         }
     }
 
-    // standoffs inside cavity
-    translate([0, 0, floor_thk])
-    mounting_holes_2d()
-        difference() {
-            cylinder(h=standoff_h, d=standoff_dia);
-            translate([0, 0, -0.1])
-                cylinder(h=standoff_h + 0.2, d=hole_dia);
-        }
+    // ── PCB support: 4 L-shaped corner tabs protruding into the cavity ──
+    // Tabs occupy only the corner regions, clear of pin-header rows.
+    // Pin rows run along the long (X) edges in the middle of each long side,
+    // so only the first/last ~6 mm along each long edge is pin-free at corners.
+    shelf_arm_x = 5.0;   // tab length along long (X) edge
+    shelf_arm_y = 4.0;   // tab length along short (Y) edge
+    shelf_depth = 1.2;   // how far the tab sticks inward from the inner wall
+    shelf_thk   = 1.5;   // vertical thickness of the tab
+    z_tab_bot   = z_shelf_top - shelf_thk;
+
+    for (cx = [0, 1], cy = [0, 1]) {
+        // Piece along the long (X) wall — only at the very corner
+        translate([cx == 0 ? wall : out_x - wall - shelf_arm_x,
+                   cy == 0 ? wall : out_y - wall - shelf_depth,
+                   z_tab_bot])
+            cube([shelf_arm_x, shelf_depth, shelf_thk]);
+        // Piece along the short (Y) wall
+        translate([cx == 0 ? wall : out_x - wall - shelf_depth,
+                   cy == 0 ? wall : out_y - wall - shelf_arm_y,
+                   z_tab_bot])
+            cube([shelf_depth, shelf_arm_y, shelf_thk]);
+    }
 }
 
 // ─── lid ──────────────────────────────────────────────────────────────────
 
 module lid() {
-    skirt_out_x = out_x;
-    skirt_out_y = out_y;
-    skirt_in_x  = out_x - 2*wall + 0.3;   // slip fit over tray
-    skirt_in_y  = out_y - 2*wall + 0.3;
+    skirt_h = 3.5;
 
     difference() {
         union() {
-            // top plate
             rounded_box(out_x, out_y, lid_thk, corner_r);
-            // skirt
             translate([0, 0, lid_thk])
                 difference() {
-                    rounded_box(skirt_out_x, skirt_out_y, lid_skirt_h, corner_r);
+                    rounded_box(out_x, out_y, skirt_h, corner_r);
                     translate([wall - 0.15, wall - 0.15, -0.1])
-                        rounded_box(skirt_in_x, skirt_in_y,
-                                    lid_skirt_h + 0.2, corner_r - wall);
+                        rounded_box(out_x - 2*wall + 0.3,
+                                    out_y - 2*wall + 0.3,
+                                    skirt_h + 0.2,
+                                    corner_r - wall);
                 }
         }
 
-        // LCD window — centered
+        // LCD window — centered on lid
         translate([out_x/2 - lcd_active_x/2,
                    out_y/2 - lcd_active_y/2,
                    -0.1])
             cube([lcd_active_x, lcd_active_y, lid_thk + 0.2]);
 
-        // Button access holes on short end (opposite USB-C = left side)
-        // If your BOOT/RST are on the right near USB-C, change x to out_x - ...
-        btn_y = out_y/2;
-        btn_x_center = btn_inset_from_usb_end;
-        translate([btn_x_center, btn_y - btn_gap/2, lid_thk/2])
-            rotate([0, 90, 0])
-                cylinder(h = wall + 1, d = btn_dia, center=true);
-        translate([btn_x_center, btn_y + btn_gap/2, lid_thk/2])
-            rotate([0, 90, 0])
-                cylinder(h = wall + 1, d = btn_dia, center=true);
+        // Button access holes — top (lid) surface, near USB-C short edge
+        if (boot_enable)
+            translate([out_x - btn_inset_x, out_y/2 + boot_y_off, -0.1])
+                cylinder(h = lid_thk + 0.2, d = btn_dia);
+        if (rst_enable)
+            translate([out_x - btn_inset_x, out_y/2 + rst_y_off, -0.1])
+                cylinder(h = lid_thk + 0.2, d = btn_dia);
     }
 
     // Snap bumps (male) on skirt inner walls
     if (snap_enable) {
-        z_bump = lid_thk + lid_skirt_h/2;
-        for (ox = [6, out_x - 6]) {
-            // front skirt
+        z_bump = lid_thk + skirt_h/2;
+        for (ox = [out_x*0.28, out_x*0.72]) {
             translate([ox - snap_w/2, wall - 0.15, z_bump - snap_h/2])
                 cube([snap_w, snap_t, snap_h]);
-            // back skirt
             translate([ox - snap_w/2, out_y - wall + 0.15 - snap_t,
                        z_bump - snap_h/2])
                 cube([snap_w, snap_t, snap_h]);
@@ -197,9 +235,6 @@ module lid() {
 
 // ─── layout ───────────────────────────────────────────────────────────────
 
-if (part == "tray") tray();
-else if (part == "lid") lid();
-else {
-    tray();
-    translate([out_x + 5, 0, 0]) lid();
-}
+if (part == "tray")      tray();
+else if (part == "lid")  lid();
+else { tray(); translate([out_x + 6, 0, 0]) lid(); }

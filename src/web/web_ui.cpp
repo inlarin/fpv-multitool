@@ -24,7 +24,7 @@ h1 {
   text-align: center;
   padding: 0 90px;        /* keep title clear of the fixed #connStatus badge on narrow viewports */
 }
-.tabs { display: flex; gap: 4px; margin-bottom: 15px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-bottom: 15px; }
 .tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; }
 .tab.active { background: #0066aa; color: #fff; }
 /* Cards flow into 2–3 columns on wide screens, single column on phones.
