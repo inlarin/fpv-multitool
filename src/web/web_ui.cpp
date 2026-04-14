@@ -7,12 +7,13 @@ const char WEB_INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FPV MultiTool</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f0f1e'/><path d='M18 3 L7 18 h6 l-3 11 L25 13 h-6 l3-10z' fill='%230cf'/></svg>">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   background: #0f0f1e; color: #e0e0e0;
   font-family: -apple-system,BlinkMacSystemFont,sans-serif;
-  max-width: 1200px;      /* keep layout readable on 2K/4K — cards stay around arm's reach */
+  max-width: 1700px;      /* lets 3 card columns fit on 2K after container padding + grid gaps */
   margin: 0 auto;
   padding: clamp(8px, 2vw, 20px);
 }
@@ -21,6 +22,7 @@ h1 {
   font-size: clamp(18px, 2.4vw, 26px);
   margin-bottom: 10px;
   text-align: center;
+  padding: 0 90px;        /* keep title clear of the fixed #connStatus badge on narrow viewports */
 }
 .tabs { display: flex; gap: 4px; margin-bottom: 15px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; }
