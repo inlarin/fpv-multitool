@@ -27,10 +27,11 @@ h1 {
 .tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-bottom: 15px; }
 .tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; }
 .tab.active { background: #0066aa; color: #fff; }
-/* Cards flow into 2–3 columns on wide screens, single column on phones.
-   Cap track width so lone cards don't stretch to 1200px on 4K monitors. */
-.tab-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 520px)); gap: 12px; align-items: start; justify-content: center; }
-.card { background: #1a1a2e; border-radius: 8px; padding: 16px; min-width: 0; }
+/* Cards flow into multiple columns on wide screens, single column on phones.
+   Tracks stretch with 1fr but each card is capped at 520px and centred inside its cell,
+   so on 2K we get 3 readable columns instead of 2 bloated ones. */
+.tab-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; justify-content: center; }
+.card { background: #1a1a2e; border-radius: 8px; padding: 16px; min-width: 0; max-width: 520px; width: 100%; justify-self: center; }
 .card h2 { color: #0cf; font-size: clamp(14px, 1.4vw, 17px); margin-bottom: 12px; }
 .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #222; }
 .row:last-child { border-bottom: none; }
