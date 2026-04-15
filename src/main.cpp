@@ -16,6 +16,8 @@
 #include "web/web_server.h"
 #include "web/web_state.h"
 #include "battery/dji_battery.h"
+#include "battery/smbus_bridge.h"
+#include "battery/smbus_bridge_ui.h"
 #include "motor/dshot.h"
 #include "crsf/crsf_tester.h"
 
@@ -140,6 +142,7 @@ void setup() {
     // Auto-start WiFi + web server in background
     autoStartWifi();
     DJIBattery::init(); // I2C for battery telemetry via web
+    SMBusBridge::begin();
 
     Menu::draw();
     Serial.println("FPV MultiTool ready");
@@ -148,6 +151,7 @@ void setup() {
 void loop() {
     esp_task_wdt_reset();  // feed watchdog
     StatusLed::loop();
+    SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
     ButtonEvent evt = Button::poll();
 
     if (currentApp == APP_NONE) {
@@ -161,6 +165,7 @@ void loop() {
 
             switch (currentApp) {
                 case APP_USB2TTL:    runUSB2TTL(); break;
+                case APP_USB2SMBUS:  runUSB2SMBus(); break;
                 case APP_SERVO:      runServoTester(); break;
                 case APP_MOTOR:      runMotorTester(); break;
                 case APP_BATTERY:    runBatteryTool(); break;

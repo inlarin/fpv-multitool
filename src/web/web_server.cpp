@@ -4,6 +4,7 @@
 #include "wifi_manager.h"
 #include "pin_config.h"
 #include "battery/dji_battery.h"
+#include "battery/smbus.h"
 #include "motor/dshot.h"
 #include "servo/servo_pwm.h"
 #include "bridge/esp_rom_flasher.h"
@@ -384,6 +385,78 @@ void WebServer::start() {
     });
 
     // Battery service actions
+    s_server->on("/api/batt/diag", HTTP_GET, [](AsyncWebServerRequest *req) {
+        const uint8_t BATT = 0x0B;
+        auto toHex = [](const uint8_t *b, int n) {
+            String s; s.reserve(n*3);
+            for (int i = 0; i < n; i++) { char h[4]; snprintf(h, sizeof(h), "%02X ", b[i]); s += h; }
+            s.trim(); return s;
+        };
+        auto toAscii = [](const uint8_t *b, int n) {
+            String s; s.reserve(n);
+            for (int i = 0; i < n; i++) s += (b[i] >= 0x20 && b[i] < 0x7F) ? (char)b[i] : '.';
+            return s;
+        };
+
+        if (req->hasParam("mac")) {
+            String v = req->getParam("mac")->value();
+            uint16_t sub = (uint16_t)strtoul(v.c_str(), nullptr, 0);
+            uint8_t buf[32] = {0};
+            int n = SMBus::macBlockRead(BATT, sub, buf, 32);
+            JsonDocument d;
+            d["sub"] = v; d["len"] = n;
+            d["hex"] = (n > 0) ? toHex(buf, n) : String("");
+            d["ascii"] = (n > 0) ? toAscii(buf, n) : String("");
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
+            return;
+        }
+        if (req->hasParam("sbs")) {
+            uint8_t reg = (uint8_t)strtoul(req->getParam("sbs")->value().c_str(), nullptr, 0);
+            String t = req->hasParam("type") ? req->getParam("type")->value() : String("word");
+            JsonDocument d;
+            d["reg"] = String("0x") + String(reg, HEX);
+            if (t == "word") {
+                uint16_t w = SMBus::readWord(BATT, reg);
+                d["word"] = String("0x") + String(w, HEX);
+                d["dec"] = w;
+            } else if (t == "dword") {
+                uint32_t dw = SMBus::readDword(BATT, reg);
+                d["dword"] = String("0x") + String(dw, HEX);
+            } else if (t == "block" || t == "string") {
+                uint8_t buf[32] = {0};
+                int n = SMBus::readBlock(BATT, reg, buf, 31);
+                d["len"] = n;
+                d["hex"] = (n > 0) ? toHex(buf, n) : String("");
+                d["ascii"] = (n > 0) ? toAscii(buf, n) : String("");
+            } else { d["error"] = "bad type"; }
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
+            return;
+        }
+        if (req->hasParam("unseal")) {
+            String v = req->getParam("unseal")->value();
+            int comma = v.indexOf(',');
+            if (comma <= 0) { req->send(400, "text/plain", "expect unseal=w1,w2"); return; }
+            uint16_t w1 = (uint16_t)strtoul(v.substring(0, comma).c_str(), nullptr, 0);
+            uint16_t w2 = (uint16_t)strtoul(v.substring(comma + 1).c_str(), nullptr, 0);
+            uint32_t combined = ((uint32_t)w2 << 16) | w1;
+            UnsealResult r = DJIBattery::unsealWithKey(combined);
+            uint32_t op = DJIBattery::readOperationStatus();
+            JsonDocument d;
+            d["w1"] = String("0x") + String(w1, HEX);
+            d["w2"] = String("0x") + String(w2, HEX);
+            d["result"] = r == UNSEAL_OK ? "OK" : r == UNSEAL_REJECTED_SEALED ? "still sealed" : r == UNSEAL_NO_RESPONSE ? "no i2c" : "unsupported";
+            d["opStatus"] = String("0x") + String(op, HEX);
+            d["sealed"] = ((op >> 8) & 0x03) == 0x03;
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
+            return;
+        }
+        req->send(400, "text/plain", "use ?mac= or ?sbs= or ?unseal=");
+    });
+
+    // WiFi credentials save
     s_server->on("/api/batt", HTTP_GET, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("action")) { req->send(400, "text/plain", "missing action"); return; }
         String action = req->getParam("action")->value();
@@ -417,7 +490,12 @@ void WebServer::start() {
         }
     });
 
-    // WiFi credentials save
+    // Diagnostic endpoint — raw SBS / MAC reads + arbitrary unseal keys.
+    // Examples:
+    //   /api/batt/diag?mac=0x0070                     -> MAC block read (ChemID)
+    //   /api/batt/diag?sbs=0x20&type=string           -> ManufacturerName
+    //   /api/batt/diag?sbs=0x54&type=dword            -> OperationStatus
+    //   /api/batt/diag?unseal=0xABCD,0x1234           -> custom key pair
     s_server->on("/api/wifi/save", HTTP_POST, [](AsyncWebServerRequest *req) {},
         NULL,
         [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {

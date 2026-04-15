@@ -84,7 +84,7 @@ static const int UNSEAL_KEYS_COUNT = sizeof(UNSEAL_KEYS) / sizeof(UNSEAL_KEYS[0]
 // Init / probing
 // =====================================================================
 void DJIBattery::init() {
-    SMBus::init(I2C_SDA, I2C_SCL);
+    SMBus::init(BATT_SDA, BATT_SCL);
 }
 
 bool DJIBattery::isConnected() {

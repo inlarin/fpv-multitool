@@ -1,8 +1,13 @@
 #include "smbus.h"
 
-static TwoWire *s_wire = &Wire;
+// Use Wire1 (secondary I2C bus) to avoid conflict with QMI8658 IMU on Wire (GPIO 48/47).
+// Battery SMBus on free header pins GPIO 11 (SDA) + GPIO 12 (SCL).
+static TwoWire *s_wire = &Wire1;
 
 void SMBus::init(uint8_t sda, uint8_t scl) {
+    // Enable internal pull-ups (ESP32 ~45kΩ) — sufficient for short wires at 100 kHz
+    pinMode(sda, INPUT_PULLUP);
+    pinMode(scl, INPUT_PULLUP);
     s_wire->begin(sda, scl);
     s_wire->setClock(100000);
     s_wire->setTimeOut(50);

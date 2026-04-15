@@ -5,6 +5,7 @@
 enum AppId {
     APP_NONE = -1,
     APP_USB2TTL = 0,
+    APP_USB2SMBUS,
     APP_SERVO,
     APP_MOTOR,
     APP_BATTERY,

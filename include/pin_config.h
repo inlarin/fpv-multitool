@@ -17,9 +17,14 @@
 #define LCD_HEIGHT  320
 #define LCD_COL_OFFSET 34
 
-// --- I2C (QMI8658 IMU + Battery SMBus) ---
+// --- I2C Wire0: QMI8658 IMU (onboard, GPIO 48/47 — NOT on pin headers) ---
 #define I2C_SDA     48
 #define I2C_SCL     47
+
+// --- I2C Wire1: DJI Battery SMBus (on pin headers, internal pullup) ---
+// Free GPIOs exposed on Waveshare right-side pin header (silkscreen GP10 + GP11)
+#define BATT_SDA    11
+#define BATT_SCL    10
 
 // --- BOOT button (navigation) ---
 #define BTN_BOOT    0

@@ -4,6 +4,7 @@
 
 static const char* APP_NAMES[] = {
     "USB2TTL",
+    "USB2SMBus",
     "Servo Tester",
     "Motor DShot",
     "Battery Tool",

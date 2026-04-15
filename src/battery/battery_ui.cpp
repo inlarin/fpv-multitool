@@ -59,7 +59,7 @@ static void drawInfo() {
         g->setTextColor(RGB565_RED);
         g->setCursor(5, 50);  g->print("No battery detected");
         g->setCursor(5, 66);  g->print("Connect SDA/SCL/GND");
-        g->setCursor(5, 82);  g->printf("SDA=%d SCL=%d", I2C_SDA, I2C_SCL);
+        g->setCursor(5, 82);  g->printf("SDA=%d SCL=%d", BATT_SDA, BATT_SCL);
         g->setCursor(5, 98);  g->print("Addr: 0x0B");
         g->setTextColor(RGB565_YELLOW);
         g->setCursor(5, 120); g->print("Hold = rescan");
@@ -376,7 +376,7 @@ static void drawScan() {
     g->setCursor(5, 30);
     g->print("I2C Bus Scanner");
     g->setCursor(5, 44);
-    g->printf("SDA=%d SCL=%d", I2C_SDA, I2C_SCL);
+    g->printf("SDA=%d SCL=%d", BATT_SDA, BATT_SCL);
     g->setCursor(5, 60);
     g->setTextColor(RGB565_YELLOW);
     g->print("Hold = start scan");
