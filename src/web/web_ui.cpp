@@ -69,6 +69,7 @@ button:disabled { background: #444; cursor: not-allowed; }
   <div class="tab" onclick="showTab('elrs')">ELRS Flash</div>
   <div class="tab" onclick="showTab('crsf')">CRSF</div>
   <div class="tab" onclick="showTab('sys')">System</div>
+  <div class="tab" onclick="showTab('ota')">OTA</div>
 </div>
 
 <!-- ===== SERVO ===== -->
@@ -361,6 +362,49 @@ button:disabled { background: #444; cursor: not-allowed; }
   </div>
 </div>
 
+<div id="tab-ota" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>OTA Update</h2>
+    <div class="row"><span class="label">FW version:</span><span class="value" id="otaFwVer">-</span></div>
+    <div class="row"><span class="label">Running:</span><span class="value" id="otaRunning">-</span></div>
+    <div class="row"><span class="label">Next slot:</span><span class="value" id="otaNext">-</span></div>
+    <div class="row"><span class="label">App size:</span><span class="value" id="otaAppSize">-</span></div>
+    <div class="row"><span class="label">Free:</span><span class="value" id="otaFree">-</span></div>
+    <div class="row"><span class="label">SDK:</span><span class="value" id="otaSdk">-</span></div>
+    <button onclick="otaRefresh()">Refresh info</button>
+  </div>
+  <div class="card">
+    <h2>GitHub releases</h2>
+    <div class="row"><span class="label">Repo:</span><span class="value" id="otaRepo">-</span></div>
+    <div class="row"><span class="label">Latest:</span><span class="value" id="otaLatest">-</span></div>
+    <div class="row"><span class="label">Status:</span><span class="value" id="otaCompare">-</span></div>
+    <div style="margin-top:8px">
+      <button onclick="otaCheck()" id="otaCheckBtn">Проверить обновления</button>
+      <button onclick="otaPull()" id="otaPullBtn" disabled>Установить из GitHub</button>
+    </div>
+    <div class="row" style="margin-top:10px"><span class="label">Progress:</span><span class="value" id="otaPullStage">-</span></div>
+    <div class="bar"><div class="bar-fill" id="otaPullBar" style="width:0%;background:#0af"></div></div>
+    <p style="color:#888;font-size:11px;margin:8px 0 0">
+      Для онлайн-апдейта плата должна быть в STA-режиме (подключена к WiFi с интернетом).
+    </p>
+  </div>
+  <div class="card">
+    <h2>Upload firmware.bin</h2>
+    <p style="color:#888;font-size:12px;margin:4px 0 10px">
+      PlatformIO: <code>.pio/build/esp32s3/firmware.bin</code>.
+      Плата перезагрузится автоматически после прошивки.
+    </p>
+    <input type="file" id="otaFile" accept=".bin">
+    <div class="row"><span class="label">Статус:</span><span class="value" id="otaStage">idle</span></div>
+    <div class="bar"><div class="bar-fill" id="otaBar" style="width:0%;background:#0af"></div></div>
+    <div style="margin-top:10px">
+      <button id="otaBtn" onclick="otaUpload()">Upload & Flash</button>
+      <button class="danger" onclick="otaAbort()">Abort</button>
+    </div>
+    <div id="otaResult" style="margin-top:10px;color:#0f0;word-break:break-word"></div>
+  </div>
+</div>
+
 <script>
 let ws = null, wsOk = false;
 
@@ -392,6 +436,7 @@ function showTab(name) {
   document.getElementById('tab-'+name).style.display = '';
   document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
   event.target.classList.add('active');
+  if (name === 'ota') otaRefresh();
 }
 
 // === SERVO ===
@@ -626,6 +671,153 @@ function saveWifi() {
 function clearWifi() {
   if (!confirm('Reset WiFi to AP mode?')) return;
   fetch('/api/wifi/clear').then(r=>r.text()).then(t=>alert(t));
+}
+
+// ===== OTA =====
+function fmtBytes(b) {
+  if (b >= 1048576) return (b/1048576).toFixed(2) + ' MB';
+  if (b >= 1024) return (b/1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+function otaRefresh() {
+  fetch('/api/ota/info').then(r=>r.json()).then(j=>{
+    document.getElementById('otaFwVer').textContent   = j.fw_version || '?';
+    document.getElementById('otaRunning').textContent = j.running || '?';
+    document.getElementById('otaNext').textContent    = j.next    || '?';
+    document.getElementById('otaAppSize').textContent = fmtBytes(j.app_size || 0);
+    document.getElementById('otaFree').textContent    = fmtBytes(j.app_free || 0);
+    document.getElementById('otaSdk').textContent     = j.sdk     || '?';
+    document.getElementById('otaRepo').textContent    = j.github_repo || '(не задан)';
+    if (j.latest) {
+      document.getElementById('otaLatest').textContent = j.latest;
+      const outdated = j.latest !== j.fw_version;
+      document.getElementById('otaCompare').textContent =
+        outdated ? 'доступна новая версия' : 'актуальная';
+      document.getElementById('otaCompare').style.color = outdated ? '#fa0' : '#0f0';
+      document.getElementById('otaPullBtn').disabled = !outdated || !j.latest_url;
+    }
+    if (j.pull_running) {
+      document.getElementById('otaPullStage').textContent = j.pull_message + ' (' + j.pull_progress + '%)';
+      document.getElementById('otaPullBar').style.width = j.pull_progress + '%';
+    } else if (j.pull_message) {
+      document.getElementById('otaPullStage').textContent = j.pull_message;
+    }
+  }).catch(e=>{
+    document.getElementById('otaResult').textContent = 'Info error: ' + e;
+  });
+}
+
+function otaCheck() {
+  const btn = document.getElementById('otaCheckBtn');
+  btn.disabled = true;
+  document.getElementById('otaCompare').textContent = 'проверяю...';
+  fetch('/api/ota/check', {method:'POST'})
+    .then(r => r.json().then(j => ({ok: r.ok, j, status: r.status}))
+                        .catch(() => r.text().then(t => ({ok:false, text:t, status:r.status}))))
+    .then(res => {
+      btn.disabled = false;
+      if (!res.ok) {
+        document.getElementById('otaCompare').textContent = 'ошибка HTTP ' + res.status + ': ' + (res.text || JSON.stringify(res.j));
+        document.getElementById('otaCompare').style.color = '#f44';
+        return;
+      }
+      otaRefresh();
+    })
+    .catch(e => {
+      btn.disabled = false;
+      document.getElementById('otaCompare').textContent = 'Network error: ' + e;
+    });
+}
+
+let otaPullPoll = null;
+function otaPull() {
+  if (!confirm('Скачать и прошить последнюю версию из GitHub?\nПлата перезагрузится.')) return;
+  const stage = document.getElementById('otaPullStage');
+  const bar = document.getElementById('otaPullBar');
+  stage.textContent = 'starting';
+  bar.style.width = '0%';
+  bar.style.background = '#0af';
+  document.getElementById('otaPullBtn').disabled = true;
+
+  fetch('/api/ota/pull', {method:'POST'}).then(r => r.text()).then(t => {
+    stage.textContent = t;
+    if (otaPullPoll) clearInterval(otaPullPoll);
+    otaPullPoll = setInterval(() => {
+      fetch('/api/ota/info').then(r => r.json()).then(j => {
+        bar.style.width = (j.pull_progress || 0) + '%';
+        stage.textContent = (j.pull_message || '') + ' (' + (j.pull_progress || 0) + '%)';
+        if (!j.pull_running) {
+          clearInterval(otaPullPoll);
+          otaPullPoll = null;
+          if ((j.pull_message || '').startsWith('OK')) {
+            bar.style.background = '#0f0';
+            setTimeout(() => location.reload(), 10000);
+          } else {
+            bar.style.background = '#f44';
+            document.getElementById('otaPullBtn').disabled = false;
+          }
+        }
+      }).catch(() => { /* during reboot fetch fails — that's OK */ });
+    }, 1000);
+  });
+}
+function otaAbort() {
+  fetch('/api/ota/abort', {method:'POST'}).then(r=>r.text()).then(t=>{
+    document.getElementById('otaResult').textContent = t;
+    document.getElementById('otaStage').textContent = 'aborted';
+  });
+}
+function otaUpload() {
+  const f = document.getElementById('otaFile').files[0];
+  if (!f) return alert('Выбери firmware.bin');
+  if (!confirm('Прошить ' + f.name + ' (' + fmtBytes(f.size) + ')?\nПлата перезагрузится.')) return;
+
+  const fd = new FormData();
+  fd.append('update', f, f.name);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/ota');
+  const bar = document.getElementById('otaBar');
+  const stage = document.getElementById('otaStage');
+  const res = document.getElementById('otaResult');
+  const btn = document.getElementById('otaBtn');
+
+  btn.disabled = true;
+  res.textContent = '';
+  stage.textContent = 'uploading...';
+  bar.style.width = '0%';
+  bar.style.background = '#0af';
+
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded * 100 / e.total);
+      bar.style.width = pct + '%';
+      stage.textContent = 'uploading ' + pct + '% (' + fmtBytes(e.loaded) + '/' + fmtBytes(e.total) + ')';
+    }
+  };
+  xhr.onload = () => {
+    btn.disabled = false;
+    if (xhr.status === 200) {
+      bar.style.width = '100%';
+      bar.style.background = '#0f0';
+      stage.textContent = 'done — rebooting';
+      res.style.color = '#0f0';
+      res.textContent = xhr.responseText + ' — страница обновится автоматически через 8 с';
+      setTimeout(() => location.reload(), 8000);
+    } else {
+      bar.style.background = '#f44';
+      stage.textContent = 'error';
+      res.style.color = '#f44';
+      res.textContent = 'HTTP ' + xhr.status + ': ' + xhr.responseText;
+    }
+  };
+  xhr.onerror = () => {
+    btn.disabled = false;
+    stage.textContent = 'network error';
+    res.style.color = '#f44';
+    res.textContent = 'Network error';
+  };
+  xhr.send(fd);
 }
 
 // Scan is async on the ESP side — HTTP returns right away, we poll for results.
