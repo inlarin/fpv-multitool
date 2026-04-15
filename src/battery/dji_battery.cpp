@@ -57,21 +57,26 @@ struct UnsealKey {
     const char* description;
 };
 
-// Keys table — TI defaults work on pre-2019 packs
-// For Mavic 3/4 and newer: keys are UNKNOWN — placeholders for when user finds them
+// Keys table — tried in order on unseal().
+// TI defaults cover older BQ30Z55 packs (Mavic Pro / Phantom / Spark / Mavic Air).
+// RUS_MAV keys come from reverse-engineering hardware/RUS_MAV.bin and cover
+// BQ9003 / bq40z307 packs (Mavic 2 Pro / Zoom / Air 2 / Mini 2, and per the tool
+// re-brander, possibly pre-SHA256 Mavic 3 batches).
+// Mavic 3 (WM260) packs with per-serial SHA-256 keys cannot be unsealed this way.
 static const UnsealKey UNSEAL_KEYS[] = {
+    // TI default — BQ30Z55 family
     { MODEL_UNKNOWN,     0x0414, 0x3672, "TI default" },
     { MODEL_SPARK,       0x0414, 0x3672, "TI default" },
     { MODEL_MAVIC_PRO,   0x0414, 0x3672, "TI default" },
     { MODEL_PHANTOM_3,   0x0414, 0x3672, "TI default" },
     { MODEL_PHANTOM_4,   0x0414, 0x3672, "TI default" },
     { MODEL_MAVIC_AIR,   0x0414, 0x3672, "TI default" },
-    // --- Rumored / unverified (try at your own risk) ---
-    { MODEL_MAVIC_PRO,   0x4321, 0x4321, "forum rumor" },
-    { MODEL_PHANTOM_3,   0x0123, 0x4567, "forum rumor" },
-    // --- TODO: add Mavic 3/4 keys here when discovered ---
-    // { MODEL_MAVIC_3,  0xXXXX, 0xYYYY, "Mavic 3 key" },
-    // { MODEL_MAVIC_4,  0xXXXX, 0xYYYY, "Mavic 4 key" },
+    // RUS_MAV custom — BQ9003 / bq40z307 family
+    { MODEL_UNKNOWN,     0x7EE0, 0xCCDF, "RUS_MAV Unseal" },
+    { MODEL_MAVIC_3,     0x7EE0, 0xCCDF, "RUS_MAV Unseal" },
+    { MODEL_MAVIC_4,     0x7EE0, 0xCCDF, "RUS_MAV Unseal" },
+    // BQ30Z55 HMAC-SHA1 default (TI bqStudio): 0123456789ABCDEFFEDCBA9876543210
+    // Not a simple key pair — requires challenge-response flow, TODO.
 };
 static const int UNSEAL_KEYS_COUNT = sizeof(UNSEAL_KEYS) / sizeof(UNSEAL_KEYS[0]);
 
@@ -279,23 +284,45 @@ BatteryInfo DJIBattery::readAll() {
     return info;
 }
 
+// Send one key word via ManufacturerBlockAccess (reg 0x44) — this is the
+// method RUS_MAV uses for bq9003/bq40z307 packs. Frame on wire:
+//   S addr 44 02 <lo> <hi> P
+static bool sendKeyWordBlock(uint16_t word) {
+    uint8_t bytes[2] = { (uint8_t)(word & 0xFF), (uint8_t)(word >> 8) };
+    return SMBus::writeBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS, bytes, 2);
+}
+
 // =====================================================================
-// Unseal with specified key
+// Unseal with specified key — tries both MA methods (word @ 0x00 for
+// BQ30Z55-style packs, block @ 0x44 for bq9003/bq40z307-style packs).
 // =====================================================================
 UnsealResult DJIBattery::unsealWithKey(uint32_t key_combined) {
     uint16_t w1 = key_combined & 0xFFFF;
     uint16_t w2 = (key_combined >> 16) & 0xFFFF;
 
-    if (!SMBus::writeWord(BATT_ADDR, REG_MFR_ACCESS, w1)) return UNSEAL_NO_RESPONSE;
-    delay(10);
-    if (!SMBus::writeWord(BATT_ADDR, REG_MFR_ACCESS, w2)) return UNSEAL_NO_RESPONSE;
-    delay(100);
+    // Method A: word writes to 0x00 (legacy / BQ30Z55)
+    if (SMBus::writeWord(BATT_ADDR, REG_MFR_ACCESS, w1)) {
+        delay(10);
+        SMBus::writeWord(BATT_ADDR, REG_MFR_ACCESS, w2);
+        delay(100);
+        uint32_t op = readOperationStatus();
+        if (((op >> 8) & 0x03) != 0x03) return UNSEAL_OK;
+    }
 
-    // Verify by reading OperationStatus SEC bits
+    // Method B: block writes to 0x44 (bq9003 / bq40z307 / RUS_MAV style).
+    // Per RUS_MAV disasm there's a 300 ms delay between the two sub-commands.
+    if (sendKeyWordBlock(w1)) {
+        delay(300);
+        sendKeyWordBlock(w2);
+        delay(100);
+        uint32_t op = readOperationStatus();
+        if (((op >> 8) & 0x03) != 0x03) return UNSEAL_OK;
+    }
+
+    // Still sealed after both attempts
     uint32_t op = readOperationStatus();
-    uint8_t sec = (op >> 8) & 0x03;
-    if (sec == 0x03) return UNSEAL_REJECTED_SEALED; // still sealed
-    return UNSEAL_OK;
+    if (op == 0 || op == 0xFFFFFFFF) return UNSEAL_NO_RESPONSE;
+    return UNSEAL_REJECTED_SEALED;
 }
 
 // Try all keys for this model, then TI default
