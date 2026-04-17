@@ -146,11 +146,12 @@ button:disabled { background: #444; cursor: not-allowed; }
 <!-- ===== BATTERY ===== -->
 <div id="tab-battery" class="tab-content" style="display:none">
   <div class="card">
-    <h2>DJI Battery</h2>
+    <h2>Smart Battery</h2>
     <div class="row">
       <span class="label">Connected:</span>
       <span>
         <span id="battConn" class="status off">NO</span>
+        <span id="battDevType" class="status off" style="display:none">-</span>
         <span id="battSealStatus" class="status warn" style="display:none">SEALED</span>
       </span>
     </div>
@@ -159,10 +160,18 @@ button:disabled { background: #444; cursor: not-allowed; }
     <div class="grid">
       <div class="row"><span class="label">Voltage:</span><span class="value" id="battVolt">-</span></div>
       <div class="row"><span class="label">Current:</span><span class="value" id="battCurr">-</span></div>
+      <div class="row"><span class="label">Avg Current:</span><span class="value" id="battAvgCurr">-</span></div>
       <div class="row"><span class="label">Temp:</span><span class="value" id="battTemp">-</span></div>
+      <div class="row"><span class="label">SOH:</span><span class="value" id="battSOH">-</span></div>
       <div class="row"><span class="label">Cycles:</span><span class="value" id="battCycle">-</span></div>
       <div class="row"><span class="label">Capacity:</span><span class="value" id="battCap">-</span></div>
       <div class="row"><span class="label">Design:</span><span class="value" id="battDesign">-</span></div>
+    </div>
+    <div class="grid" style="margin-top:8px">
+      <div class="row"><span class="label">Time to empty:</span><span class="value" id="battTTE">-</span></div>
+      <div class="row"><span class="label">Time to full:</span><span class="value" id="battTTF">-</span></div>
+      <div class="row"><span class="label">Chg I/V:</span><span class="value" id="battChg">-</span></div>
+      <div class="row"><span class="label">Status:</span><span class="value" id="battStatusBits">-</span></div>
     </div>
   </div>
 
@@ -200,10 +209,12 @@ button:disabled { background: #444; cursor: not-allowed; }
   <div class="card">
     <h2>Battery Info</h2>
     <div class="row"><span class="label">Model:</span><span class="value" id="battModel" style="color:#f0f">-</span></div>
+    <div class="row"><span class="label">Config:</span><span class="value" id="battConfig">-</span></div>
     <div class="row"><span class="label">Manufacturer:</span><span class="value" id="battMfr">-</span></div>
     <div class="row"><span class="label">Device:</span><span class="value" id="battDev">-</span></div>
     <div class="row"><span class="label">Chemistry:</span><span class="value" id="battChem">-</span></div>
     <div class="row"><span class="label">S/N / Date:</span><span class="value" id="battSN">-</span></div>
+    <div class="row"><span class="label">DJI S/N:</span><span class="value" id="battDjiSN" style="display:none">-</span></div>
     <div class="row"><span class="label">Chip:</span><span class="value" id="battChip">-</span></div>
     <div class="row"><span class="label">FW / HW:</span><span class="value" id="battFwHw">-</span></div>
     <div id="keyWarning" class="warning" style="display:none">
@@ -257,6 +268,29 @@ button:disabled { background: #444; cursor: not-allowed; }
   </div>
 
   <div class="card">
+    <h2>I2C Diagnostics</h2>
+    <div class="grid">
+      <button onclick="i2cPreflight()">Preflight Check</button>
+      <button onclick="i2cScan()">Full Bus Scan</button>
+    </div>
+    <pre id="preflightResult" style="background:#000;color:#0af;font-size:11px;padding:6px;margin:4px 0;display:none"></pre>
+    <pre id="i2cScanResult" style="background:#000;color:#0af;font-size:11px;padding:6px;margin:4px 0;display:none"></pre>
+  </div>
+
+  <div class="card">
+    <h2>SMBus Transaction Log</h2>
+    <p style="color:#888;font-size:11px;margin:0 0 6px">
+      Все I2C транзакции на шине батареи. Включи логирование, чтобы записывать.
+    </p>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button onclick="smbLogToggle()" id="smbLogToggleBtn">Enable Logging</button>
+      <button onclick="smbLogRefresh()">Refresh</button>
+      <label><input type="checkbox" id="smbLogAuto" onchange="smbLogAutoToggle()"> Auto 1s</label>
+    </div>
+    <pre id="smbLog" style="background:#000;color:#0f0;font-size:11px;padding:8px;margin:6px 0;max-height:300px;overflow:auto;white-space:pre-wrap">(logging off)</pre>
+  </div>
+
+  <div class="card">
     <h2>SMBus Console</h2>
     <div style="display:flex;gap:4px;flex-wrap:wrap">
       <input id="smbAddr" value="0x0B" placeholder="addr" style="width:50px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
@@ -274,10 +308,8 @@ button:disabled { background: #444; cursor: not-allowed; }
     </div>
     <pre id="smbResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:200px;overflow:auto">(idle)</pre>
     <div style="display:flex;gap:4px;margin-top:4px">
-      <button onclick="i2cScan()">I2C Scan</button>
       <button onclick="battSnapshot()">Snapshot JSON</button>
     </div>
-    <pre id="i2cScanResult" style="background:#000;color:#0af;font-size:11px;padding:6px;margin:4px 0;display:none"></pre>
   </div>
 </div>
 
@@ -706,12 +738,46 @@ function smbExec() {
     el.textContent = JSON.stringify(j, null, 2);
   });
 }
+function i2cPreflight() {
+  const el = document.getElementById('preflightResult');
+  el.style.display = 'block';
+  el.textContent = 'Running preflight...';
+  fetch('/api/i2c/preflight').then(r=>r.json()).then(j=>{
+    let s = 'SDA: ' + (j.sdaOk ? 'OK' : 'STUCK LOW!') + '\n';
+    s += 'SCL: ' + (j.sclOk ? 'OK' : 'STUCK LOW!') + '\n';
+    s += 'Battery (0x0B): ' + (j.batteryAck ? 'ACK' : 'NO RESPONSE') + '\n';
+    s += 'Devices found: ' + j.devCount;
+    if (j.devices && j.devices.length) s += ' [' + j.devices.join(', ') + ']';
+    el.textContent = s;
+    el.style.color = (j.sdaOk && j.sclOk && j.batteryAck) ? '#0f0' : '#f44';
+  });
+}
 function i2cScan() {
   const el = document.getElementById('i2cScanResult');
   el.style.display = 'block';
   el.textContent = 'Scanning...';
   fetch('/api/i2c/scan').then(r=>r.text()).then(t=>{ el.textContent = t; });
 }
+
+let _smbLogTimer = null;
+function smbLogRefresh() {
+  fetch('/api/smbus/log').then(r=>r.text()).then(t=>{
+    document.getElementById('smbLog').textContent = t;
+  });
+}
+function smbLogToggle() {
+  fetch('/api/smbus/log/toggle', {method:'POST'}).then(r=>r.text()).then(t=>{
+    document.getElementById('smbLogToggleBtn').textContent = t.includes('ON') ? 'Disable Logging' : 'Enable Logging';
+    smbLogRefresh();
+  });
+}
+function smbLogAutoToggle() {
+  if (_smbLogTimer) { clearInterval(_smbLogTimer); _smbLogTimer = null; }
+  if (document.getElementById('smbLogAuto').checked) {
+    _smbLogTimer = setInterval(smbLogRefresh, 1000);
+  }
+}
+
 function battSnapshot() {
   fetch('/api/batt/snapshot').then(r=>r.json()).then(j=>{
     const blob = new Blob([JSON.stringify(j, null, 2)], {type:'application/json'});
@@ -1145,17 +1211,40 @@ function handleMsg(m) {
     bc.textContent = c ? 'YES' : 'NO';
     if (!c) return;
 
+    // Device type badge
+    const dtEl = document.getElementById('battDevType');
+    if (m.devType === 1) { dtEl.style.display='inline-block'; dtEl.textContent='DJI'; dtEl.className='status on'; }
+    else if (m.devType === 2) { dtEl.style.display='inline-block'; dtEl.textContent='SBS'; dtEl.className='status on'; }
+    else dtEl.style.display='none';
+
     document.getElementById('battSOC').textContent = m.soc + ' %';
     document.getElementById('battBar').style.width = m.soc + '%';
     document.getElementById('battVolt').textContent = (m.voltage/1000).toFixed(2) + ' V';
     document.getElementById('battCurr').textContent = m.current + ' mA';
+    document.getElementById('battAvgCurr').textContent = m.avgCurrent + ' mA';
     document.getElementById('battTemp').textContent = m.temp.toFixed(1) + ' °C';
+    document.getElementById('battSOH').textContent = (m.soh && m.soh < 0xFFFF) ? m.soh + ' %' : '-';
     document.getElementById('battCycle').textContent = m.cycles;
     document.getElementById('battCap').textContent = m.remain + '/' + m.full + ' mAh';
     document.getElementById('battDesign').textContent = m.design + ' mAh';
+
+    // Time estimates
+    const fmtMin = v => (v && v < 0xFFFF) ? v + ' min' : '-';
+    document.getElementById('battTTE').textContent = fmtMin(m.ate);
+    document.getElementById('battTTF').textContent = fmtMin(m.ttf);
+    document.getElementById('battChg').textContent = (m.chgI || '-') + ' mA / ' + (m.chgV ? (m.chgV/1000).toFixed(2)+'V' : '-');
+    document.getElementById('battStatusBits').textContent = m.statusDecoded || '-';
+
     document.getElementById('battMfr').textContent = m.mfr;
     document.getElementById('battDev').textContent = m.dev;
     document.getElementById('battChem').textContent = m.chem || '-';
+    document.getElementById('battConfig').textContent = m.cellCount + 'S / ' + m.design + 'mAh / ' + (m.designV ? (m.designV/1000).toFixed(1)+'V' : '-');
+
+    // DJI serial
+    const djiSnEl = document.getElementById('battDjiSN');
+    if (m.djiSN) { djiSnEl.textContent = m.djiSN; djiSnEl.style.display = ''; djiSnEl.parentElement.style.display = ''; }
+    else { djiSnEl.parentElement.style.display = 'none'; }
+
     // Decode manufacture date (SBS format: bits 15:9=year+1980, 8:5=month, 4:0=day)
     if (m.mfgDate) {
       const y = ((m.mfgDate >> 9) & 0x7F) + 1980;
@@ -1203,7 +1292,7 @@ function handleMsg(m) {
     document.getElementById('mfgStatus').textContent = m.mfgDecoded || 'N/A';
     document.getElementById('mfgDecoded').textContent = hex8(m.manufacturingStatus);
 
-    document.getElementById('cellsSync').textContent = m.cellsSync ? 'sync' : 'async';
+    document.getElementById('cellsSync').textContent = (m.cellsSync ? 'sync' : 'async') + ', ' + (m.cellCount || '?') + 'S';
     document.getElementById('packV').textContent = m.packV ? (m.packV/1000).toFixed(2) + ' V' : '-';
 
     let cellsHtml = '';

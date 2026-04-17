@@ -134,24 +134,44 @@ static void broadcastTelemetry() {
     doc["type"] = "batt";
     doc["connected"] = info.connected;
     if (info.connected) {
+        doc["devType"] = (int)info.deviceType;  // 0=none,1=DJI,2=generic SBS
         doc["voltage"] = info.voltage_mV;
         doc["current"] = info.current_mA;
+        doc["avgCurrent"] = info.avgCurrent_mA;
         doc["temp"] = info.temperature_C;
         doc["soc"] = info.stateOfCharge;
+        doc["absSOC"] = info.absoluteSOC;
+        doc["soh"] = info.stateOfHealth;
         doc["remain"] = info.remainCapacity_mAh;
         doc["full"] = info.fullCapacity_mAh;
         doc["design"] = info.designCapacity_mAh;
+        doc["designV"] = info.designVoltage_mV;
         doc["cycles"] = info.cycleCount;
         doc["status"] = info.batteryStatus;
+        doc["statusDecoded"] = DJIBattery::decodeBatteryStatus(info.batteryStatus);
         doc["sn"] = info.serialNumber;
         doc["mfgDate"] = info.manufactureDate;
         doc["mfr"] = info.manufacturerName;
         doc["dev"] = info.deviceName;
         doc["chem"] = info.chemistry;
+        doc["cellCount"] = info.cellCount;
+
+        // Time estimates
+        doc["rte"] = info.runTimeToEmpty_min;
+        doc["ate"] = info.avgTimeToEmpty_min;
+        doc["ttf"] = info.timeToFull_min;
+        doc["chgI"] = info.chargingCurrent_mA;
+        doc["chgV"] = info.chargingVoltage_mV;
+
+        // DJI-specific
+        if (info.deviceType == DEV_DJI_BATTERY) {
+            if (info.djiSerial.length() > 0) doc["djiSN"] = info.djiSerial;
+            doc["djiPF2"] = info.djiPF2;
+        }
 
         // Cells (sync if available)
         JsonArray cells = doc["cells"].to<JsonArray>();
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < info.cellCount; i++) {
             uint16_t v = info.daStatus1Valid ? info.cellVoltSync[i] : info.cellVoltage[i];
             cells.add(v);
         }
@@ -586,36 +606,58 @@ void WebServer::start() {
         BatteryInfo info = DJIBattery::readAll();
         JsonDocument d;
         d["connected"]      = info.connected;
+        d["deviceType"]     = (int)info.deviceType;
         d["voltage_mV"]     = info.voltage_mV;
         d["current_mA"]     = info.current_mA;
+        d["avgCurrent_mA"]  = info.avgCurrent_mA;
         d["temperature_C"]  = info.temperature_C;
         d["soc"]            = info.stateOfCharge;
+        d["absoluteSOC"]    = info.absoluteSOC;
+        d["stateOfHealth"]  = info.stateOfHealth;
         d["fullCap_mAh"]    = info.fullCapacity_mAh;
         d["designCap_mAh"]  = info.designCapacity_mAh;
+        d["designVoltage_mV"] = info.designVoltage_mV;
         d["remainCap_mAh"]  = info.remainCapacity_mAh;
         d["cycleCount"]     = info.cycleCount;
         d["batteryStatus"]  = String("0x") + String(info.batteryStatus, HEX);
+        d["batteryStatusDecoded"] = DJIBattery::decodeBatteryStatus(info.batteryStatus);
         d["serialNumber"]   = info.serialNumber;
         d["manufactureDate"]= info.manufactureDate;
         d["mfrName"]        = info.manufacturerName;
         d["deviceName"]     = info.deviceName;
         d["chemistry"]      = info.chemistry;
+        d["cellCount"]      = info.cellCount;
+        // Time estimates
+        d["runTimeToEmpty_min"] = info.runTimeToEmpty_min;
+        d["avgTimeToEmpty_min"] = info.avgTimeToEmpty_min;
+        d["timeToFull_min"]     = info.timeToFull_min;
+        d["chargingCurrent_mA"] = info.chargingCurrent_mA;
+        d["chargingVoltage_mV"] = info.chargingVoltage_mV;
+        // Cells
         JsonArray cells = d["cellVoltage_mV"].to<JsonArray>();
-        for (int i = 0; i < 4; i++) cells.add(info.cellVoltage[i]);
+        for (int i = 0; i < info.cellCount; i++) cells.add(info.cellVoltage[i]);
+        if (info.daStatus1Valid) {
+            JsonArray syncCells = d["cellVoltageSync_mV"].to<JsonArray>();
+            for (int i = 0; i < info.cellCount; i++) syncCells.add(info.cellVoltSync[i]);
+            d["packVoltage_mV"] = info.packVoltage;
+        }
+        // Chip/model
         d["chipType"]       = String("0x") + String(info.chipType, HEX);
         d["fwVersion"]      = info.firmwareVersion;
         d["hwVersion"]      = info.hardwareVersion;
         d["model"]          = DJIBattery::modelName(info.model);
         d["sealed"]         = info.sealed;
         d["hasPF"]          = info.hasPF;
+        // Status registers
         d["opStatus"]       = String("0x") + String(info.operationStatus, HEX);
         d["safetyStatus"]   = String("0x") + String(info.safetyStatus, HEX);
         d["pfStatus"]       = String("0x") + String(info.pfStatus, HEX);
         d["mfgStatus"]      = String("0x") + String(info.manufacturingStatus, HEX);
-        // DJI-specific: S/N at reg 0xD8
-        uint8_t sn[16] = {0};
-        int snLen = SMBus::readBlock(0x0B, 0xD8, sn, 16);
-        if (snLen > 0) { sn[snLen] = 0; d["djiSerialNumber"] = String((char*)sn); }
+        // DJI-specific
+        if (info.deviceType == DEV_DJI_BATTERY) {
+            if (info.djiSerial.length() > 0) d["djiSerialNumber"] = info.djiSerial;
+            d["djiPF2"] = String("0x") + String(info.djiPF2, HEX);
+        }
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });
@@ -1105,6 +1147,51 @@ void WebServer::start() {
         char buf[128];
         cp2112_ep_info(buf, sizeof(buf));
         req->send(200, "text/plain", buf);
+    });
+
+    // SMBus transaction log (ring buffer)
+    s_server->on("/api/smbus/log", HTTP_GET, [](AsyncWebServerRequest *req) {
+        static const char *opNames[] = {"RW","RB","WW","WB","MC","MR","RD"};
+        SMBus::LogEntry buf[64];
+        int n = SMBus::logDump(buf, 64);
+        AsyncResponseStream *r = req->beginResponseStream("text/plain");
+        r->printf("seq=%lu logging=%s entries=%d\n", (unsigned long)SMBus::logSeq(),
+                  SMBus::logEnabled() ? "on" : "off", n);
+        for (int i = 0; i < n; i++) {
+            auto &e = buf[i];
+            r->printf("%08lu %s s=%02X r=%02X %s len=%d ",
+                      e.ts, opNames[e.op], e.addr, e.reg,
+                      e.ok ? "OK" : "ERR", e.len);
+            if (e.ok && e.len > 0) {
+                int show = e.len < 8 ? e.len : 8;
+                for (int j = 0; j < show; j++) r->printf("%02X", e.data[j]);
+            }
+            r->print('\n');
+        }
+        req->send(r);
+    });
+
+    // SMBus log control (enable/disable)
+    s_server->on("/api/smbus/log/toggle", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool now = !SMBus::logEnabled();
+        SMBus::logEnable(now);
+        req->send(200, "text/plain", now ? "logging ON" : "logging OFF");
+    });
+
+    // I2C preflight diagnostics
+    s_server->on("/api/i2c/preflight", HTTP_GET, [](AsyncWebServerRequest *req) {
+        auto r = SMBus::preflight();
+        JsonDocument d;
+        d["sdaOk"] = r.sdaOk;
+        d["sclOk"] = r.sclOk;
+        d["busOk"] = r.busOk;
+        d["batteryAck"] = r.batteryAck;
+        d["devCount"] = r.devCount;
+        JsonArray devs = d["devices"].to<JsonArray>();
+        for (int i = 0; i < r.devCount && i < 8; i++)
+            devs.add(String("0x") + String(r.devAddrs[i], HEX));
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     s_server->on("/api/i2c/scan", HTTP_GET, [](AsyncWebServerRequest *req) {

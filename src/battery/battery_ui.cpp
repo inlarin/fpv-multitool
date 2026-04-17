@@ -87,14 +87,24 @@ static void drawInfo() {
     g->setCursor(5, y);
     g->printf("Cap: %d/%d mAh", s_info.remainCapacity_mAh, s_info.fullCapacity_mAh);
     y += 12;
-    g->setCursor(5, y);
-    g->printf("Design: %d mAh", s_info.designCapacity_mAh);
-    y += 12;
 
+    // SOH + cycles on one line
     g->setTextColor(RGB565_YELLOW);
     g->setCursor(5, y);
-    g->printf("Cycles: %d", s_info.cycleCount);
-    y += 16;
+    if (s_info.stateOfHealth > 0 && s_info.stateOfHealth < 0xFFFF)
+        g->printf("SOH:%d%%  Cyc:%d  %dS", s_info.stateOfHealth, s_info.cycleCount, s_info.cellCount);
+    else
+        g->printf("Cycles:%d  %dS", s_info.cycleCount, s_info.cellCount);
+    y += 12;
+
+    // Time estimates
+    g->setTextColor(RGB565_DARKGREY);
+    g->setCursor(5, y);
+    if (s_info.current_mA < 0 && s_info.avgTimeToEmpty_min > 0 && s_info.avgTimeToEmpty_min < 0xFFFF)
+        g->printf("TTE:%dmin", s_info.avgTimeToEmpty_min);
+    else if (s_info.current_mA > 0 && s_info.timeToFull_min > 0 && s_info.timeToFull_min < 0xFFFF)
+        g->printf("TTF:%dmin", s_info.timeToFull_min);
+    y += 14;
 
     // Model
     g->setTextColor(RGB565_MAGENTA);
@@ -146,13 +156,14 @@ static void drawCells() {
     if (!s_connected) { drawFooter(); return; }
 
     // Use synced cells if available, else async
+    int nc = s_info.cellCount > 0 && s_info.cellCount <= 4 ? s_info.cellCount : 4;
     uint16_t cells[4];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < nc; i++) {
         cells[i] = s_info.daStatus1Valid ? s_info.cellVoltSync[i] : s_info.cellVoltage[i];
     }
 
     int barW = LCD_WIDTH - 55;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < nc; i++) {
         uint16_t mv = cells[i];
         if (mv == 0xFFFF || mv == 0) continue;
 
@@ -177,7 +188,7 @@ static void drawCells() {
 
     // Delta
     uint16_t minV = 5000, maxV = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < nc; i++) {
         if (cells[i] != 0xFFFF && cells[i] > 0) {
             if (cells[i] < minV) minV = cells[i];
             if (cells[i] > maxV) maxV = cells[i];
@@ -272,10 +283,15 @@ static void drawLifetime() {
     g->setTextColor(RGB565_WHITE);
     g->setCursor(5, y); g->printf("Mfr: %s", s_info.manufacturerName.c_str()); y += 12;
     g->setCursor(5, y); g->printf("Dev: %s", s_info.deviceName.c_str()); y += 12;
-    g->setCursor(5, y); g->printf("Chem: %s", s_info.chemistry.c_str()); y += 12;
+    g->setCursor(5, y); g->printf("Chem: %s  %dS", s_info.chemistry.c_str(), s_info.cellCount); y += 12;
     g->setCursor(5, y); g->printf("S/N: %d", s_info.serialNumber); y += 12;
 
-    // Decode manufacture date (DJI format: YYYY*512 + MONTH*32 + DAY)
+    if (s_info.deviceType == DEV_DJI_BATTERY && s_info.djiSerial.length() > 0) {
+        g->setTextColor(RGB565_YELLOW);
+        g->setCursor(5, y); g->printf("DJI: %s", s_info.djiSerial.c_str()); y += 12;
+    }
+
+    // Decode manufacture date (SBS format: YYYY*512 + MONTH*32 + DAY)
     uint16_t d = s_info.manufactureDate;
     int year = ((d >> 9) & 0x7F) + 1980;
     int mon = (d >> 5) & 0x0F;

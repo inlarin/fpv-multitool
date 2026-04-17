@@ -1,8 +1,9 @@
 #pragma once
 #include <Arduino.h>
 
-// DJI Smart Battery (Mavic 3 / Mavic 2 / Air / Mini) via SMBus
-// BMS: TI BQ9003 (BQ40z307 FW), address 0x0B
+// Smart Battery via SMBus/SBS — supports DJI and generic SBS batteries
+// DJI BMS: TI BQ9003 (BQ40z307 FW), address 0x0B
+// Generic: any SBS-compliant battery at 0x0B
 
 // =====================================================================
 // Battery model — detected from DeviceName/chip
@@ -25,29 +26,55 @@ enum BatteryModel {
 };
 
 // =====================================================================
+// Device type — auto-detected on I2C scan
+// =====================================================================
+enum BatteryDeviceType {
+    DEV_NONE,           // nothing on I2C
+    DEV_DJI_BATTERY,    // DJI Smart Battery (ManufacturerName contains "DJI" or "Texas Instruments")
+    DEV_GENERIC_SBS,    // any other SBS-compliant battery at 0x0B
+};
+
+// =====================================================================
 // Battery info — all readable data from SBS (no unseal required)
 // =====================================================================
 struct BatteryInfo {
     bool connected;
+    BatteryDeviceType deviceType;
 
     // Basic SBS
     uint16_t voltage_mV;
     int16_t  current_mA;
+    int16_t  avgCurrent_mA;         // 0x0B — smoothed current
     float    temperature_C;
-    uint16_t stateOfCharge;
+    uint16_t stateOfCharge;         // 0x0D — relative SOC %
+    uint16_t absoluteSOC;           // 0x0E — absolute SOC %
     uint16_t fullCapacity_mAh;
     uint16_t designCapacity_mAh;
     uint16_t remainCapacity_mAh;
     uint16_t cycleCount;
     uint16_t batteryStatus;         // 0x16
+    uint16_t designVoltage_mV;      // 0x19
     uint16_t cellVoltage[4];        // 0x3C-0x3F (unsynced)
+    uint8_t  cellCount;             // auto-detected from voltages or name
     uint16_t serialNumber;
     uint16_t manufactureDate;
     String   manufacturerName;
     String   deviceName;
     String   chemistry;
 
-    // Extended status (32-bit registers)
+    // Computed health / estimates (standard SBS)
+    uint16_t stateOfHealth;         // 0x4F — health %
+    uint16_t runTimeToEmpty_min;    // 0x11
+    uint16_t avgTimeToEmpty_min;    // 0x12
+    uint16_t timeToFull_min;        // 0x13
+    uint16_t chargingCurrent_mA;    // 0x14 — recommended
+    uint16_t chargingVoltage_mV;    // 0x15 — recommended
+
+    // DJI-specific
+    String   djiSerial;             // 0xD8 — DJI custom serial string
+    uint32_t djiPF2;                // 0x4062 via ManufacturerBlockAccess
+
+    // Extended status (32-bit registers — TI BQ-specific, may fail on non-DJI)
     uint32_t safetyAlert;           // 0x50
     uint32_t safetyStatus;          // 0x51 — latched trip flags
     uint32_t pfAlert;               // 0x52 — pending PF
@@ -62,7 +89,6 @@ struct BatteryInfo {
     uint16_t cellVoltSync[4];       // synchronized per-cell (from 0x71)
     uint16_t packVoltage;           // synchronized pack voltage
     int16_t  packCurrent;           // synchronized current
-    int16_t  avgCurrent;
     float    cellTemp[4];           // per-cell temperatures (if available)
     float    fetTemp;
 
@@ -74,7 +100,7 @@ struct BatteryInfo {
     // Detection
     BatteryModel model;
     bool sealed;                    // decoded from operationStatus SEC bits
-    bool hasPF;                     // PFStatus != 0
+    bool hasPF;                     // PFStatus != 0 or PF2 != 0
     bool supportedForService;       // unseal keys available for this model
 };
 
@@ -93,7 +119,11 @@ namespace DJIBattery {
 void init();
 bool isConnected();
 
-// Main info read (safe, no unseal)
+// Auto-detect what is on the I2C bus (DJI / generic SBS / nothing)
+BatteryDeviceType detectDeviceType();
+
+// Main info read (safe, no unseal). Reads SBS-standard for any battery,
+// plus DJI-extended registers if deviceType == DEV_DJI_BATTERY.
 BatteryInfo readAll();
 
 // Individual reads (for incremental UI updates)
@@ -108,23 +138,24 @@ BatteryModel detectModel(const String &deviceName, const String &mfrName, uint16
 const char* modelName(BatteryModel m);
 bool modelNeedsDjiKey(BatteryModel m);
 
+// Cell count auto-detection from DeviceName or non-zero cell voltages
+uint8_t detectCellCount(const String &deviceName, const uint16_t cellV[4]);
+
 // Chip/FW detection via ManufacturerBlockAccess
 uint16_t readChipType();            // MAC 0x0001
 uint16_t readFirmwareVer();         // MAC 0x0002
 uint16_t readHardwareVer();         // MAC 0x0003
 
+// DJI-specific reads
+String   readDJISerial();           // 0xD8
+uint32_t readDJIPF2();              // ManufacturerBlockAccess 0x4062
+
 // ============= Service operations =============
-// Try unsealing with multiple known keys
 UnsealResult unseal();
 UnsealResult unsealWithKey(uint32_t key_combined);
-
-// Proper PF clear sequence (unseal → 0x29 → 0x54 → verify → 0x41 reset)
-bool clearPFProper();
-
-// Seal after service
+bool clearPFProper();               // standard PF (0x29 + 0x54 + 0x41)
+bool clearDJIPF2();                 // DJI custom PF2 at 0x4062
 bool seal();
-
-// Soft reset (MAC 0x0041)
 bool softReset();
 
 // ============= Status decoding =============
@@ -132,5 +163,6 @@ String decodeOperationStatus(uint32_t st);
 String decodePFStatus(uint32_t pf);
 String decodeSafetyStatus(uint32_t ss);
 String decodeManufacturingStatus(uint32_t ms);
+String decodeBatteryStatus(uint16_t bs);
 
 } // namespace DJIBattery

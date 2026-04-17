@@ -8,12 +8,20 @@ static const uint8_t BATT_ADDR = 0x0B;
 static const uint8_t REG_TEMPERATURE        = 0x08;
 static const uint8_t REG_VOLTAGE            = 0x09;
 static const uint8_t REG_CURRENT            = 0x0A;
+static const uint8_t REG_AVG_CURRENT        = 0x0B;
 static const uint8_t REG_REL_SOC            = 0x0D;
+static const uint8_t REG_ABS_SOC            = 0x0E;
 static const uint8_t REG_REMAIN_CAP         = 0x0F;
 static const uint8_t REG_FULL_CHARGE_CAP    = 0x10;
+static const uint8_t REG_RUN_TIME_EMPTY     = 0x11;
+static const uint8_t REG_AVG_TIME_EMPTY     = 0x12;
+static const uint8_t REG_TIME_TO_FULL       = 0x13;
+static const uint8_t REG_CHARGING_CURRENT   = 0x14;
+static const uint8_t REG_CHARGING_VOLTAGE   = 0x15;
 static const uint8_t REG_BATTERY_STATUS     = 0x16;
 static const uint8_t REG_CYCLE_COUNT        = 0x17;
 static const uint8_t REG_DESIGN_CAP         = 0x18;
+static const uint8_t REG_DESIGN_VOLTAGE     = 0x19;
 static const uint8_t REG_MANUFACTURE_DATE   = 0x1B;
 static const uint8_t REG_SERIAL_NUMBER      = 0x1C;
 static const uint8_t REG_MANUFACTURER_NAME  = 0x20;
@@ -24,6 +32,11 @@ static const uint8_t REG_CELL4              = 0x3C;
 static const uint8_t REG_CELL3              = 0x3D;
 static const uint8_t REG_CELL2              = 0x3E;
 static const uint8_t REG_CELL1              = 0x3F;
+static const uint8_t REG_STATE_OF_HEALTH    = 0x4F;
+
+// DJI-specific
+static const uint8_t  REG_DJI_SERIAL        = 0xD8;
+static const uint16_t MAC_DJI_PF2_READ      = 0x4062;
 
 // Extended status registers (32-bit, read via block)
 static const uint8_t REG_MFR_ACCESS         = 0x00;
@@ -221,24 +234,134 @@ bool DJIBattery::modelNeedsDjiKey(BatteryModel m) {
 }
 
 // =====================================================================
-// Full battery info read (everything that doesn't require unseal)
+// Auto-detect device type from ManufacturerName
+// =====================================================================
+BatteryDeviceType DJIBattery::detectDeviceType() {
+    if (!isConnected()) return DEV_NONE;
+    String mfr = SMBus::readString(BATT_ADDR, REG_MANUFACTURER_NAME);
+    mfr.toUpperCase();
+    if (mfr.indexOf("DJI") >= 0 || mfr.indexOf("TEXAS") >= 0 || mfr.length() == 0) {
+        // "Texas Instruments" is used by TI BQ gauge ICs inside DJI batteries.
+        // Empty name also likely DJI (some sealed chips return empty).
+        return DEV_DJI_BATTERY;
+    }
+    return DEV_GENERIC_SBS;
+}
+
+// =====================================================================
+// DJI Serial (register 0xD8 — custom DJI block register)
+// =====================================================================
+String DJIBattery::readDJISerial() {
+    uint8_t buf[32] = {0};
+    int len = SMBus::readBlock(BATT_ADDR, REG_DJI_SERIAL, buf, 31);
+    if (len <= 0) return "";
+    buf[len] = '\0';
+    return String((char*)buf);
+}
+
+// =====================================================================
+// DJI PF2 — custom Permanent Failure register at 0x4062 via MAC
+// This is a DJI-specific extension not in standard TI BQ datasheet.
+// Found in mavic-air-battery-helper (gvnt) and DJI Battery Killer.
+// =====================================================================
+uint32_t DJIBattery::readDJIPF2() {
+    uint8_t buf[8] = {0};
+    int n = SMBus::macBlockRead(BATT_ADDR, MAC_DJI_PF2_READ, buf, 8);
+    if (n < 4) return 0;
+    return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
+           ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+}
+
+bool DJIBattery::clearDJIPF2() {
+    // Write known-good value to 0x4062 via ManufacturerBlockAccess.
+    // From mavic-air-battery-helper: write {0x01,0x23,0x45,0x67} to clear.
+    uint8_t clearPayload[] = {
+        (uint8_t)(MAC_DJI_PF2_READ & 0xFF), (uint8_t)(MAC_DJI_PF2_READ >> 8),
+        0x01, 0x23, 0x45, 0x67
+    };
+    return SMBus::writeBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS, clearPayload, 6);
+}
+
+// =====================================================================
+// Cell count auto-detection
+// =====================================================================
+uint8_t DJIBattery::detectCellCount(const String &deviceName, const uint16_t cellV[4]) {
+    // 1. Try parsing from DeviceName (DJI uses e.g. "WM160-2S1P", "WM220-3S1P")
+    String dn = deviceName;
+    int sIdx = dn.indexOf('S');
+    if (sIdx > 0) {
+        char ch = dn.charAt(sIdx - 1);
+        if (ch >= '2' && ch <= '6') return ch - '0';
+    }
+
+    // 2. Known models
+    dn.toUpperCase();
+    if (dn.indexOf("WM160") >= 0 || dn.indexOf("WM161") >= 0) return 2;  // Mini 1/2: 2S
+    if (dn.indexOf("WM100") >= 0) return 3;  // Spark: 3S
+    if (dn.indexOf("WM220") >= 0 || dn.indexOf("WM230") >= 0) return 3;  // Mavic Pro/Air: 3S
+    if (dn.indexOf("WM240") >= 0 || dn.indexOf("WM231") >= 0) return 4;  // Mavic 2/Air2: 4S
+    if (dn.indexOf("WM260") >= 0 || dn.indexOf("WM460") >= 0) return 4;  // Mavic 3/4
+    if (dn.indexOf("P330") >= 0) return 4;   // Phantom 3: 4S
+    if (dn.indexOf("WM331") >= 0 || dn.indexOf("WM332") >= 0) return 4;  // Phantom 4
+
+    // 3. Count non-zero cell voltages (generic)
+    uint8_t count = 0;
+    for (int i = 0; i < 4; i++) {
+        if (cellV[i] > 100 && cellV[i] < 5000) count++;
+    }
+    return count ? count : 1;
+}
+
+// =====================================================================
+// BatteryStatus decoder (standard SBS 0x16 bit meanings)
+// =====================================================================
+String DJIBattery::decodeBatteryStatus(uint16_t bs) {
+    String r;
+    if (bs & (1 << 15)) r += "OCA ";    // Over Charged Alarm
+    if (bs & (1 << 14)) r += "TCA ";    // Terminate Charge Alarm
+    if (bs & (1 << 12)) r += "OTA ";    // Over Temperature Alarm
+    if (bs & (1 << 11)) r += "TDA ";    // Terminate Discharge Alarm
+    if (bs & (1 << 9))  r += "RCA ";    // Remaining Capacity Alarm
+    if (bs & (1 << 8))  r += "RTA ";    // Remaining Time Alarm
+    // Status bits
+    if (bs & (1 << 7))  r += "INIT ";
+    if (bs & (1 << 6))  r += "DSG ";    // Discharging
+    if (bs & (1 << 5))  r += "FC ";     // Fully Charged
+    if (bs & (1 << 4))  r += "FD ";     // Fully Discharged
+    if (!(bs & 0x000F) && r.length() == 0) r = "OK";
+    return r;
+}
+
+// =====================================================================
+// Full battery info read
 // =====================================================================
 BatteryInfo DJIBattery::readAll() {
     BatteryInfo info = {};
     info.connected = isConnected();
-    if (!info.connected) return info;
+    if (!info.connected) { info.deviceType = DEV_NONE; return info; }
 
-    // Standard SBS
-    info.voltage_mV       = SMBus::readWord(BATT_ADDR, REG_VOLTAGE);
-    info.current_mA       = (int16_t)SMBus::readWord(BATT_ADDR, REG_CURRENT);
-    info.stateOfCharge    = SMBus::readWord(BATT_ADDR, REG_REL_SOC);
+    info.deviceType = detectDeviceType();
+
+    // ── Standard SBS (works on ANY SBS battery) ──
+    info.voltage_mV         = SMBus::readWord(BATT_ADDR, REG_VOLTAGE);
+    info.current_mA         = (int16_t)SMBus::readWord(BATT_ADDR, REG_CURRENT);
+    info.avgCurrent_mA      = (int16_t)SMBus::readWord(BATT_ADDR, REG_AVG_CURRENT);
+    info.stateOfCharge      = SMBus::readWord(BATT_ADDR, REG_REL_SOC);
+    info.absoluteSOC        = SMBus::readWord(BATT_ADDR, REG_ABS_SOC);
     info.remainCapacity_mAh = SMBus::readWord(BATT_ADDR, REG_REMAIN_CAP);
-    info.fullCapacity_mAh = SMBus::readWord(BATT_ADDR, REG_FULL_CHARGE_CAP);
+    info.fullCapacity_mAh   = SMBus::readWord(BATT_ADDR, REG_FULL_CHARGE_CAP);
     info.designCapacity_mAh = SMBus::readWord(BATT_ADDR, REG_DESIGN_CAP);
-    info.cycleCount       = SMBus::readWord(BATT_ADDR, REG_CYCLE_COUNT);
-    info.batteryStatus    = SMBus::readWord(BATT_ADDR, REG_BATTERY_STATUS);
-    info.serialNumber     = SMBus::readWord(BATT_ADDR, REG_SERIAL_NUMBER);
-    info.manufactureDate  = SMBus::readWord(BATT_ADDR, REG_MANUFACTURE_DATE);
+    info.designVoltage_mV   = SMBus::readWord(BATT_ADDR, REG_DESIGN_VOLTAGE);
+    info.cycleCount         = SMBus::readWord(BATT_ADDR, REG_CYCLE_COUNT);
+    info.batteryStatus      = SMBus::readWord(BATT_ADDR, REG_BATTERY_STATUS);
+    info.serialNumber       = SMBus::readWord(BATT_ADDR, REG_SERIAL_NUMBER);
+    info.manufactureDate    = SMBus::readWord(BATT_ADDR, REG_MANUFACTURE_DATE);
+
+    info.runTimeToEmpty_min = SMBus::readWord(BATT_ADDR, REG_RUN_TIME_EMPTY);
+    info.avgTimeToEmpty_min = SMBus::readWord(BATT_ADDR, REG_AVG_TIME_EMPTY);
+    info.timeToFull_min     = SMBus::readWord(BATT_ADDR, REG_TIME_TO_FULL);
+    info.chargingCurrent_mA = SMBus::readWord(BATT_ADDR, REG_CHARGING_CURRENT);
+    info.chargingVoltage_mV = SMBus::readWord(BATT_ADDR, REG_CHARGING_VOLTAGE);
 
     uint16_t tempRaw = SMBus::readWord(BATT_ADDR, REG_TEMPERATURE);
     if (tempRaw != 0xFFFF) info.temperature_C = tempRaw / 10.0f - 273.15f;
@@ -252,7 +375,11 @@ BatteryInfo DJIBattery::readAll() {
     info.deviceName       = SMBus::readString(BATT_ADDR, REG_DEVICE_NAME);
     info.chemistry        = SMBus::readString(BATT_ADDR, REG_DEVICE_CHEMISTRY);
 
-    // Extended status
+    info.stateOfHealth = SMBus::readWord(BATT_ADDR, REG_STATE_OF_HEALTH);
+
+    info.cellCount = detectCellCount(info.deviceName, info.cellVoltage);
+
+    // ── Extended TI BQ registers — read for all batteries (fail gracefully) ──
     info.safetyAlert         = SMBus::readDword(BATT_ADDR, REG_SAFETY_ALERT);
     info.safetyStatus        = readSafetyStatus();
     info.pfAlert             = SMBus::readDword(BATT_ADDR, REG_PF_ALERT);
@@ -261,25 +388,28 @@ BatteryInfo DJIBattery::readAll() {
     info.chargingStatus      = SMBus::readDword(BATT_ADDR, REG_CHARGING_STATUS);
     info.gaugingStatus       = SMBus::readDword(BATT_ADDR, REG_GAUGING_STATUS);
     info.manufacturingStatus = readManufacturingStatus();
-
-    // DAStatus1 (synchronized)
     readDAStatus1(info);
 
-    // Chip/FW (may fail if sealed for some chips)
+    // ── DJI-specific (only if DJI battery detected) ──
+    if (info.deviceType == DEV_DJI_BATTERY) {
+        info.djiSerial = readDJISerial();
+        info.djiPF2 = readDJIPF2();
+    }
+
+    // ── Chip/FW identification via MAC ──
     info.chipType = readChipType();
     info.firmwareVersion = readFirmwareVer();
     info.hardwareVersion = readHardwareVer();
 
-    // Detection
+    // ── Detection / state ──
     info.model = detectModel(info.deviceName, info.manufacturerName, info.chipType);
     info.supportedForService = !modelNeedsDjiKey(info.model);
 
-    // Decode seal state from OperationStatus SEC bits
-    // SEC[1:0] in BQ40z307: bits 8-9 typically; 11 = sealed, 10 = unsealed, 01 = full access
     uint8_t sec = (info.operationStatus >> 8) & 0x03;
     info.sealed = (sec == 0x03);
 
-    info.hasPF = (info.pfStatus != 0 && info.pfStatus != 0xFFFFFFFF);
+    info.hasPF = (info.pfStatus != 0 && info.pfStatus != 0xFFFFFFFF) ||
+                 (info.djiPF2 != 0 && info.djiPF2 != 0xFFFFFFFF);
 
     return info;
 }
@@ -389,18 +519,27 @@ bool DJIBattery::clearPFProper() {
     if (!SMBus::macCommand(BATT_ADDR, MAC_CLEAR_PF)) return false;
     delay(500);
 
-    // Step 4: verify
+    // Step 4: also clear DJI PF2 (custom flag at 0x4062)
+    clearDJIPF2();
+    delay(200);
+
+    // Step 5: verify
     uint32_t pf = readPFStatus();
+    uint32_t pf2 = readDJIPF2();
     if (pf != 0 && pf != 0xFFFFFFFF) {
         Serial.printf("[Battery] PF clear incomplete: 0x%08X\n", pf);
-        // still try reset
+    }
+    if (pf2 != 0 && pf2 != 0xFFFFFFFF) {
+        Serial.printf("[Battery] DJI PF2 clear incomplete: 0x%08X\n", pf2);
     }
 
-    // Step 5: soft reset
+    // Step 6: soft reset
     SMBus::macCommand(BATT_ADDR, MAC_DEVICE_RESET);
     delay(1000);
 
-    return (pf == 0 || pf == 0xFFFFFFFF);
+    bool pfOk  = (pf == 0 || pf == 0xFFFFFFFF);
+    bool pf2Ok = (pf2 == 0 || pf2 == 0xFFFFFFFF);
+    return pfOk && pf2Ok;
 }
 
 // =====================================================================
