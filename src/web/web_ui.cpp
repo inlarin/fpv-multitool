@@ -1666,7 +1666,14 @@ function handleMsg(m) {
 }
 
 connect();
+
+// Fetch and display firmware version in footer
+fetch('/api/ota/info').then(r=>r.json()).then(j=>{
+  const el = document.getElementById('fwFooter');
+  if (el) el.textContent = 'FPV MultiTool ' + (j.fw_version || '?') + ' | heap ' + (j.app_size ? (j.app_size/1024/1024).toFixed(1)+'MB' : '?');
+}).catch(()=>{});
 </script>
+<div id="fwFooter" style="text-align:center;color:#444;font-size:11px;margin:20px 0 8px;font-family:monospace"></div>
 </body>
 </html>
 )HTML";
