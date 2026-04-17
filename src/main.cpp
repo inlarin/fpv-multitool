@@ -155,6 +155,7 @@ void loop() {
     esp_task_wdt_reset();  // feed watchdog
     StatusLed::loop();
     SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
+    UsbMode::pumpLoop();    // USB2TTL transparent CDC↔UART1 bridge (no-op in other modes)
     ButtonEvent evt = Button::poll();
 
     if (currentApp == APP_NONE) {

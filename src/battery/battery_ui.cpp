@@ -5,6 +5,7 @@
 #include "ui/button.h"
 #include "ui/status_led.h"
 #include "dji_battery.h"
+#include "smbus.h"
 #include "wdt.h"
 
 enum BattPage {
@@ -13,6 +14,7 @@ enum BattPage {
     BP_STATUS,     // PF/Safety/Operation status decoded
     BP_LIFETIME,   // Model, chip, FW, serial
     BP_SERVICE,    // Unseal / Clear PF / Seal
+    BP_CYCLE,      // Cycle-count reset (unseal + write DF 0x4340 = 0)
     BP_SCAN,       // I2C scanner
     BP_COUNT
 };
@@ -20,6 +22,9 @@ enum BattPage {
 static BattPage s_page = BP_INFO;
 static BatteryInfo s_info = {};
 static bool s_connected = false;
+
+// forward declarations
+static void drawProgress(int step, int total, const char* label);
 
 static void drawHeader() {
     auto *g = Display::gfx();
@@ -382,6 +387,93 @@ static void drawService() {
     drawFooter();
 }
 
+static void drawCycle() {
+    auto *g = Display::gfx();
+    g->fillScreen(RGB565_BLACK);
+    drawHeader();
+
+    int y = 28;
+    g->setTextSize(1);
+
+    g->setTextColor(RGB565_YELLOW);
+    g->setCursor(5, y); g->print("CYCLE COUNT RESET");
+    y += 14;
+    g->setTextColor(RGB565_DARKGREY);
+    g->setCursor(5, y); g->print("(omits cycle history)");
+    y += 18;
+
+    g->setTextColor(RGB565_WHITE);
+    g->setCursor(5, y); g->printf("Current: %d cycles", s_info.cycleCount);
+    y += 14;
+    g->setCursor(5, y); g->printf("After:   0 cycles");
+    y += 14;
+    g->setCursor(5, y); g->printf("Seal:    %s", s_info.sealed ? "SEALED" : "UNSEALED");
+    y += 18;
+
+    g->setTextColor(RGB565_CYAN);
+    g->setCursor(5, y); g->print("Sequence:");
+    y += 12;
+    g->setCursor(5, y); g->print(" 1. unseal");
+    y += 11;
+    g->setCursor(5, y); g->print(" 2. write DF 0x4340=0");
+    y += 11;
+    g->setCursor(5, y); g->print(" 3. verify");
+    y += 18;
+
+    g->setTextColor(RGB565_GREEN);
+    g->setCursor(5, y); g->print("Hold = run reset");
+
+    drawFooter();
+}
+
+static void runCycleReset() {
+    auto *g = Display::gfx();
+    g->fillScreen(RGB565_BLACK);
+    drawHeader();
+
+    int y = 28;
+    g->setTextSize(1);
+
+    drawProgress(1, 3, "Unseal");
+    g->setTextColor(RGB565_YELLOW);
+    g->setCursor(5, y); g->print("[1/3] Unsealing..."); y += 14;
+    UnsealResult ur = DJIBattery::unseal();
+    if (ur != UNSEAL_OK) {
+        g->setTextColor(RGB565_RED);
+        g->setCursor(5, y); g->print("  FAIL (no key?)"); y += 14;
+        g->setTextColor(RGB565_DARKGREY);
+        g->setCursor(5, y); g->print("Click = back");
+        while (Button::poll() != BTN_CLICK) delay(10);
+        return;
+    }
+    g->setTextColor(RGB565_GREEN);
+    g->setCursor(5, y); g->print("  OK"); y += 14;
+
+    drawProgress(2, 3, "Writing DF 0x4340=0");
+    g->setTextColor(RGB565_YELLOW);
+    g->setCursor(5, y); g->print("[2/3] Write DF..."); y += 14;
+    // Cycle Count is at DF addr 0x4340, type U2 (2 bytes), via ManufacturerBlockAccess (0x44)
+    uint8_t payload[4] = {0x40, 0x43, 0x00, 0x00};
+    bool wrote = SMBus::writeBlock(0x0B, 0x44, payload, 4);
+    delay(200);
+    g->setTextColor(wrote ? RGB565_GREEN : RGB565_RED);
+    g->setCursor(5, y); g->print(wrote ? "  OK" : "  WRITE FAIL"); y += 14;
+
+    drawProgress(3, 3, "Verify");
+    g->setTextColor(RGB565_YELLOW);
+    g->setCursor(5, y); g->print("[3/3] Verify..."); y += 14;
+    // Re-read battery to see new cycle count
+    BatteryInfo fresh = DJIBattery::readAll();
+    g->setTextColor(fresh.cycleCount == 0 ? RGB565_GREEN : RGB565_ORANGE);
+    g->setCursor(5, y); g->printf("  Cycles now: %d", fresh.cycleCount); y += 14;
+    s_info = fresh;
+
+    y += 10;
+    g->setTextColor(RGB565_DARKGREY);
+    g->setCursor(5, y); g->print("Click = back");
+    while (Button::poll() != BTN_CLICK) delay(10);
+}
+
 static void drawScan() {
     auto *g = Display::gfx();
     g->fillScreen(RGB565_BLACK);
@@ -573,6 +665,7 @@ static void redrawPage() {
         case BP_STATUS:   drawStatus(); break;
         case BP_LIFETIME: drawLifetime(); break;
         case BP_SERVICE:  drawService(); break;
+        case BP_CYCLE:    drawCycle(); break;
         case BP_SCAN:     drawScan(); break;
         default: break;
     }
@@ -609,6 +702,14 @@ void runBatteryTool() {
                                       "TI default key will be tried")) {
                     runFullService();
                     s_info = DJIBattery::readAll();
+                }
+                redrawPage();
+            } else if (s_page == BP_CYCLE && s_connected) {
+                if (confirmDanger("Cycle Reset", "Unseal + DF 0x4340=0",
+                                  DJIBattery::modelNeedsDjiKey(s_info.model) ?
+                                      "May fail: needs DJI key" :
+                                      "TI default key will be tried")) {
+                    runCycleReset();
                 }
                 redrawPage();
             } else {

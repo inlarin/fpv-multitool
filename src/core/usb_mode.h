@@ -17,4 +17,9 @@ namespace UsbMode {
     void applyAtBoot();                           // called from setup() before USB.begin()
     const char *name(UsbDescriptorMode m);
     void switchAndReboot(UsbDescriptorMode m);
+
+    // USB2TTL pump: call from main loop. Configures Serial1 on first call,
+    // then forwards bytes both directions between the CDC serial and UART1.
+    // No-op when current mode is not USB2TTL.
+    void pumpLoop();
 }

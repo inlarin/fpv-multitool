@@ -1,5 +1,7 @@
 #include "usb_mode.h"
+#include "pin_config.h"
 #include <Preferences.h>
+#include <HardwareSerial.h>
 #include "USB.h"
 #include "USBCDC.h"
 
@@ -57,4 +59,35 @@ void UsbMode::applyAtBoot() {
     if (modeHasHID(m)) CP2112_attach();
 
     USB.begin();
+}
+
+// ===== USB2TTL pump =====
+// Pumps bytes transparently between the USB CDC interface and UART1 on
+// ELRS_TX/ELRS_RX (GPIO 43/44). Called from main loop; no-op unless in
+// USB2TTL mode. Serial1 is configured lazily on first call so we don't
+// collide with other features (ELRS flasher, CRSF) that also use it.
+void UsbMode::pumpLoop() {
+    static bool inited = false;
+    static uint32_t cur_baud = 0;
+    if (load() != USB_MODE_USB2TTL) { inited = false; return; }
+
+    // The host sets its desired baud through the CDC line-coding request;
+    // USBCDC::baudRate() returns what was negotiated.
+    uint32_t want = g_cdc.baudRate();
+    if (want == 0) want = 115200;
+    if (!inited || want != cur_baud) {
+        Serial1.end();
+        Serial1.begin(want, SERIAL_8N1, ELRS_RX, ELRS_TX);
+        cur_baud = want;
+        inited = true;
+    }
+
+    // Forward USB → UART
+    while (g_cdc.available() && Serial1.availableForWrite()) {
+        Serial1.write(g_cdc.read());
+    }
+    // Forward UART → USB
+    while (Serial1.available() && g_cdc.availableForWrite()) {
+        g_cdc.write(Serial1.read());
+    }
 }

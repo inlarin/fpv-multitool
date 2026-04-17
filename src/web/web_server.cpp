@@ -432,9 +432,14 @@ void WebServer::start() {
     s_ws->onEvent(onWsEvent);
     s_server->addHandler(s_ws);
 
-    // Root — stream from PROGMEM, no heap copy (HTML is ~70KB+)
+    // Root — gzipped HTML from PROGMEM (~4x smaller over the wire)
+    // Browser transparently decompresses via Content-Encoding: gzip.
     s_server->on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-        req->send_P(200, "text/html", (const uint8_t*)WEB_INDEX_HTML, WEB_INDEX_HTML_LEN);
+        AsyncWebServerResponse *r = req->beginResponse_P(
+            200, "text/html", WEB_INDEX_HTML_GZ, WEB_INDEX_HTML_GZ_LEN);
+        r->addHeader("Content-Encoding", "gzip");
+        r->addHeader("Cache-Control", "max-age=3600");
+        req->send(r);
     });
 
     // Battery service actions
