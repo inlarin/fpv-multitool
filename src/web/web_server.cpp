@@ -757,6 +757,100 @@ void WebServer::start() {
         req->send(r);
     });
 
+    // ===== Clone Explorer =====
+    // Batch scan of SBS register space — reports which registers respond and what they return.
+    // Runs mostly 0xFF-returning reads for sealed/non-existent regs; useful to find
+    // vendor-specific regs on clone chips that don't implement TI MAC commands.
+    s_server->on("/api/batt/scan/sbs", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint8_t from = 0x00, to = 0xFF;
+        if (req->hasParam("from")) from = (uint8_t)strtoul(req->getParam("from")->value().c_str(), nullptr, 0);
+        if (req->hasParam("to"))   to   = (uint8_t)strtoul(req->getParam("to")->value().c_str(), nullptr, 0);
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        bool first = true;
+        for (int reg = from; reg <= to; reg++) {
+            uint16_t w = SMBus::readWord(0x0B, (uint8_t)reg);
+            uint8_t blk[16] = {0};
+            int bl = SMBus::readBlock(0x0B, (uint8_t)reg, blk, 16);
+            bool hasW = (w != 0xFFFF);
+            bool hasB = (bl > 0);
+            if (!hasW && !hasB) continue;
+            if (!first) r->print(",");
+            first = false;
+            r->printf("{\"reg\":\"0x%02X\"", reg);
+            if (hasW) r->printf(",\"word\":\"0x%04X\",\"dec\":%u", w, (unsigned)w);
+            if (hasB) {
+                r->printf(",\"blen\":%d,\"bhex\":\"", bl);
+                for (int j = 0; j < bl && j < 16; j++) r->printf("%02X", blk[j]);
+                r->print("\",\"bascii\":\"");
+                for (int j = 0; j < bl && j < 16; j++) {
+                    char c = blk[j];
+                    r->printf("%c", (c >= 0x20 && c < 0x7F) ? c : '.');
+                }
+                r->print("\"");
+            }
+            r->print("}");
+        }
+        r->print("]");
+        req->send(r);
+    });
+
+    // Batch scan of MAC subcommand space via ManufacturerBlockAccess.
+    // Reports only entries that return non-zero data (filters out boring "not supported").
+    s_server->on("/api/batt/scan/mac", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint16_t from = 0x0000, to = 0x00FF;
+        if (req->hasParam("from")) from = (uint16_t)strtoul(req->getParam("from")->value().c_str(), nullptr, 0);
+        if (req->hasParam("to"))   to   = (uint16_t)strtoul(req->getParam("to")->value().c_str(), nullptr, 0);
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        bool first = true;
+        for (uint32_t sub = from; sub <= to; sub++) {
+            uint8_t buf[16] = {0};
+            int n = SMBus::macBlockRead(0x0B, (uint16_t)sub, buf, 16);
+            // Skip empty / non-responsive / all-zero responses
+            if (n <= 0) continue;
+            bool allZero = true;
+            for (int j = 0; j < n; j++) if (buf[j] != 0) { allZero = false; break; }
+            if (allZero) continue;
+            if (!first) r->print(",");
+            first = false;
+            r->printf("{\"sub\":\"0x%04X\",\"len\":%d,\"hex\":\"", sub, n);
+            for (int j = 0; j < n && j < 16; j++) r->printf("%02X", buf[j]);
+            r->print("\",\"ascii\":\"");
+            for (int j = 0; j < n && j < 16; j++) {
+                char c = buf[j];
+                r->printf("%c", (c >= 0x20 && c < 0x7F) ? c : '.');
+            }
+            r->print("\"}");
+        }
+        r->print("]");
+        req->send(r);
+    });
+
+    // Write-verify: try writing value, then read back. Tells us if seal is real or cosmetic.
+    // POST addr=0xNN&type=word|block&value=... verifies if write actually changed register.
+    s_server->on("/api/batt/scan/wv", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("reg", true) || !req->hasParam("value", true)) {
+            req->send(400, "text/plain", "need reg, value"); return;
+        }
+        uint8_t reg = (uint8_t)strtoul(req->getParam("reg", true)->value().c_str(), nullptr, 0);
+        uint16_t val = (uint16_t)strtoul(req->getParam("value", true)->value().c_str(), nullptr, 0);
+        uint16_t before = SMBus::readWord(0x0B, reg);
+        bool wrote = SMBus::writeWord(0x0B, reg, val);
+        delay(50);
+        uint16_t after = SMBus::readWord(0x0B, reg);
+        JsonDocument d;
+        d["reg"] = String("0x") + String(reg, HEX);
+        d["before"] = String("0x") + String(before, HEX);
+        d["wrote"] = wrote;
+        d["target"] = String("0x") + String(val, HEX);
+        d["after"] = String("0x") + String(after, HEX);
+        d["persisted"] = (after == val);
+        d["seal_bypassed"] = (after == val && val != before);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     // Battery service actions
     s_server->on("/api/batt", HTTP_GET, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("action")) { req->send(400, "text/plain", "missing action"); return; }

@@ -263,6 +263,22 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   </div>
 
   <div class="card">
+    <h2>Live Chart (last ~3 min)</h2>
+    <svg id="liveChart" viewBox="0 0 400 160" width="100%" height="160" style="background:var(--input-bg);border-radius:4px">
+      <g id="chartGrid"></g>
+      <polyline id="chartV" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+      <polyline id="chartI" fill="none" stroke="#fa0" stroke-width="1.5"/>
+      <text id="chartLabelV" x="5" y="15" fill="var(--accent)" font-size="10" font-family="monospace">V: --</text>
+      <text id="chartLabelI" x="5" y="28" fill="#fa0" font-size="10" font-family="monospace">I: --</text>
+    </svg>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);margin-top:4px">
+      <span><span style="color:var(--accent)">━</span> voltage (V)</span>
+      <span><span style="color:#fa0">━</span> current (mA)</span>
+      <button onclick="chartClear()" style="padding:2px 8px;font-size:10px">Clear</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Cells (<span id="cellsSync">async</span>)</h2>
     <div id="cellsGrid"></div>
     <div class="row"><span class="label">Delta:</span><span class="value" id="cellDelta">-</span></div>
@@ -362,6 +378,39 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     </div>
     <div id="macDesc" style="margin:4px 0;font-size:11px;color:#888"></div>
     <pre id="macResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:120px;overflow:auto">(idle)</pre>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;max-width:100%">
+    <h2>Battery Fleet Compare</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+      Upload multiple JSON snapshots (from "Snapshot JSON" button) to compare batteries side-by-side.
+      Highlights outliers: cycles, SOH, capacity loss, cell imbalance.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <label style="cursor:pointer;padding:10px 16px;background:var(--accent-dim);color:#fff;border-radius:6px;font-size:14px">
+        Add Snapshot <input type="file" accept=".json" multiple onchange="fleetAdd(event)" style="display:none">
+      </label>
+      <button onclick="fleetAddCurrent()">Add Current Battery</button>
+      <button onclick="fleetClear()">Clear All</button>
+      <span id="fleetStatus" style="color:var(--text-dim);font-size:12px"></span>
+    </div>
+    <div id="fleetTable" style="margin-top:8px;overflow:auto"></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;max-width:100%">
+    <h2>Clone Explorer — discover hidden registers & bypass attempts</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+      Clone batteries (non-TI chips) sometimes ignore seal protection or expose vendor-specific commands.
+      Scan SBS and MAC space to find what responds — then try writes to see if seal is cosmetic.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="ceSbsScan()">Scan SBS 0x00-0xFF</button>
+      <button onclick="ceMacScan(0x0000, 0x00FF)">Scan MAC 0x0000-0x00FF</button>
+      <button onclick="ceMacScan(0x4000, 0x40FF)">Scan MAC 0x4000-0x40FF (DF-ish)</button>
+      <button onclick="ceBypassTest()">Seal Bypass Test (safe)</button>
+      <span id="ceStatus" style="color:var(--text-dim);font-size:12px;align-self:center"></span>
+    </div>
+    <pre id="ceResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:6px;margin:6px 0;max-height:400px;overflow:auto;font-family:monospace;white-space:pre-wrap"></pre>
   </div>
 
   <div class="card" style="grid-column:1/-1;max-width:100%">
@@ -851,6 +900,221 @@ function tryManualKey() {
   fetch('/api/batt/diag?unseal='+w1+','+w2).then(r=>r.json()).then(j=>{
     el.textContent = j.result + ' | sealed=' + j.sealed + ' | opStatus=' + j.opStatus;
   });
+}
+
+// === CLONE EXPLORER ===
+function _ceLog(line) {
+  const el = document.getElementById('ceResult');
+  el.textContent += line + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+function _ceClear() { document.getElementById('ceResult').textContent = ''; }
+
+function ceSbsScan() {
+  _ceClear();
+  _ceLog('Scanning SBS 0x00-0xFF...');
+  document.getElementById('ceStatus').textContent = 'scanning SBS...';
+  fetch('/api/batt/scan/sbs?from=0x00&to=0xFF').then(r=>r.json()).then(entries=>{
+    document.getElementById('ceStatus').textContent = entries.length + ' responsive registers';
+    _ceLog('');
+    _ceLog('reg  | word/dec       | len | hex                                  | ascii');
+    _ceLog('-----+----------------+-----+--------------------------------------+-----------------');
+    entries.forEach(e => {
+      const wDec = e.dec !== undefined ? String(e.dec).padEnd(5) : '     ';
+      const w = e.word ? e.word + ' (' + wDec + ')' : '              ';
+      const bhex = (e.bhex || '').padEnd(32);
+      const bascii = (e.bascii || '').padEnd(16);
+      _ceLog(e.reg.padEnd(5) + '| ' + w.padEnd(15) + '| ' + String(e.blen ?? '').padEnd(4) + '| ' + bhex + '| ' + bascii);
+    });
+  }).catch(err => _ceLog('Error: ' + err));
+}
+
+function ceMacScan(from, to) {
+  _ceClear();
+  _ceLog('Scanning MAC 0x' + from.toString(16).padStart(4,'0').toUpperCase() + '-0x' + to.toString(16).padStart(4,'0').toUpperCase() + '...');
+  _ceLog('(this takes ~30s per 256 subcommands due to I2C delay)');
+  document.getElementById('ceStatus').textContent = 'scanning MAC...';
+  fetch('/api/batt/scan/mac?from=0x' + from.toString(16) + '&to=0x' + to.toString(16)).then(r=>r.json()).then(entries=>{
+    document.getElementById('ceStatus').textContent = entries.length + ' MAC subcommands returned data';
+    _ceLog('');
+    if (!entries.length) {
+      _ceLog('(no MAC subcommand returned non-zero data)');
+      return;
+    }
+    _ceLog('sub     | len | hex                              | ascii');
+    _ceLog('--------+-----+----------------------------------+-----------------');
+    entries.forEach(e => {
+      _ceLog(e.sub.padEnd(8) + '| ' + String(e.len).padEnd(4) + '| ' + e.hex.padEnd(32) + ' | ' + e.ascii);
+    });
+  }).catch(err => _ceLog('Error: ' + err));
+}
+
+function ceBypassTest() {
+  _ceClear();
+  _ceLog('Seal bypass test — probes if seal protection is actually enforced.');
+  _ceLog('');
+  // Safe: write current cycle count value back to itself. If it "persists", seal is cosmetic.
+  // Plus: try DF write 0x4340 (cycle count in DF) with zero, read back.
+  _ceLog('Step 1: read current cycleCount (SBS 0x17) ...');
+  const ceDo = async () => {
+    const cur = await fetch('/api/batt/snapshot').then(r=>r.json());
+    const cyc = cur.cycleCount;
+    _ceLog('  current: ' + cyc);
+    _ceLog('');
+
+    _ceLog('Step 2: try writeWord to SBS 0x17 (sealed regs normally reject)...');
+    const fd = new FormData();
+    fd.append('reg', '0x17');
+    fd.append('value', '65535');  // deliberately silly value
+    const r = await fetch('/api/batt/scan/wv', {method:'POST', body:fd}).then(r=>r.json());
+    _ceLog('  before=' + r.before + ' target=' + r.target + ' after=' + r.after + ' wrote=' + r.wrote);
+    if (r.seal_bypassed) {
+      _ceLog('  ⚠ SEAL BYPASSED! write persisted → clone does not enforce seal on SBS 0x17');
+    } else if (r.wrote && !r.persisted) {
+      _ceLog('  ✓ seal enforced (write accepted but value ignored) — normal behaviour');
+    } else if (!r.wrote) {
+      _ceLog('  ✓ seal enforced (write rejected at I2C level)');
+    }
+    _ceLog('');
+
+    _ceLog('Step 3: try DF 0x4340 (cycle count in DF) write via MAC 0x44...');
+    const fd2 = new FormData();
+    fd2.append('addr', '0x4340'); fd2.append('value', '0'); fd2.append('size', '2');
+    const r2 = await fetch('/api/batt/df/write', {method:'POST', body:fd2}).then(r=>r.json());
+    _ceLog('  DF write ok=' + r2.ok);
+    await new Promise(s => setTimeout(s, 300));
+    const cur2 = await fetch('/api/batt/snapshot').then(r=>r.json());
+    _ceLog('  cycleCount after: ' + cur2.cycleCount);
+    if (cur2.cycleCount === 0 && cyc > 0) {
+      _ceLog('  ⚠ CYCLE COUNT WIPED! DF write to 0x4340 worked without unseal!');
+    } else if (cur2.cycleCount === cyc) {
+      _ceLog('  ✓ DF protected (cycleCount unchanged)');
+    }
+    _ceLog('');
+    _ceLog('Done. Also try "Scan MAC 0x0000-0x00FF" to find vendor-specific commands.');
+    document.getElementById('ceStatus').textContent = 'bypass test complete';
+  };
+  ceDo().catch(e => _ceLog('Error: ' + e));
+}
+
+// === FLEET COMPARE ===
+let _fleet = [];
+function fleetAdd(evt) {
+  const files = Array.from(evt.target.files || []);
+  let done = 0;
+  files.forEach(f => {
+    const r = new FileReader();
+    r.onload = (e) => {
+      try {
+        const snap = JSON.parse(e.target.result);
+        _fleet.push({name: f.name, data: snap});
+      } catch (err) {
+        alert('Bad JSON in ' + f.name + ': ' + err);
+      }
+      if (++done === files.length) fleetRender();
+    };
+    r.readAsText(f);
+  });
+  evt.target.value = '';
+}
+function fleetAddCurrent() {
+  fetch('/api/batt/snapshot').then(r=>r.json()).then(snap=>{
+    const name = (snap.mfrName || 'batt') + '-' + (snap.serialNumber || '?') + ' @ ' + new Date().toISOString().slice(11,19);
+    _fleet.push({name, data: snap});
+    fleetRender();
+  });
+}
+function fleetClear() { _fleet = []; fleetRender(); }
+
+function _fleetColor(val, good, warn) {
+  if (val == null || val === undefined) return 'var(--text-muted)';
+  if (val >= good) return 'var(--status-on)';
+  if (val >= warn) return 'var(--status-warn)';
+  return 'var(--warning-text)';
+}
+
+function fleetRender() {
+  const el = document.getElementById('fleetTable');
+  const status = document.getElementById('fleetStatus');
+  status.textContent = _fleet.length + ' snapshot' + (_fleet.length === 1 ? '' : 's');
+  if (!_fleet.length) { el.innerHTML = '<div style="color:var(--text-dim);padding:10px">No snapshots loaded.</div>'; return; }
+
+  // Compute cell deltas for each
+  const row = (s) => {
+    const cells = s.cellVoltageSync_mV || s.cellVoltage_mV || [];
+    const nonZero = cells.filter(v => v > 100 && v < 5000);
+    const minC = nonZero.length ? Math.min(...nonZero) : 0;
+    const maxC = nonZero.length ? Math.max(...nonZero) : 0;
+    const delta = maxC - minC;
+    return {
+      name: s.deviceName || '-',
+      mfr: s.mfrName || '-',
+      model: s.model || '-',
+      v: (s.voltage_mV / 1000).toFixed(2),
+      soc: s.soc || 0,
+      soh: s.stateOfHealth || null,
+      cycles: s.cycleCount || 0,
+      cap: s.fullCap_mAh || 0,
+      design: s.designCap_mAh || 0,
+      wear: s.designCap_mAh ? Math.round((1 - (s.fullCap_mAh / s.designCap_mAh)) * 100) : null,
+      delta: delta,
+      cells: nonZero.length,
+      temp: (s.temperature_C || 0).toFixed(1),
+      sealed: s.sealed ? 'SEALED' : 'open',
+      pf: s.hasPF,
+    };
+  };
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:11px;font-family:monospace">';
+  html += '<thead><tr style="background:var(--card-bg2);color:var(--accent)">';
+  html += '<th style="padding:4px;text-align:left">Snapshot</th>';
+  html += '<th style="padding:4px">Model</th>';
+  html += '<th style="padding:4px">V</th>';
+  html += '<th style="padding:4px">SOC%</th>';
+  html += '<th style="padding:4px">SOH%</th>';
+  html += '<th style="padding:4px">Cycles</th>';
+  html += '<th style="padding:4px">Full/Design</th>';
+  html += '<th style="padding:4px">Wear%</th>';
+  html += '<th style="padding:4px">Δcell</th>';
+  html += '<th style="padding:4px">Cells</th>';
+  html += '<th style="padding:4px">T°C</th>';
+  html += '<th style="padding:4px">State</th>';
+  html += '</tr></thead><tbody>';
+
+  _fleet.forEach((item, i) => {
+    const r = row(item.data);
+    html += '<tr style="border-bottom:1px solid var(--border-soft)">';
+    html += '<td style="padding:3px 4px;color:var(--text)" title="' + (item.name||'') + '">'
+          + (item.name || '').slice(0, 30) + '</td>';
+    html += '<td style="padding:3px 4px">' + r.model + '</td>';
+    html += '<td style="padding:3px 4px;text-align:right">' + r.v + '</td>';
+    html += '<td style="padding:3px 4px;text-align:right;color:' + _fleetColor(r.soc, 50, 20) + '">' + r.soc + '</td>';
+    html += '<td style="padding:3px 4px;text-align:right;color:' + _fleetColor(r.soh, 80, 60) + '">' + (r.soh ?? '-') + '</td>';
+    html += '<td style="padding:3px 4px;text-align:right;color:' + _fleetColor(200 - r.cycles, 100, 50) + '">' + r.cycles + '</td>';
+    html += '<td style="padding:3px 4px;text-align:right">' + r.cap + '/' + r.design + '</td>';
+    const wearCol = r.wear == null ? 'var(--text-muted)' : (r.wear < 10 ? 'var(--status-on)' : r.wear < 25 ? 'var(--status-warn)' : 'var(--warning-text)');
+    html += '<td style="padding:3px 4px;text-align:right;color:' + wearCol + '">' + (r.wear ?? '-') + '</td>';
+    const deltaCol = r.delta < 30 ? 'var(--status-on)' : r.delta < 80 ? 'var(--status-warn)' : 'var(--warning-text)';
+    html += '<td style="padding:3px 4px;text-align:right;color:' + deltaCol + '">' + r.delta + '</td>';
+    html += '<td style="padding:3px 4px;text-align:right">' + r.cells + 'S</td>';
+    html += '<td style="padding:3px 4px;text-align:right">' + r.temp + '</td>';
+    html += '<td style="padding:3px 4px;color:' + (r.pf ? 'var(--warning-text)' : (r.sealed === 'SEALED' ? 'var(--status-warn)' : 'var(--status-on)')) + '">';
+    html += r.pf ? 'PF!' : r.sealed;
+    html += '</td></tr>';
+  });
+  html += '</tbody></table>';
+
+  // Summary row: averages & outlier detection
+  if (_fleet.length >= 2) {
+    const rows = _fleet.map(x => row(x.data));
+    const avg = (f) => (rows.reduce((s,r) => s + (r[f]||0), 0) / rows.length).toFixed(1);
+    html += '<div style="margin-top:6px;font-size:11px;color:var(--text-dim)">';
+    html += 'Averages: SOC ' + avg('soc') + '%, SOH ' + avg('soh') + '%, Cycles ' + avg('cycles')
+         + ', Wear ' + avg('wear') + '%, Δcell ' + avg('delta') + 'mV';
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
 }
 
 function tryHmacUnseal() {
@@ -1768,6 +2032,46 @@ function pickSsid(ssid) {
 }
 
 // === Incoming messages ===
+// === LIVE CHART ===
+const _chartMax = 180;  // ~3 min at 1Hz telemetry
+const _chartVS = [], _chartIS = [];
+function chartClear() { _chartVS.length = 0; _chartIS.length = 0; chartRender(); }
+function chartPush(mV, mA) {
+  _chartVS.push(mV); _chartIS.push(mA);
+  if (_chartVS.length > _chartMax) { _chartVS.shift(); _chartIS.shift(); }
+  chartRender();
+}
+function chartRender() {
+  if (!_chartVS.length) {
+    document.getElementById('chartV').setAttribute('points', '');
+    document.getElementById('chartI').setAttribute('points', '');
+    return;
+  }
+  const W = 400, H = 160, pad = 5;
+  // Voltage range: auto, with some padding
+  const vMin = Math.min(..._chartVS), vMax = Math.max(..._chartVS);
+  const vRange = (vMax - vMin) || 1000;
+  // Current range: symmetric around zero for readability
+  const iMax = Math.max(..._chartIS.map(Math.abs), 1000);
+  const n = _chartVS.length;
+  const step = (W - 2*pad) / Math.max(_chartMax - 1, 1);
+  const vPts = _chartVS.map((v,i) => {
+    const x = pad + i * step;
+    const y = H - pad - ((v - vMin) / vRange) * (H - 2*pad - 20) - 10;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  const iPts = _chartIS.map((v,i) => {
+    const x = pad + i * step;
+    const y = H/2 - (v / iMax) * (H/2 - pad - 10);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  document.getElementById('chartV').setAttribute('points', vPts);
+  document.getElementById('chartI').setAttribute('points', iPts);
+  const last = n - 1;
+  document.getElementById('chartLabelV').textContent = 'V: ' + (_chartVS[last]/1000).toFixed(2) + ' (' + (vMin/1000).toFixed(2) + '-' + (vMax/1000).toFixed(2) + ')';
+  document.getElementById('chartLabelI').textContent = 'I: ' + _chartIS[last] + 'mA (±' + iMax + ')';
+}
+
 function handleMsg(m) {
   if (m.type === 'batt') {
     const c = m.connected;
@@ -1786,6 +2090,9 @@ function handleMsg(m) {
     document.getElementById('battBar').style.width = m.soc + '%';
     document.getElementById('battVolt').textContent = (m.voltage/1000).toFixed(2) + ' V';
     document.getElementById('battCurr').textContent = m.current + ' mA';
+
+    // Push sample to live chart ring buffer
+    chartPush(m.voltage, m.current);
     document.getElementById('battAvgCurr').textContent = m.avgCurrent + ' mA';
     document.getElementById('battTemp').textContent = m.temp.toFixed(1) + ' °C';
     document.getElementById('battSOH').textContent = (m.soh && m.soh < 0xFFFF) ? m.soh + ' %' : '-';
