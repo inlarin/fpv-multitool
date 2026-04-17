@@ -407,6 +407,38 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="fleetTable" style="margin-top:8px;overflow:auto"></div>
   </div>
 
+  <div class="card batt-clone-only" style="grid-column:1/-1;max-width:100%">
+    <h2>Challenge Harvester & Block Writer</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+      Harvest pseudo-random challenges from reg 0xEE (or any reg) — the clone
+      returns different bytes after every write. Collect samples for offline
+      cryptanalysis (LFSR period, HMAC structure). Also supports raw byte writes
+      for testing alternative block formats the clone might accept.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+      <label style="font-size:11px">reg <input id="chReg" value="0xEE" style="width:60px;font-family:monospace"></label>
+      <label style="font-size:11px">writeVal <input id="chVal" value="0x0000" style="width:70px;font-family:monospace"></label>
+      <label style="font-size:11px">count <input id="chCount" type="number" value="100" min="1" max="2000" style="width:70px"></label>
+      <label style="font-size:11px">readLen <input id="chRLen" type="number" value="16" min="1" max="32" style="width:50px"></label>
+      <label style="font-size:11px"><input type="checkbox" id="chInc"> increment write</label>
+      <button onclick="chHarvest()">Harvest</button>
+      <button onclick="chExport()" id="chExportBtn" disabled>Export CSV</button>
+      <span id="chStatus" style="color:var(--text-dim);font-size:11px"></span>
+    </div>
+    <div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">Raw byte write (reg + N bytes, no length prefix):</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+        <label style="font-size:11px">reg <input id="wbReg" value="0xEE" style="width:60px;font-family:monospace"></label>
+        <input id="wbData" placeholder="hex payload e.g. 5AA5DEAD..." style="flex:1;min-width:160px;font-family:monospace;font-size:11px">
+        <label style="font-size:11px"><input type="checkbox" id="wbRaw"> raw (no len prefix)</label>
+        <button onclick="chWBlock()">Send</button>
+      </div>
+      <div id="wbResult" style="font-family:monospace;font-size:10px;margin-top:4px;color:var(--text-dim)"></div>
+    </div>
+    <pre id="chResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:6px;margin:6px 0;max-height:300px;overflow:auto;font-family:monospace"></pre>
+    <div id="chAnalysis" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div>
+  </div>
+
   <div class="card batt-clone-only">
     <h2>Vendor Register Viewer (0xD0-0xFF)</h2>
     <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
@@ -2099,6 +2131,130 @@ function battSubAutoDetect(devType, chipType, mfr) {
   const hint = document.getElementById('battSubHint');
   if (hint) hint.innerHTML = 'auto: <b style="color:var(--accent)">' + auto + '</b> <a href="#" onclick="battSubReset(); return false;" style="color:var(--text-dim);font-size:10px">[reset]</a>';
   if (auto !== _curBattSub) showBattSub(auto, false);
+}
+
+// === CHALLENGE HARVESTER (Clone tab) ===
+let _chSamples = [];
+
+async function chHarvest() {
+  const reg = document.getElementById('chReg').value;
+  const val = document.getElementById('chVal').value;
+  const count = document.getElementById('chCount').value;
+  const readLen = document.getElementById('chRLen').value;
+  const inc = document.getElementById('chInc').checked ? '1' : '0';
+  const status = document.getElementById('chStatus');
+  const res = document.getElementById('chResult');
+  const ana = document.getElementById('chAnalysis');
+  status.textContent = 'harvesting...';
+  res.textContent = '';
+  ana.textContent = '';
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`/api/batt/clone/harvest?reg=${reg}&writeVal=${val}&count=${count}&readLen=${readLen}&inc=${inc}`);
+    const data = await r.json();
+    _chSamples = data;
+    document.getElementById('chExportBtn').disabled = false;
+    const dt = Date.now() - t0;
+    status.textContent = data.length + ' samples in ' + dt + 'ms (' + Math.round(data.length*1000/dt) + ' tx/s)';
+
+    // Compact display
+    const lines = [];
+    lines.push('idx  write   response (hex)                          varies');
+    lines.push('---- ------- ----------------------------------------- ------');
+    for (let i = 0; i < Math.min(data.length, 100); i++) {
+      const d = data[i];
+      const prev = i > 0 ? data[i-1].r : '';
+      const diff = diffBytes(prev, d.r);
+      lines.push(String(i).padEnd(4) + ' ' + d.w + ' ' + d.r.padEnd(42) + ' ' + diff);
+    }
+    if (data.length > 100) lines.push('... (' + (data.length - 100) + ' more)');
+    res.textContent = lines.join('\n');
+
+    // Quick analysis
+    chAnalyze(data);
+  } catch (err) {
+    status.textContent = 'error: ' + err;
+  }
+}
+
+function diffBytes(a, b) {
+  if (!a || a.length !== b.length) return '?';
+  let marks = '';
+  for (let i = 0; i < a.length; i += 2) {
+    marks += (a.substr(i,2) === b.substr(i,2)) ? '.' : 'X';
+  }
+  return marks;
+}
+
+function chAnalyze(samples) {
+  if (samples.length < 4) return;
+  // Find byte positions that VARY across all samples
+  const sampleLen = samples[0].r.length / 2;
+  const varies = new Array(sampleLen).fill(0);  // count of distinct values per byte
+  for (let b = 0; b < sampleLen; b++) {
+    const set = new Set();
+    for (const s of samples) set.add(s.r.substr(b*2, 2));
+    varies[b] = set.size;
+  }
+
+  // Byte entropy — for bytes that vary
+  const ana = document.getElementById('chAnalysis');
+  let s = 'Byte variability (distinct values / ' + samples.length + ' samples):\n';
+  for (let b = 0; b < sampleLen; b++) {
+    const pct = Math.round(varies[b]*100/samples.length);
+    const marker = varies[b] === 1 ? 'const' : varies[b] >= samples.length * 0.5 ? 'HIGH-entropy' : 'varies';
+    s += `  byte[${b}] = ${varies[b]} distinct (${pct}%) ${marker}\n`;
+  }
+
+  // Look for period/repetition in first varying byte
+  const firstVar = varies.findIndex(v => v > 1);
+  if (firstVar >= 0 && samples.length >= 10) {
+    const bytes = samples.map(x => parseInt(x.r.substr(firstVar*2, 2), 16));
+    // Check period up to 128
+    let period = 0;
+    for (let p = 1; p < Math.min(128, bytes.length/2); p++) {
+      let match = true;
+      for (let i = 0; i < bytes.length - p; i++) {
+        if (bytes[i] !== bytes[i+p]) { match = false; break; }
+      }
+      if (match) { period = p; break; }
+    }
+    s += '\nByte[' + firstVar + '] period check: ' + (period ? 'PERIOD=' + period + ' detected' : 'no repetition found');
+    // First 32 values as hex for quick visual pattern scan
+    s += '\nByte[' + firstVar + '] first 32 samples: ' + bytes.slice(0, 32).map(b => b.toString(16).padStart(2,'0')).join(' ');
+  }
+  ana.textContent = s;
+}
+
+function chExport() {
+  if (!_chSamples.length) return;
+  let csv = 'index,write,read_hex\n';
+  _chSamples.forEach((s, i) => {
+    csv += i + ',' + s.w + ',' + s.r + '\n';
+  });
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'harvest_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.csv';
+  a.click();
+}
+
+async function chWBlock() {
+  const reg = document.getElementById('wbReg').value;
+  const data = document.getElementById('wbData').value.replace(/\s/g,'');
+  const raw = document.getElementById('wbRaw').checked;
+  if (!/^[0-9a-fA-F]+$/.test(data) || data.length % 2 !== 0) {
+    document.getElementById('wbResult').textContent = 'data must be even-length hex';
+    return;
+  }
+  const fd = new FormData();
+  fd.append('reg', reg); fd.append('data', data);
+  if (raw) fd.append('raw', '1');
+  const r = await fetch('/api/batt/clone/wblock', {method:'POST', body:fd}).then(r=>r.json());
+  const rb = await fetch('/api/batt/scan/sbs?from=' + reg + '&to=' + reg).then(r=>r.json());
+  const readback = rb[0] ? ('word=' + rb[0].word + ' block=' + (rb[0].bhex || '')) : '(no response)';
+  document.getElementById('wbResult').textContent =
+    (r.ok ? '[OK]' : '[FAIL]') + ' wrote ' + r.len + 'B to ' + reg + (raw ? ' (raw)' : ' (block)') + ' → readback: ' + readback;
 }
 
 // === VENDOR REGISTER VIEWER (Clone tab) ===

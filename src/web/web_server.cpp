@@ -3,6 +3,7 @@
 #include "web_state.h"
 #include "wifi_manager.h"
 #include "pin_config.h"
+#include <Wire.h>
 #include "battery/dji_battery.h"
 #include "battery/smbus.h"
 #include "motor/dshot.h"
@@ -847,6 +848,88 @@ void WebServer::start() {
         d["after"] = String("0x") + String(after, HEX);
         d["persisted"] = (after == val);
         d["seal_bypassed"] = (after == val && val != before);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // ===== Clone Deep Probe =====
+
+    // Challenge Harvester — write value N times, record response after each write.
+    // For studying pseudo-random challenge generators (e.g. reg 0xEE on PTL clone).
+    //   GET /api/batt/clone/harvest?reg=0xEE&writeVal=0x0000&count=100&readLen=16
+    // Returns compact JSON: [{"w":"0xNNNN","r":"hex"}, ...]
+    s_server->on("/api/batt/clone/harvest", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint8_t reg = req->hasParam("reg") ?
+            (uint8_t)strtoul(req->getParam("reg")->value().c_str(), nullptr, 0) : 0xEE;
+        uint16_t writeVal = req->hasParam("writeVal") ?
+            (uint16_t)strtoul(req->getParam("writeVal")->value().c_str(), nullptr, 0) : 0x0000;
+        int count = req->hasParam("count") ? req->getParam("count")->value().toInt() : 100;
+        int readLen = req->hasParam("readLen") ? req->getParam("readLen")->value().toInt() : 16;
+        if (count < 1) count = 1;
+        if (count > 2000) count = 2000;  // cap to avoid WDT + heap pressure
+        if (readLen < 1) readLen = 1;
+        if (readLen > 32) readLen = 32;
+
+        bool incrementWrite = req->hasParam("inc") &&
+            req->getParam("inc")->value() != "0" &&
+            req->getParam("inc")->value() != "false";
+
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        uint8_t buf[32];
+        uint16_t v = writeVal;
+        for (int i = 0; i < count; i++) {
+            SMBus::writeWord(0x0B, reg, v);
+            delay(5);
+            int n = SMBus::readBlock(0x0B, reg, buf, readLen);
+            if (i) r->print(",");
+            r->printf("{\"w\":\"0x%04X\",\"n\":%d,\"r\":\"", v, n);
+            for (int j = 0; j < n && j < readLen; j++) r->printf("%02X", buf[j]);
+            r->print("\"}");
+            if (incrementWrite) v++;
+        }
+        r->print("]");
+        req->send(r);
+    });
+
+    // Raw block-write to any SBS register (bypasses the standard SMBus block format
+    // which prepends a length byte). Use for clones that expect raw payload.
+    //   POST reg=0xNN&data=HEX&len=N
+    s_server->on("/api/batt/clone/wblock", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("reg", true) || !req->hasParam("data", true)) {
+            req->send(400, "text/plain", "need reg & data (hex)"); return;
+        }
+        uint8_t reg = (uint8_t)strtoul(req->getParam("reg", true)->value().c_str(), nullptr, 0);
+        String hex = req->getParam("data", true)->value();
+        hex.replace(" ", "");
+        hex.replace(":", "");
+        if (hex.length() % 2 != 0 || hex.length() > 64) {
+            req->send(400, "text/plain", "hex must be even-length, max 32 bytes"); return;
+        }
+        uint8_t buf[32]; int n = 0;
+        for (size_t i = 0; i < hex.length() && n < 32; i += 2) {
+            char pair[3] = {hex[i], hex[i+1], 0};
+            buf[n++] = (uint8_t)strtol(pair, nullptr, 16);
+        }
+        bool raw = req->hasParam("raw", true);
+        bool ok;
+        if (raw) {
+            // Raw: [reg, data...] without length prefix
+            if (!SMBus::busLock(200)) { req->send(500, "text/plain", "bus busy"); return; }
+            Wire1.beginTransmission((uint8_t)0x0B);
+            Wire1.write(reg);
+            Wire1.write(buf, n);
+            ok = Wire1.endTransmission() == 0;
+            SMBus::busUnlock();
+        } else {
+            // Standard block write: [reg, len, data...]
+            ok = SMBus::writeBlock(0x0B, reg, buf, n);
+        }
+        JsonDocument d;
+        d["reg"] = String("0x") + String(reg, HEX);
+        d["len"] = n;
+        d["raw"] = raw;
+        d["ok"] = ok;
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });

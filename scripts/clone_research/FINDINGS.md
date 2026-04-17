@@ -1,131 +1,122 @@
 # PTL BA01WM260 Clone Battery — Research Findings
 
 **Device:** BA01WM260 (PTL brand fake Mavic 3 battery, 4S, sealed)
-**Serial:** 4ERPL6QEA1D6Y9 (from reg 0xD8)
+**Serial:** 4ERPL6QEA1D6Y9 (reg 0xD8)
 **Cycles:** 1
-**Method:** ESP32 CP2112 HID emulator, Python client via `hidapi`
-**Date:** 2026-04-17
+**Method:** ESP32 CP2112 HID emulator, Python + web-based probing
+**Updated:** 2026-04-18
 
-## Summary
+## Verdict (after Sprint 24)
+
+This clone uses a **custom ASIC that mimics surface SBS only**. It does NOT speak any standard TI protocol. Unsealing via software interface appears infeasible without reverse-engineering the chip firmware directly.
+
+## What we tested
 
 | Test | Result |
 |------|--------|
-| TI MAC (0x0000-0xFFFF, 65536 subcmds) | **0 responses** — clone doesn't implement MAC |
-| SBS word writes to protected regs (0x17, 0x18, 0x1C, 0x3C-0x3F, 0xD6-0xDB) | **Rejected** — seal enforced |
-| SBS vendor range 0xD0-0xFF read | **48/48 respond**, includes paired magic AA55/55AA markers |
-| SBS writable vendor regs 0xD4, 0xE5, 0xEB, 0xEE | **ACCEPT WRITES without unseal** |
+| Full 64K MAC scan (0x0000-0xFFFF) | 0 responses — no TI MAC |
+| 24 magic patterns × 48 vendor regs | 4 regs accept writes (0xD4/E5/EB/EE) |
+| Seal bypass via writes to 0x17, DF 0x4340 | Rejected (seal enforced) |
+| Standard RU/TI unseal keys | All fail |
+| BQ9003 boot entry (MAC 0x0033 → read 0x0D) | No special response (normal SBS) |
+| BQ30Z55 boot entry (MAC 0x0F00 → read 0x0D) | No special response |
+| 0xEE pseudo-random "challenge" analysis | **Not a challenge** — just internal timer state |
 
-## Vendor register signatures
+## Detailed 0xEE register analysis (from 500 harvested samples)
+
+Format: 16-byte block response `[80+in_lo] 04 00 FC FC XX YY 00 × 9`
+
+- **byte 0** = `(write_val & 0xFF) | 0x80` — simple echo with high bit set
+- **bytes 1-4** = `04 00 FC FC` — fixed device-family signature
+- **byte 5** = slow counter: increments by ~8-9 per I2C transaction (~1.2ms per unit)
+  - NOT dependent on input write value
+  - Looks like milliseconds-since-power-on or bus-transaction counter
+- **byte 6** = chaotic value, highly varying
+  - NOT a deterministic function of input
+  - Likely LFSR or CRC over internal state
+- **bytes 7-15** = zeros
+
+Conclusion: 0xEE is an **internal-state-exposure register** (debug/diagnostics), NOT an auth challenge. Writing does nothing meaningful — state advances regardless.
+
+### Error pattern
+Occasionally (maybe 1-2% of samples) the response returns all `0xFE`:
+`FEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFE`
+
+Likely bus timing/arbitration issue during high-rate probing. Not a feature.
+
+## What's still untested
+
+1. **DJI official tool capture** — run DJI Assistant (or Battery Killer) on a REAL Mavic 3 battery, log all SMBus traffic via CP2112 emulator, then replay on this clone
+2. **Combinatorial writes** — specific write sequences to `(regA, regB, regC)` may unlock something
+3. **Hardware** — open pack, identify chip markings, probe JTAG/SWD/UART
+4. **Shim DLL** — intercept SLABHIDtoSMBus.dll calls from DJI tools to extract live keys/challenges
+
+## Vendor register map (high range)
 
 ```
-0xD5: 00           — status byte, always 0x01 word
-0xD6: AA66FFFFFFFFFFFFFFFFFFFFFFFFFFFF  — starts with 0xAA55 word marker
-0xD7: 00           — zero
-0xD8: 344552504c365145413144365939  "4ERPL6QEA1D6Y9"  (DJI serial ASCII)
-0xD9: E6B78FDD55AA   — ends with 0x55AA (paired backdoor marker)
-0xE7: 023A...        — 2-byte data, rest FF
-0xE8: 23F6...        — 2-byte data, rest FF
-0xEA: 4403...
-0xEE: 800400FC00A572000000000000000000   — 16-byte active register, byte 6-7 changes each read (nonce!)
-0xF0: 46F50004       — 4-byte data, word=0x4604 possibly a counter
-0xF2: 00B6FFFF
-0xF3: 8EFF...
-0xF5: 98FFFFFFFF
-0xF6: 8C0C8C00       — 4 bytes, 2 words: 0x0C8C=3212, 0x008C=140
-0xF7: 8074FFFFFFFFFF...
-0xF8: 00D5FFFF...
-0xFA: 0095FFFF...
-0xFB: 00000000
-0xFF: 0131
+0xD0-D3: 0x0000 (unused)
+0xD4: writable, word echoes — scratch
+0xD5: word=0x0001, block=0x00 (constant)
+0xD6: word=0xAA55, block=AA66FFFF... — CHIP FAMILY MARKER
+0xD7: 0x0000
+0xD8: "4ERPL6QEA1D6Y9" — DJI serial ASCII (14 bytes)
+0xD9: block ending in ...55AA — MARKER PAIR
+0xDA-DF: 0x0000
+0xE0-E4: 0x0000
+0xE5: writable scratch
+0xE6: 0x0000
+0xE7: block 023A...FF
+0xE8: block 23F6...FF
+0xE9: all 0xFF
+0xEA: block 4403...FF
+0xEB: writable scratch
+0xEE: live internal-state register (see above)
+0xEF: all 0xFF
+0xF0: block 46F50004 — possibly uptime/tx counter
+0xF1: 0x00000000
+0xF2: block 00B6FFFF
+0xF3: block 8EFF...
+0xF5: block 98FFFFFFFF
+0xF6: block 8C0C8C00 — two u16 values (3212, 140 — age/health?)
+0xF7: block 8074...FF
+0xF8: block 00D5FF...
+0xFA: block 0095FF...
+0xFB: 0x00000000 (unused? writable?)
+0xFD-FE: all 0xFF
+0xFF: 0x0131 — possibly total_tx_count
 ```
 
-## Seal-bypass findings
+## Research toolkit (`scripts/clone_research/`)
 
-Tested 19 standard protected registers with `writeWord(reg, 0xABCD)`:
-- **All rejected**, value didn't change
-- OpStatus returned `07030201` — NOT standard TI format (SEC bits don't decode cleanly)
+| File | Purpose |
+|------|---------|
+| `cp2112.py` | Python CP2112 HID driver (working, tested) |
+| `scan_sbs_full.py` | Enumerate 0x00-0xFF SBS regs (~5s) |
+| `scan_mac_full.py` | 64K MAC brute-scan (~3.3 min) |
+| `bypass_probe.py` | Test seal on standard regs |
+| `magic_probe.py` | Find writable vendor regs via magic-pattern writes |
+| `nonce_study.py` | Deep-study single register behaviour under repeated writes |
+| `challenge_harvester.py` | Bulk harvest (write, response) pairs to CSV |
+| `response_analyze.py` | Entropy + periodicity + CRC hypothesis testing |
 
-**BUT:** testing 24 magic patterns against 48 vendor regs revealed 4 writable registers:
+## Required to switch board for Python toolkit
 
-- **0xD4** — accepts arbitrary word writes, reads back different value (echo with high-byte mutation)
-- **0xE5** — same behaviour as 0xD4
-- **0xEB** — same behaviour
-- **0xEE** — ACTIVE register with nonce:
-  - Bytes 0-1: echoes last write (on some values only)
-  - Bytes 2-3: fixed `0400`
-  - Bytes 4-5: fixed `00FC` or `00FF`
-  - Bytes 6-7: **changes on every read** (suspected nonce/challenge/counter)
-  - Bytes 8+: zeros
+```bash
+# Enable USB2I2C mode (exposes CP2112 HID over USB)
+curl -X POST -F mode=2 http://192.168.32.50/api/usb/mode
+curl -X POST http://192.168.32.50/api/usb/reboot
 
-## Interpretation
+# ... run Python scripts ...
 
-The clone chip:
-1. **Has no TI MAC support** — entire ManufacturerAccess protocol absent
-2. **Enforces seal** on standard SBS registers (cycles, capacity, cells, etc.)
-3. **Has a partial vendor/debug interface** at 0xD4/0xE5/0xEB/0xEE
-4. **Register 0xEE contains a live nonce** — indicates authentication challenge
-
-Hypothesis: the 0xEE register implements a custom challenge-response scheme. Writing the correct response (based on the nonce) to 0xEE may unlock the device. The 0xAA55/0x55AA markers at 0xD6/0xD9 may be MAGIC_PRESENT markers that confirm the chip family.
-
-## Next steps
-
-1. **Study 0xEE behavior in depth:**
-   - Read 0xEE 100 times, check nonce pattern (linear counter? random? LFSR?)
-   - Write value X → read 0xEE → see if bytes change predictably
-   - Try block-write to 0xEE (vs word write) — maybe need 16-byte response
-
-2. **Replay DJI official tool traffic:**
-   - Run official DJI Assistant or Battery Killer against a real Mavic 3 battery
-   - Capture CP2112 log via `/api/cp2112/log`
-   - Look for the sequence it uses to authenticate/unseal
-   - Replay same bytes on the PTL clone
-
-3. **Brute-force 0xEE combinations:**
-   - Write pairs (reg1, reg2, reg3...) before reading 0xEE
-   - Look for state changes (SEC bits, F0/F6 vendor regs)
-
-4. **BQ9003 boot-mode entry** (separate vector):
-   - Write 0x0033 to MAC, read reg 0x0D, expect 0x0502 response
-   - If supported, opens flash programming interface
-
-5. **Hardware approach:**
-   - Open pack, probe JTAG/SWD pins on PCB
-   - Check for UART debug port
-
-## Files in this directory
-- `cp2112.py` — HID driver (working, tested)
-- `scan_sbs_full.py` — 256-reg enumerate (~5s, all 256 respond)
-- `scan_mac_full.py` — 65536-subcmd brute-scan (~3.3 min, 0 hits confirmed)
-- `bypass_probe.py` — write-verify on standard regs (all rejected)
-- `magic_probe.py` — magic-sequence probe on vendor range (found writable regs)
-- `mac_full.csv` — empty (no MAC responses)
-- `FINDINGS.md` — this file
-
-## Raw scan snippets
-
-### Full SBS scan (high range only, register + block)
+# Switch back to CDC+web
+curl -X POST -F mode=0 http://192.168.32.50/api/usb/mode
+curl -X POST http://192.168.32.50/api/usb/reboot
 ```
-0xD0: 00 00
-0xD1: 00 00
-0xD2: 00 00
-0xD3: 00 00
-0xD4: 00 00
-0xD5: 01 00
-0xD6: 55 AA  block: AA66FFFFFFFFFFFFFFFFFFFFFFFFFFFF
-0xD7: 00 00
-0xD8: 0E 34  block: 344552504C365145413144365939        "4ERPL6QEA1D6Y9"
-0xD9: 06 E6  block: E6B78FDD55AA
-0xE7: 3A 02  block: 023AFFFF...FF (24 bytes)
-0xE8: F6 23  block: 23F6FFFF...FF (32 bytes)
-0xEA: 03 44  block: 4403FFFF...FF (32 bytes)
-0xEE: 04 00  block: FF0400FC0004E2000000000000000000  <-- NONCE HERE
-0xF0: 45 46  block: 46F50004                             <-- 4-byte counter?
-0xF1: 00 00  block: 00000000
-0xF2: FF 00  block: 00B6FFFF
-0xF3: FF 00  block: 8EFF...
-0xF5: FF 00  block: 98FFFFFFFF
-0xF6: 0C 8C  block: 8C0C8C00                             <-- 2 words, probably battery age/health
-0xFA: FF 00  block: 0095FFFF...
-0xFB: 00 00  block: 00000000
-0xFF: 31 01  block: 0131
-```
+
+## Web-based harvester (v0.22+)
+
+Battery Lab → DJI Clone sub-tab → Challenge Harvester card:
+- Write value + count + read length → collect samples in browser
+- On-the-fly entropy + period analysis
+- Export to CSV
+- Raw block writes to arbitrary regs (with or without length prefix)
