@@ -1,6 +1,7 @@
 #include "dji_battery.h"
 #include "smbus.h"
 #include "pin_config.h"
+#include <mbedtls/md.h>  // for HMAC-SHA1 auth unseal
 
 static const uint8_t BATT_ADDR = 0x0B;
 
@@ -485,6 +486,71 @@ UnsealResult DJIBattery::unseal() {
     }
 
     if (modelNeedsDjiKey(model)) return UNSEAL_UNSUPPORTED_MODEL;
+    return UNSEAL_REJECTED_SEALED;
+}
+
+// =====================================================================
+// HMAC-SHA1 challenge-response unseal (TI BQ40Z50/BQ40Z307 authenticated flow)
+// =====================================================================
+// Protocol per TI datasheet:
+//   1. Request UNSEAL (MAC 0x0000) or AUTHENTICATE (some FWs use different code)
+//   2. Device returns 20 bytes of random challenge via MAC block read 0x0000
+//   3. Host computes HMAC-SHA1(key[0..31], challenge[0..19]) → 20B digest
+//   4. Host writes digest as 20-byte block to MAC 0x0000
+//   5. Device unseals if digest matches its own computation
+//
+// This is separate from the static 2x16-bit key unseal (unsealWithKey).
+// DJI firmware may use either flow depending on chip/firmware version.
+UnsealResult DJIBattery::unsealHmac(const uint8_t key[32], uint8_t challenge_out[20]) {
+    if (!key) return UNSEAL_NO_RESPONSE;
+
+    // Step 1: request challenge — write 0x0000 to MAC, then block-read to get random
+    uint8_t challenge[20] = {0};
+    int n = SMBus::macBlockRead(BATT_ADDR, 0x0000, challenge, sizeof(challenge));
+    if (n < 20) {
+        Serial.printf("[Battery] HMAC: failed to get challenge (len=%d)\n", n);
+        return UNSEAL_NO_RESPONSE;
+    }
+    if (challenge_out) memcpy(challenge_out, challenge, 20);
+
+    Serial.print("[Battery] HMAC challenge: ");
+    for (int i = 0; i < 20; i++) Serial.printf("%02X", challenge[i]);
+    Serial.println();
+
+    // Step 2: compute HMAC-SHA1(key, challenge)
+    uint8_t digest[20] = {0};
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+    if (!info) {
+        Serial.println("[Battery] HMAC: SHA1 info unavailable");
+        return UNSEAL_NO_RESPONSE;
+    }
+    int rc = mbedtls_md_hmac(info, key, 32, challenge, 20, digest);
+    if (rc != 0) {
+        Serial.printf("[Battery] HMAC compute failed: %d\n", rc);
+        return UNSEAL_NO_RESPONSE;
+    }
+
+    Serial.print("[Battery] HMAC digest: ");
+    for (int i = 0; i < 20; i++) Serial.printf("%02X", digest[i]);
+    Serial.println();
+
+    // Step 3: write digest as 20-byte block to MAC 0x44 (ManufacturerBlockAccess)
+    // The subcommand prefix (0x0000) goes first, then the 20-byte HMAC response.
+    uint8_t payload[22] = {0x00, 0x00};
+    memcpy(payload + 2, digest, 20);
+    if (!SMBus::writeBlock(BATT_ADDR, 0x44, payload, 22)) {
+        return UNSEAL_NO_RESPONSE;
+    }
+
+    delay(200);
+
+    // Step 4: verify seal state
+    uint32_t op = readOperationStatus();
+    uint8_t sec = (op >> 8) & 0x03;
+    if (sec != 0x03) {
+        Serial.printf("[Battery] HMAC unseal OK (SEC=%d)\n", sec);
+        return UNSEAL_OK;
+    }
     return UNSEAL_REJECTED_SEALED;
 }
 

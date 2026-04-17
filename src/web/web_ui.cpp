@@ -14,56 +14,97 @@ __attribute__((unused)) static const char WEB_INDEX_HTML_RAW[] PROGMEM = R"HTML(
 <title>FPV MultiTool</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f0f1e'/><path d='M18 3 L7 18 h6 l-3 11 L25 13 h-6 l3-10z' fill='%230cf'/></svg>">
 <style>
+:root {
+  /* Dark theme (default) */
+  --bg: #0f0f1e;
+  --text: #e0e0e0;
+  --text-dim: #888;
+  --text-muted: #555;
+  --card-bg: #1a1a2e;
+  --card-bg2: #12122a;
+  --input-bg: #0a0a14;
+  --border: #333;
+  --border-soft: #222;
+  --accent: #0cf;
+  --accent2: #0af;
+  --accent-dim: #0066aa;
+  --value: #fff;
+  --warning-bg: #2a0a0a;
+  --warning-text: #f66;
+  --status-on: #2a4;
+  --status-off: #666;
+  --status-warn: #c82;
+  --conn-bad: #a42;
+}
+[data-theme="light"] {
+  --bg: #f4f6fb;
+  --text: #222;
+  --text-dim: #666;
+  --text-muted: #999;
+  --card-bg: #ffffff;
+  --card-bg2: #e8ecf5;
+  --input-bg: #f8f9fc;
+  --border: #d0d5df;
+  --border-soft: #e6e8ed;
+  --accent: #0077b0;
+  --accent2: #0a70d0;
+  --accent-dim: #0066aa;
+  --value: #111;
+  --warning-bg: #fff2f0;
+  --warning-text: #c22;
+  --status-on: #1a7;
+  --status-off: #aaa;
+  --status-warn: #d82;
+  --conn-bad: #c44;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  background: #0f0f1e; color: #e0e0e0;
+  background: var(--bg); color: var(--text);
   font-family: -apple-system,BlinkMacSystemFont,sans-serif;
-  max-width: 1700px;      /* lets 3 card columns fit on 2K after container padding + grid gaps */
+  max-width: 1700px;
   margin: 0 auto;
   padding: clamp(8px, 2vw, 20px);
 }
 h1 {
-  color: #0af;
+  color: var(--accent2);
   font-size: clamp(18px, 2.4vw, 26px);
   margin-bottom: 10px;
   text-align: center;
-  padding: 0 90px;        /* keep title clear of the fixed #connStatus badge on narrow viewports */
+  padding: 0 90px;
 }
 .ws-tabs { display: flex; justify-content: center; gap: 6px; margin-bottom: 8px; }
-.ws-tab { padding: 10px 20px; background: #12122a; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 15px; font-weight: 600; user-select: none; color: #889; border-bottom: 2px solid transparent; }
-.ws-tab.active { background: #1a1a2e; color: #0cf; border-bottom: 2px solid #0cf; }
+.ws-tab { padding: 10px 20px; background: var(--card-bg2); border-radius: 8px 8px 0 0; cursor: pointer; font-size: 15px; font-weight: 600; user-select: none; color: var(--text-dim); border-bottom: 2px solid transparent; }
+.ws-tab.active { background: var(--card-bg); color: var(--accent); border-bottom: 2px solid var(--accent); }
 .tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-bottom: 15px; }
-.tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; }
-.tab.active { background: #0066aa; color: #fff; }
-/* Cards flow into multiple columns on wide screens, single column on phones.
-   Tracks stretch with 1fr but each card is capped at 520px and centred inside its cell,
-   so on 2K we get 3 readable columns instead of 2 bloated ones. */
+.tab { padding: 10px 14px; background: var(--card-bg); border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; color: var(--text); }
+.tab.active { background: var(--accent-dim); color: #fff; }
 .tab-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; justify-content: center; }
-.card { background: #1a1a2e; border-radius: 8px; padding: 16px; min-width: 0; max-width: 520px; width: 100%; justify-self: center; }
-.card h2 { color: #0cf; font-size: clamp(14px, 1.4vw, 17px); margin-bottom: 12px; }
-.row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #222; }
+.card { background: var(--card-bg); border-radius: 8px; padding: 16px; min-width: 0; max-width: 520px; width: 100%; justify-self: center; }
+.card h2 { color: var(--accent); font-size: clamp(14px, 1.4vw, 17px); margin-bottom: 12px; }
+.row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
 .row:last-child { border-bottom: none; }
-.label { color: #888; font-size: 13px; }
-.value { color: #fff; font-size: 15px; font-weight: 600; }
-.big { font-size: 32px; color: #0cf; text-align: center; margin: 10px 0; }
+.label { color: var(--text-dim); font-size: 13px; }
+.value { color: var(--value); font-size: 15px; font-weight: 600; }
+.big { font-size: 32px; color: var(--accent); text-align: center; margin: 10px 0; }
 input[type=range] { width: 100%; margin: 8px 0; }
-input[type=number], input[type=text], input[type=password] { width: 100%; padding: 8px; background: #0a0a14; border: 1px solid #333; border-radius: 4px; color: #fff; font-size: 14px; margin: 4px 0; }
-button { padding: 10px 16px; background: #0066aa; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 4px 2px; }
+input[type=number], input[type=text], input[type=password] { width: 100%; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 14px; margin: 4px 0; }
+button { padding: 10px 16px; background: var(--accent-dim); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; margin: 4px 2px; }
 button.danger { background: #aa2222; }
 button.success { background: #22aa44; }
-button:disabled { background: #444; cursor: not-allowed; }
+button:disabled { background: var(--text-muted); cursor: not-allowed; }
 .status { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
-.status.on { background: #2a4; color: #fff; }
-.status.off { background: #666; color: #ccc; }
-.status.warn { background: #c82; color: #fff; }
-.bar { height: 20px; background: #0a0a14; border-radius: 4px; overflow: hidden; margin: 8px 0; }
-.bar-fill { height: 100%; background: linear-gradient(90deg,#2a4,#0af); transition: width 0.2s; }
+.status.on { background: var(--status-on); color: #fff; }
+.status.off { background: var(--status-off); color: #ccc; }
+.status.warn { background: var(--status-warn); color: #fff; }
+.bar { height: 20px; background: var(--input-bg); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+.bar-fill { height: 100%; background: linear-gradient(90deg, var(--status-on), var(--accent2)); transition: width 0.2s; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.warning { color: #f66; font-size: 12px; padding: 8px; background: #2a0a0a; border-radius: 4px; margin: 8px 0; }
-.ok { color: #6f6; }
+.warning { color: var(--warning-text); font-size: 12px; padding: 8px; background: var(--warning-bg); border-radius: 4px; margin: 8px 0; }
+.ok { color: var(--status-on); }
 #connStatus { position: fixed; top: 10px; right: 10px; font-size: 12px; padding: 4px 8px; border-radius: 12px; z-index: 10; }
-#connStatus.connected { background: #2a4; color: #fff; }
-#connStatus.disconnected { background: #a42; color: #fff; }
+#connStatus.connected { background: var(--status-on); color: #fff; }
+#connStatus.disconnected { background: var(--conn-bad); color: #fff; }
+#themeToggle { position: fixed; top: 10px; left: 10px; background: var(--card-bg); color: var(--text); border: 1px solid var(--border); padding: 4px 10px; border-radius: 12px; cursor: pointer; font-size: 14px; z-index: 10; }
 
 /* Mobile responsive */
 @media (max-width: 600px) {
@@ -89,6 +130,7 @@ button:disabled { background: #444; cursor: not-allowed; }
 </head>
 <body>
 <div id="connStatus" class="disconnected">...</div>
+<button id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 <h1>FPV MultiTool</h1>
 
 <div class="ws-tabs" id="wsTabs">
@@ -295,11 +337,21 @@ button:disabled { background: #444; cursor: not-allowed; }
     </div>
     <div style="margin-top:8px;font-size:12px">Manual key pair:</div>
     <div style="display:flex;gap:4px;margin-top:4px">
-      <input id="unsealW1" placeholder="0x7EE0" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
-      <input id="unsealW2" placeholder="0xCCDF" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <input id="unsealW1" placeholder="0x7EE0" style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:4px;font-family:monospace">
+      <input id="unsealW2" placeholder="0xCCDF" style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:4px;font-family:monospace">
       <button onclick="tryManualKey()">Send</button>
     </div>
-    <div id="unsealResult" style="margin-top:8px;color:#0f0;font-size:12px"></div>
+
+    <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+    <div style="font-size:12px;margin-bottom:4px">HMAC-SHA1 challenge-response (bq40z30x+):</div>
+    <input id="unsealHmacKey" placeholder="32-byte key as 64 hex chars" maxlength="64" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:4px;font-family:monospace;font-size:11px;margin:4px 0">
+    <div class="grid">
+      <button onclick="tryHmacUnseal()">HMAC Unseal</button>
+      <button onclick="tryGetChallenge()">Get Challenge Only</button>
+    </div>
+    <pre id="hmacResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:4px;margin:4px 0;font-family:monospace;display:none;white-space:pre-wrap;word-break:break-all"></pre>
+
+    <div id="unsealResult" style="margin-top:8px;color:var(--status-on);font-size:12px"></div>
   </div>
 
   <div class="card">
@@ -322,7 +374,10 @@ button:disabled { background: #444; cursor: not-allowed; }
       <button onclick="dfLoadMap()">Load Map</button>
       <button onclick="dfReadAll()" id="dfReadAllBtn" disabled>Read All Values</button>
       <button onclick="dfExport()" id="dfExportBtn" disabled>Export JSON</button>
-      <span id="dfStatus" style="color:#888;font-size:12px;align-self:center"></span>
+      <label style="cursor:pointer;padding:10px 16px;background:var(--accent-dim);color:#fff;border-radius:6px;font-size:14px">
+        Import Killer.ini <input type="file" accept=".ini" onchange="dfImportKillerIni(event)" style="display:none">
+      </label>
+      <span id="dfStatus" style="color:var(--text-dim);font-size:12px;align-self:center"></span>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0;padding:6px;background:#12122a;border-radius:4px;align-items:center">
       <span style="color:#888;font-size:11px">Compare:</span>
@@ -632,31 +687,42 @@ function send(obj) {
   else fetch('/api', {method:'POST', body:JSON.stringify(obj)});
 }
 
-let _curWs = 'batt';
+let _curWs = localStorage.getItem('ws') || 'batt';
 const _wsDefTab = {batt:'battery', fpv:'servo', sys:'sys'};
+const _wsValid = name => ['batt','fpv','sys'].includes(name);
+const _tabValid = name => ['servo','motor','battery','elrs','crsf','sys','usb','ota'].includes(name);
 
 function showWorkspace(ws) {
+  if (!_wsValid(ws)) ws = 'batt';
   _curWs = ws;
+  localStorage.setItem('ws', ws);
   document.querySelectorAll('.ws-tab').forEach(e => e.classList.remove('active'));
-  event.target.classList.add('active');
+  // Find and highlight the matching ws-tab (works for both click event and programmatic calls)
+  const wsTabs = document.querySelectorAll('.ws-tab');
+  const idx = ['batt','fpv','sys'].indexOf(ws);
+  if (wsTabs[idx]) wsTabs[idx].classList.add('active');
   ['batt','fpv','sys'].forEach(w => {
     document.getElementById('ws-'+w).style.display = w === ws ? '' : 'none';
   });
-  // Activate the first tab in this workspace
-  const wsEl = document.getElementById('ws-'+ws);
-  const tabs = wsEl.querySelectorAll('.tab');
-  tabs.forEach(t => t.classList.remove('active'));
-  if (tabs[0]) tabs[0].classList.add('active');
-  showTab(_wsDefTab[ws]);
+  // Restore the last tab for this workspace, or fall back to default
+  const savedTab = localStorage.getItem('tab_' + ws);
+  const tabName = (savedTab && _tabValid(savedTab)) ? savedTab : _wsDefTab[ws];
+  showTab(tabName);
 }
 
 function showTab(name) {
+  if (!_tabValid(name)) name = _wsDefTab[_curWs];
   document.querySelectorAll('.tab-content').forEach(e => e.style.display = 'none');
   document.getElementById('tab-'+name).style.display = '';
   // Mark active tab within current workspace
   const wsEl = document.getElementById('ws-'+_curWs);
-  if (wsEl) wsEl.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
-  if (typeof event !== 'undefined' && event && event.target && event.target.classList) event.target.classList.add('active');
+  if (wsEl) {
+    wsEl.querySelectorAll('.tab').forEach(e => {
+      e.classList.remove('active');
+      if (e.getAttribute('onclick')?.includes("'"+name+"'")) e.classList.add('active');
+    });
+  }
+  localStorage.setItem('tab_' + _curWs, name);
   if (name === 'ota') otaRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); }
@@ -787,6 +853,30 @@ function tryManualKey() {
   });
 }
 
+function tryHmacUnseal() {
+  const key = document.getElementById('unsealHmacKey').value.trim().replace(/[^0-9a-fA-F]/g, '');
+  if (key.length !== 64) { alert('Need 64 hex chars (32 bytes), got ' + key.length); return; }
+  const el = document.getElementById('hmacResult');
+  el.style.display = 'block';
+  el.textContent = 'Sending HMAC unseal...';
+  const fd = new FormData(); fd.append('key', key);
+  fetch('/api/batt/unseal_hmac', {method:'POST', body:fd}).then(r=>r.json()).then(j=>{
+    el.textContent = 'Result: ' + j.result + '\nChallenge: ' + (j.challenge || '(none)');
+    el.style.color = j.ok ? 'var(--status-on)' : 'var(--warning-text)';
+  }).catch(e=>{ el.textContent = 'Error: ' + e; el.style.color = 'var(--warning-text)'; });
+}
+
+function tryGetChallenge() {
+  // Read 20 bytes from MAC 0x0000 via /api/batt/diag?mac=0x0000 — no key needed
+  const el = document.getElementById('hmacResult');
+  el.style.display = 'block';
+  el.textContent = 'Reading MAC 0x0000 challenge...';
+  fetch('/api/batt/diag?mac=0x0000').then(r=>r.json()).then(j=>{
+    el.textContent = 'Challenge (len=' + j.len + '):\n' + j.hex + '\nASCII: ' + j.ascii;
+    el.style.color = 'var(--accent)';
+  });
+}
+
 function loadMacCatalog() {
   fetch('/api/batt/mac_catalog').then(r=>r.json()).then(c=>{
     _macCatalog = c;
@@ -842,14 +932,101 @@ function smbExec() {
 let _dfMap = [], _dfValues = {}, _dfSnapA = null, _dfSnapB = null;
 
 function dfLoadMap() {
-  document.getElementById('dfStatus').textContent = 'Loading map...';
+  // If we have a custom map imported from Killer.ini, prefer that
+  const custom = localStorage.getItem('dfMapCustom');
+  if (custom) {
+    try {
+      _dfMap = JSON.parse(custom);
+      document.getElementById('dfReadAllBtn').disabled = false;
+      document.getElementById('dfFilter').style.display = '';
+      document.getElementById('dfStatus').textContent = _dfMap.length + ' entries (custom Killer.ini)';
+      dfRenderTree();
+      return;
+    } catch (e) { localStorage.removeItem('dfMapCustom'); }
+  }
+  document.getElementById('dfStatus').textContent = 'Loading built-in map...';
   fetch('/api/batt/df/map').then(r=>r.json()).then(m=>{
     _dfMap = m;
     document.getElementById('dfReadAllBtn').disabled = false;
     document.getElementById('dfFilter').style.display = '';
-    document.getElementById('dfStatus').textContent = m.length + ' entries loaded';
+    document.getElementById('dfStatus').textContent = m.length + ' entries (built-in)';
     dfRenderTree();
   });
+}
+
+// Parse Killer.ini content — format per line:
+//   "Category", "SubCategory", "Field", Address, Type, Min, Max, Default, "Unit"
+// Lines starting with ; or [ are skipped; NULL addresses are skipped.
+function dfParseKillerIni(text) {
+  const out = [];
+  // Split fields on commas that are NOT inside quotes
+  const splitCSV = (line) => {
+    const parts = []; let buf = ''; let inQuote = false;
+    for (const c of line) {
+      if (c === '"') { inQuote = !inQuote; continue; }
+      if (c === ',' && !inQuote) { parts.push(buf.trim()); buf = ''; continue; }
+      buf += c;
+    }
+    if (buf.length) parts.push(buf.trim());
+    return parts;
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith(';') || line.startsWith('[')) continue;
+    const p = splitCSV(line);
+    if (p.length < 9) continue;
+    const [cat, sub, field, addrRaw, typeRaw, minRaw, maxRaw, defRaw, unit] = p;
+    if (addrRaw === 'NULL' || addrRaw === 'null' || addrRaw === '') continue;
+    const addrNum = parseInt(addrRaw, addrRaw.startsWith('0x') ? 16 : 10);
+    if (isNaN(addrNum)) continue;
+    const type = typeRaw.trim();
+    const typeSize = {I1:1, U1:1, H1:1, I2:2, U2:2, U4:4}[type];
+    if (!typeSize) continue;
+    const parseNum = s => {
+      s = s.trim();
+      return s.startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10);
+    };
+    out.push({
+      addr: '0x' + addrNum.toString(16).toUpperCase(),
+      type, size: typeSize,
+      min: parseNum(minRaw),
+      max: parseNum(maxRaw),
+      def: parseNum(defRaw),
+      cat, sub, field, unit
+    });
+  }
+  return out;
+}
+
+function dfImportKillerIni(evt) {
+  const file = evt.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = dfParseKillerIni(e.target.result);
+      if (parsed.length < 10) {
+        if (!confirm('Only ' + parsed.length + ' entries parsed. Continue anyway?')) return;
+      }
+      localStorage.setItem('dfMapCustom', JSON.stringify(parsed));
+      _dfMap = parsed;
+      _dfValues = {};
+      document.getElementById('dfReadAllBtn').disabled = false;
+      document.getElementById('dfFilter').style.display = '';
+      document.getElementById('dfStatus').innerHTML = parsed.length + ' entries <b style="color:var(--accent)">(from ' + file.name + ')</b> <a href="#" onclick="dfClearCustomMap(); return false;" style="color:var(--warning-text)">[reset to built-in]</a>';
+      dfRenderTree();
+    } catch (err) {
+      alert('Parse failed: ' + err);
+    }
+  };
+  reader.readAsText(file);
+  evt.target.value = '';
+}
+
+function dfClearCustomMap() {
+  if (!confirm('Discard imported Killer.ini and use built-in map?')) return;
+  localStorage.removeItem('dfMapCustom');
+  dfLoadMap();
 }
 
 function dfReadAll() {
@@ -1794,10 +1971,28 @@ function handleMsg(m) {
   }
 }
 
+// Theme — restore from localStorage (dark is default)
+function applyTheme(t) {
+  if (t === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeToggle').textContent = '☀';
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    document.getElementById('themeToggle').textContent = '🌙';
+  }
+}
+function toggleTheme() {
+  const cur = localStorage.getItem('theme') || 'dark';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme(next);
+}
+applyTheme(localStorage.getItem('theme') || 'dark');
+
 connect();
 
-// Initialize default workspace (Battery Lab)
-showTab(_wsDefTab[_curWs]);
+// Restore last-used workspace + tab from localStorage (or default to Battery Lab)
+showWorkspace(_curWs);
 
 // Fetch and display firmware version in footer
 fetch('/api/ota/info').then(r=>r.json()).then(j=>{

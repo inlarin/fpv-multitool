@@ -153,6 +153,14 @@ uint32_t readDJIPF2();              // ManufacturerBlockAccess 0x4062
 // ============= Service operations =============
 UnsealResult unseal();
 UnsealResult unsealWithKey(uint32_t key_combined);
+
+// HMAC-SHA1 challenge-response unseal (BQ40Z50/BQ40Z307 newer firmware).
+// key = exactly 32 bytes (BQ authentication key).
+// Flow: host sends 2 challenge requests, device replies with 20B random data;
+// host computes HMAC-SHA1(key, challenge) and writes 20B response.
+// If challenge_out != nullptr, captures the 20B challenge for debugging.
+UnsealResult unsealHmac(const uint8_t key[32], uint8_t challenge_out[20] = nullptr);
+
 bool clearPFProper();               // standard PF (0x29 + 0x54 + 0x41)
 bool clearDJIPF2();                 // DJI custom PF2 at 0x4062
 bool seal();

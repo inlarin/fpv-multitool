@@ -791,6 +791,39 @@ void WebServer::start() {
         }
     });
 
+    // HMAC-SHA1 challenge-response unseal (newer bq40z30x firmware).
+    // POST ?key=<64-hex-chars> (32 bytes)
+    // Returns: {ok, challenge:hex, result:"Unsealed OK"/"Rejected"/...}
+    s_server->on("/api/batt/unseal_hmac", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("key", true)) { req->send(400, "text/plain", "need key=<64 hex chars>"); return; }
+        String hex = req->getParam("key", true)->value();
+        hex.trim();
+        if (hex.length() != 64) { req->send(400, "text/plain", "key must be 64 hex chars (32 bytes)"); return; }
+
+        uint8_t key[32] = {0};
+        for (int i = 0; i < 32; i++) {
+            char pair[3] = { hex[i*2], hex[i*2+1], 0 };
+            char *end = nullptr;
+            long v = strtol(pair, &end, 16);
+            if (end != pair + 2) { req->send(400, "text/plain", "bad hex at byte " + String(i)); return; }
+            key[i] = (uint8_t)v;
+        }
+
+        uint8_t challenge[20] = {0};
+        UnsealResult r = DJIBattery::unsealHmac(key, challenge);
+
+        JsonDocument d;
+        d["result"] = r == UNSEAL_OK ? "Unsealed OK" :
+                      r == UNSEAL_REJECTED_SEALED ? "Rejected (still sealed)" :
+                      "No I2C response";
+        d["ok"] = (r == UNSEAL_OK);
+        String ch;
+        for (int i = 0; i < 20; i++) { char h[3]; snprintf(h,3,"%02X", challenge[i]); ch += h; }
+        d["challenge"] = ch;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     // Diagnostic endpoint — raw SBS / MAC reads + arbitrary unseal keys.
     // Examples:
     //   /api/batt/diag?mac=0x0070                     -> MAC block read (ChemID)
