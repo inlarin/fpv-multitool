@@ -75,6 +75,10 @@ h1 {
 .ws-tabs { display: flex; justify-content: center; gap: 6px; margin-bottom: 8px; }
 .ws-tab { padding: 10px 20px; background: var(--card-bg2); border-radius: 8px 8px 0 0; cursor: pointer; font-size: 15px; font-weight: 600; user-select: none; color: var(--text-dim); border-bottom: 2px solid transparent; }
 .ws-tab.active { background: var(--card-bg); color: var(--accent); border-bottom: 2px solid var(--accent); }
+.subtabs { display: flex; gap: 4px; margin: 4px 0 10px; border-bottom: 1px solid var(--border); grid-column: 1/-1; }
+.subtab { padding: 6px 14px; background: transparent; cursor: pointer; font-size: 13px; color: var(--text-dim); border-bottom: 2px solid transparent; user-select: none; }
+.subtab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.subtab .auto-badge { font-size: 10px; color: var(--status-on); margin-left: 4px; }
 .tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-bottom: 15px; }
 .tab { padding: 10px 14px; background: var(--card-bg); border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; color: var(--text); }
 .tab.active { background: var(--accent-dim); color: #fff; }
@@ -232,6 +236,12 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 
 <!-- ===== BATTERY ===== -->
 <div id="tab-battery" class="tab-content">
+  <div class="subtabs" id="battSubtabs">
+    <div class="subtab active" data-sub="dji" onclick="showBattSub('dji')">DJI Battery</div>
+    <div class="subtab" data-sub="clone" onclick="showBattSub('clone')">DJI Clone</div>
+    <div class="subtab" data-sub="generic" onclick="showBattSub('generic')">Generic SBS</div>
+    <span style="margin-left:auto;align-self:center;font-size:11px;color:var(--text-dim)" id="battSubHint">auto-detect based on connected battery</span>
+  </div>
   <div class="card">
     <h2>Smart Battery</h2>
     <div class="row">
@@ -285,7 +295,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="row"><span class="label">Pack V (sync):</span><span class="value" id="packV">-</span></div>
   </div>
 
-  <div class="card">
+  <div class="card batt-dji-only">
     <h2>Status</h2>
     <div class="row">
       <span class="label">Operation:</span>
@@ -326,7 +336,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     </div>
   </div>
 
-  <div class="card">
+  <div class="card batt-dji-only">
     <h2>Service (advanced)</h2>
     <div class="warning">⚠ Требует unseal. Для Mavic 2+/Mavic 3/Mavic 4 ключи DJI не опубликованы.</div>
     <div class="grid">
@@ -341,7 +351,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="battActionResult" style="margin-top:10px;color:#ff0"></div>
   </div>
 
-  <div class="card">
+  <div class="card batt-dji-only">
     <h2>Unseal Wizard</h2>
     <div class="row"><span class="label">Profile:</span>
       <select id="unsealProfile" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px" onchange="loadProfile()"></select>
@@ -370,7 +380,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="unsealResult" style="margin-top:8px;color:var(--status-on);font-size:12px"></div>
   </div>
 
-  <div class="card">
+  <div class="card batt-dji-only">
     <h2>MAC Command Runner</h2>
     <div style="display:flex;gap:4px">
       <select id="macSelect" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-size:11px"></select>
@@ -397,7 +407,21 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="fleetTable" style="margin-top:8px;overflow:auto"></div>
   </div>
 
-  <div class="card" style="grid-column:1/-1;max-width:100%">
+  <div class="card batt-clone-only">
+    <h2>Vendor Register Viewer (0xD0-0xFF)</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+      Live view of vendor-specific SBS registers. Changes highlighted.
+      Clone chips often expose backdoor/factory commands in this range.
+    </p>
+    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <button onclick="vrvRefresh()">Refresh now</button>
+      <label style="font-size:11px"><input type="checkbox" id="vrvAuto" onchange="vrvAutoToggle()"> Auto 2s</label>
+      <span id="vrvStatus" style="color:var(--text-dim);font-size:11px"></span>
+    </div>
+    <div id="vrvGrid" style="font-family:monospace;font-size:10px;max-height:260px;overflow:auto"></div>
+  </div>
+
+  <div class="card batt-clone-only" style="grid-column:1/-1;max-width:100%">
     <h2>Clone Explorer — discover hidden registers & bypass attempts</h2>
     <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
       Clone batteries (non-TI chips) sometimes ignore seal protection or expose vendor-specific commands.
@@ -413,7 +437,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <pre id="ceResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:6px;margin:6px 0;max-height:400px;overflow:auto;font-family:monospace;white-space:pre-wrap"></pre>
   </div>
 
-  <div class="card" style="grid-column:1/-1;max-width:100%">
+  <div class="card batt-dji-only" style="grid-column:1/-1;max-width:100%">
     <h2>Data Flash Editor (BQ9003/BQ40z307)</h2>
     <div class="warning">
       ⚠ Для чтения/записи Data Flash батарея должна быть <b>unsealed</b>.<br>
@@ -774,7 +798,7 @@ function showTab(name) {
   localStorage.setItem('tab_' + _curWs, name);
   if (name === 'ota') otaRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
-  if (name === 'battery') { loadProfiles(); loadMacCatalog(); }
+  if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
 }
 
 // === SERVO ===
@@ -2032,6 +2056,93 @@ function pickSsid(ssid) {
 }
 
 // === Incoming messages ===
+// === BATTERY SUB-TABS ===
+let _curBattSub = localStorage.getItem('battSub') || 'dji';
+let _userPickedBattSub = !!localStorage.getItem('battSubManual');
+
+function showBattSub(sub, userInitiated = true) {
+  _curBattSub = sub;
+  if (userInitiated) {
+    localStorage.setItem('battSub', sub);
+    localStorage.setItem('battSubManual', '1');
+    _userPickedBattSub = true;
+  }
+  document.querySelectorAll('#battSubtabs .subtab').forEach(e => {
+    e.classList.toggle('active', e.dataset.sub === sub);
+  });
+  document.querySelectorAll('.batt-dji-only').forEach(e => e.style.display = (sub === 'dji') ? '' : 'none');
+  document.querySelectorAll('.batt-clone-only').forEach(e => e.style.display = (sub === 'clone') ? '' : 'none');
+  document.querySelectorAll('.batt-generic-only').forEach(e => e.style.display = (sub === 'generic') ? '' : 'none');
+  // Start/stop vendor register polling when Clone tab shown
+  if (sub === 'clone' && document.getElementById('vrvAuto')?.checked) vrvRefresh();
+}
+
+function battSubReset() {
+  localStorage.removeItem('battSubManual');
+  _userPickedBattSub = false;
+  document.getElementById('battSubHint').textContent = 'auto-detect based on connected battery';
+}
+
+// Called from telemetry handler — auto-switch sub-tab if user hasn't manually picked
+function battSubAutoDetect(devType, chipType, mfr) {
+  if (_userPickedBattSub) return;
+  let auto = 'generic';
+  // devType: 0=none, 1=DJI (by manufacturer name), 2=generic SBS
+  if (devType === 1) {
+    // DJI-labelled; chipType==0 means MAC not supported → clone
+    auto = (chipType === 0) ? 'clone' : 'dji';
+  } else if (devType === 2) {
+    // Some clones have "PTL" or other non-DJI manufacturer — still treat as clone if chipType==0
+    auto = (chipType === 0) ? 'clone' : 'generic';
+  }
+  // Update hint
+  const hint = document.getElementById('battSubHint');
+  if (hint) hint.innerHTML = 'auto: <b style="color:var(--accent)">' + auto + '</b> <a href="#" onclick="battSubReset(); return false;" style="color:var(--text-dim);font-size:10px">[reset]</a>';
+  if (auto !== _curBattSub) showBattSub(auto, false);
+}
+
+// === VENDOR REGISTER VIEWER (Clone tab) ===
+let _vrvTimer = null;
+let _vrvPrev = {};
+
+async function vrvRefresh() {
+  const el = document.getElementById('vrvGrid');
+  const status = document.getElementById('vrvStatus');
+  status.textContent = 'reading...';
+  try {
+    const r = await fetch('/api/batt/scan/sbs?from=0xD0&to=0xFF');
+    const entries = await r.json();
+    status.textContent = entries.length + '/48 regs';
+    let html = '<table style="width:100%;border-collapse:collapse">';
+    html += '<tr style="color:var(--text-dim)"><th style="text-align:left">reg</th><th style="text-align:left">word</th><th style="text-align:left">block (hex)</th><th style="text-align:left">ascii</th></tr>';
+    for (const e of entries) {
+      const addr = e.reg;
+      const prev = _vrvPrev[addr];
+      const changed = prev && (prev.word !== e.word || prev.bhex !== e.bhex);
+      const rowStyle = changed ? 'background:rgba(255,160,0,0.15);animation:flash 1s' : '';
+      html += '<tr style="border-bottom:1px solid var(--border-soft);' + rowStyle + '">';
+      html += '<td style="padding:2px 6px;color:var(--accent)">' + addr + '</td>';
+      html += '<td style="padding:2px 6px">' + (e.word || '-') + (e.dec !== undefined ? ' (' + e.dec + ')' : '') + '</td>';
+      html += '<td style="padding:2px 6px;font-family:monospace">' + (e.bhex || '').slice(0, 32) + '</td>';
+      html += '<td style="padding:2px 6px;color:var(--text-dim)">' + (e.bascii || '').replace(/</g,'&lt;').slice(0,16) + '</td>';
+      html += '</tr>';
+      _vrvPrev[addr] = e;
+    }
+    html += '</table>';
+    el.innerHTML = html;
+  } catch (err) {
+    status.textContent = 'error: ' + err;
+  }
+}
+
+function vrvAutoToggle() {
+  if (_vrvTimer) { clearInterval(_vrvTimer); _vrvTimer = null; }
+  if (document.getElementById('vrvAuto').checked) {
+    vrvRefresh();
+    _vrvTimer = setInterval(vrvRefresh, 2000);
+  }
+}
+
 // === LIVE CHART ===
 const _chartMax = 180;  // ~3 min at 1Hz telemetry
 const _chartVS = [], _chartIS = [];
@@ -2093,6 +2204,9 @@ function handleMsg(m) {
 
     // Push sample to live chart ring buffer
     chartPush(m.voltage, m.current);
+
+    // Auto-switch Battery Lab sub-tab based on detected battery type
+    battSubAutoDetect(m.devType, m.chipType, m.mfr);
     document.getElementById('battAvgCurr').textContent = m.avgCurrent + ' mA';
     document.getElementById('battTemp').textContent = m.temp.toFixed(1) + ' °C';
     document.getElementById('battSOH').textContent = (m.soh && m.soh < 0xFFFF) ? m.soh + ' %' : '-';
