@@ -18,6 +18,8 @@
 #include "battery/dji_battery.h"
 #include "battery/smbus_bridge.h"
 #include "battery/smbus_bridge_ui.h"
+#include "core/usb_mode.h"
+#include "usb_emu/cp2112_emu.h"
 #include "motor/dshot.h"
 #include "crsf/crsf_tester.h"
 
@@ -143,6 +145,7 @@ void setup() {
     autoStartWifi();
     DJIBattery::init(); // I2C for battery telemetry via web
     SMBusBridge::begin();
+    UsbMode::applyAtBoot();   // attach HID/Vendor interfaces if enabled in NVS
 
     Menu::draw();
     Serial.println("FPV MultiTool ready");

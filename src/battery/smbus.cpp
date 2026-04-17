@@ -4,10 +4,33 @@
 // Battery SMBus on free header pins GPIO 11 (SDA) + GPIO 12 (SCL).
 static TwoWire *s_wire = &Wire1;
 
+static uint8_t s_sda = 0, s_scl = 0;
+
+// 9-clock SCL recovery: if SDA is stuck low (slave holding it), toggle SCL
+// up to 9 times to force slave to release. Standard I2C recovery technique.
+static void i2cRecover() {
+    pinMode(s_scl, OUTPUT);
+    for (int i = 0; i < 9; i++) {
+        digitalWrite(s_scl, LOW);  delayMicroseconds(5);
+        digitalWrite(s_scl, HIGH); delayMicroseconds(5);
+        if (digitalRead(s_sda) == HIGH) break;
+    }
+    // STOP condition
+    pinMode(s_sda, OUTPUT);
+    digitalWrite(s_sda, LOW);  delayMicroseconds(5);
+    digitalWrite(s_scl, HIGH); delayMicroseconds(5);
+    digitalWrite(s_sda, HIGH); delayMicroseconds(5);
+    // Restore pullups
+    pinMode(s_sda, INPUT_PULLUP);
+    pinMode(s_scl, INPUT_PULLUP);
+}
+
 void SMBus::init(uint8_t sda, uint8_t scl) {
-    // Enable internal pull-ups (ESP32 ~45kΩ) — sufficient for short wires at 100 kHz
+    s_sda = sda; s_scl = scl;
     pinMode(sda, INPUT_PULLUP);
     pinMode(scl, INPUT_PULLUP);
+    // If SDA is stuck low from a previous crash, recover first
+    if (digitalRead(sda) == LOW) i2cRecover();
     s_wire->begin(sda, scl);
     s_wire->setClock(100000);
     s_wire->setTimeOut(50);

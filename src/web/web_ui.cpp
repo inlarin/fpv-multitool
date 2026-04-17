@@ -69,6 +69,7 @@ button:disabled { background: #444; cursor: not-allowed; }
   <div class="tab" onclick="showTab('elrs')">ELRS Flash</div>
   <div class="tab" onclick="showTab('crsf')">CRSF</div>
   <div class="tab" onclick="showTab('sys')">System</div>
+  <div class="tab" onclick="showTab('usb')">USB</div>
   <div class="tab" onclick="showTab('ota')">OTA</div>
 </div>
 
@@ -145,7 +146,7 @@ button:disabled { background: #444; cursor: not-allowed; }
 <!-- ===== BATTERY ===== -->
 <div id="tab-battery" class="tab-content" style="display:none">
   <div class="card">
-    <h2>DJI Battery (I2C 0x0B)</h2>
+    <h2>DJI Battery</h2>
     <div class="row">
       <span class="label">Connected:</span>
       <span>
@@ -173,27 +174,27 @@ button:disabled { background: #444; cursor: not-allowed; }
   </div>
 
   <div class="card">
-    <h2>Status Registers</h2>
+    <h2>Status</h2>
     <div class="row">
       <span class="label">Operation:</span>
-      <span class="value" id="opStatus" style="font-family:monospace;font-size:11px">-</span>
+      <span class="value" id="opStatus">-</span>
     </div>
-    <div class="row" style="color:#aaa;font-size:11px"><span id="opDecoded">-</span></div>
+    <div class="row" style="color:#555;font-size:10px;font-family:monospace"><span id="opDecoded">-</span></div>
     <div class="row">
       <span class="label">Safety:</span>
-      <span class="value" id="safetyStatus" style="font-family:monospace;font-size:11px">-</span>
+      <span class="value" id="safetyStatus" style="color:#6f6">-</span>
     </div>
-    <div class="row" style="color:#aaa;font-size:11px"><span id="safetyDecoded">-</span></div>
+    <div class="row" style="color:#555;font-size:10px;font-family:monospace"><span id="safetyDecoded">-</span></div>
     <div class="row">
-      <span class="label">PF Status:</span>
-      <span class="value" id="pfStatus" style="font-family:monospace;font-size:11px">-</span>
+      <span class="label">PF (Permanent Failure):</span>
+      <span class="value" id="pfStatus">-</span>
     </div>
-    <div class="row" style="font-size:11px"><span id="pfDecoded">-</span></div>
+    <div class="row" style="font-size:10px;font-family:monospace"><span id="pfDecoded">-</span></div>
     <div class="row">
-      <span class="label">Mfg Status:</span>
-      <span class="value" id="mfgStatus" style="font-family:monospace;font-size:11px">-</span>
+      <span class="label">Manufacturing:</span>
+      <span class="value" id="mfgStatus">-</span>
     </div>
-    <div class="row" style="color:#aaa;font-size:11px"><span id="mfgDecoded">-</span></div>
+    <div class="row" style="color:#555;font-size:10px;font-family:monospace"><span id="mfgDecoded">-</span></div>
   </div>
 
   <div class="card">
@@ -202,7 +203,7 @@ button:disabled { background: #444; cursor: not-allowed; }
     <div class="row"><span class="label">Manufacturer:</span><span class="value" id="battMfr">-</span></div>
     <div class="row"><span class="label">Device:</span><span class="value" id="battDev">-</span></div>
     <div class="row"><span class="label">Chemistry:</span><span class="value" id="battChem">-</span></div>
-    <div class="row"><span class="label">Serial:</span><span class="value" id="battSN">-</span></div>
+    <div class="row"><span class="label">S/N / Date:</span><span class="value" id="battSN">-</span></div>
     <div class="row"><span class="label">Chip:</span><span class="value" id="battChip">-</span></div>
     <div class="row"><span class="label">FW / HW:</span><span class="value" id="battFwHw">-</span></div>
     <div id="keyWarning" class="warning" style="display:none">
@@ -224,6 +225,59 @@ button:disabled { background: #444; cursor: not-allowed; }
     </div>
     <button class="danger" onclick="battAction('fullservice')" style="width:100%;margin-top:4px;">Full Service (unseal + clear + seal)</button>
     <div id="battActionResult" style="margin-top:10px;color:#ff0"></div>
+  </div>
+
+  <div class="card">
+    <h2>Unseal Wizard</h2>
+    <div class="row"><span class="label">Profile:</span>
+      <select id="unsealProfile" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px" onchange="loadProfile()"></select>
+    </div>
+    <div id="unsealKeyList" style="margin:8px 0;font-size:11px;color:#aaa"></div>
+    <div class="grid">
+      <button onclick="tryAllKeys()">Try All Keys</button>
+      <button onclick="tryFasKeys()">Try FAS Keys</button>
+    </div>
+    <div style="margin-top:8px;font-size:12px">Manual key pair:</div>
+    <div style="display:flex;gap:4px;margin-top:4px">
+      <input id="unsealW1" placeholder="0x7EE0" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <input id="unsealW2" placeholder="0xCCDF" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <button onclick="tryManualKey()">Send</button>
+    </div>
+    <div id="unsealResult" style="margin-top:8px;color:#0f0;font-size:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2>MAC Command Runner</h2>
+    <div style="display:flex;gap:4px">
+      <select id="macSelect" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-size:11px"></select>
+      <button onclick="runMacCmd()">Execute</button>
+    </div>
+    <div id="macDesc" style="margin:4px 0;font-size:11px;color:#888"></div>
+    <pre id="macResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:120px;overflow:auto">(idle)</pre>
+  </div>
+
+  <div class="card">
+    <h2>SMBus Console</h2>
+    <div style="display:flex;gap:4px;flex-wrap:wrap">
+      <input id="smbAddr" value="0x0B" placeholder="addr" style="width:50px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <select id="smbOp" style="background:#222;color:#fff;border:1px solid #555;padding:4px">
+        <option value="readWord">Read Word</option>
+        <option value="readBlock">Read Block</option>
+        <option value="writeWord">Write Word</option>
+        <option value="writeBlock">Write Block</option>
+        <option value="macBlockRead">MAC Block Read</option>
+        <option value="macCmd">MAC Command</option>
+      </select>
+      <input id="smbReg" placeholder="reg 0x00" style="width:60px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <input id="smbData" placeholder="data (hex)" style="flex:1;min-width:80px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <button onclick="smbExec()">Send</button>
+    </div>
+    <pre id="smbResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:200px;overflow:auto">(idle)</pre>
+    <div style="display:flex;gap:4px;margin-top:4px">
+      <button onclick="i2cScan()">I2C Scan</button>
+      <button onclick="battSnapshot()">Snapshot JSON</button>
+    </div>
+    <pre id="i2cScanResult" style="background:#000;color:#0af;font-size:11px;padding:6px;margin:4px 0;display:none"></pre>
   </div>
 </div>
 
@@ -362,6 +416,41 @@ button:disabled { background: #444; cursor: not-allowed; }
   </div>
 </div>
 
+<div id="tab-usb" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>USB Mode</h2>
+    <p style="color:#888;font-size:12px;margin:4px 0 10px">
+      Переключает USB-дескриптор платы. <b>Требует перезагрузки</b>.<br>
+      • <b>CDC</b> — стандартный USB Serial (прошивка, отладка).<br>
+      • <b>USB2TTL</b> — CDC + прозрачный мост на аппаратный UART1.<br>
+      • <b>USB2I2C</b> — эмулятор CP2112 HID (DJI Battery Killer, bqStudio, SMBus-инструменты).
+    </p>
+    <div class="row"><span class="label">Текущий:</span><span class="value" id="usbCurrent">-</span></div>
+    <div id="usbModes" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="usbRefresh()">Refresh</button>
+      <button onclick="usbApply()" id="usbApplyBtn">Save</button>
+      <button class="danger" onclick="usbReboot()">Save &amp; Reboot</button>
+    </div>
+    <div id="usbMsg" style="margin-top:10px;color:#0f0"></div>
+    <p style="color:#f80;font-size:11px;margin:12px 0 0">
+      ⚠ В режиме <code>USB2I2C</code> USB-Serial отключается —
+      прошивка только через <b>OTA</b> вкладку или физический UART0.
+    </p>
+  </div>
+  <div class="card">
+    <h2>CP2112 transaction log</h2>
+    <p style="color:#888;font-size:11px;margin:4px 0 8px">
+      Каждая транзакция шины от USB2I2C. Колонки: <code>ms dir s=slave7 err=wireErr r=reqLen g=gotLen data…</code>
+    </p>
+    <pre id="cpLog" style="background:#000;color:#0f0;font-size:11px;padding:8px;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-all">(idle)</pre>
+    <div style="display:flex;gap:8px">
+      <button onclick="cpLogRefresh()">Refresh</button>
+      <label><input type="checkbox" id="cpLogAuto" checked onchange="cpLogAutoToggle()"> Auto-refresh 1s</label>
+    </div>
+  </div>
+</div>
+
 <div id="tab-ota" class="tab-content" style="display:none">
   <div class="card">
     <h2>OTA Update</h2>
@@ -437,6 +526,8 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
   event.target.classList.add('active');
   if (name === 'ota') otaRefresh();
+  if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
+  if (name === 'battery') { loadProfiles(); loadMacCatalog(); }
 }
 
 // === SERVO ===
@@ -505,6 +596,129 @@ function battAction(action) {
   document.getElementById('battActionResult').textContent = '...';
   fetch('/api/batt?action='+action).then(r=>r.text()).then(t=>{
     document.getElementById('battActionResult').textContent = t;
+  });
+}
+
+// === BATTERY LAB ===
+let _profiles = [], _macCatalog = [];
+
+function loadProfiles() {
+  fetch('/api/batt/profiles').then(r=>r.json()).then(p=>{
+    _profiles = p;
+    const sel = document.getElementById('unsealProfile');
+    sel.innerHTML = '';
+    p.forEach((pr,i) => { const o = document.createElement('option'); o.value=i; o.textContent=pr.name; sel.appendChild(o); });
+    loadProfile();
+  });
+}
+function loadProfile() {
+  const p = _profiles[document.getElementById('unsealProfile').value];
+  if (!p) return;
+  const el = document.getElementById('unsealKeyList');
+  el.innerHTML = '<b>Unseal:</b> ' + p.unsealKeys.map(k=>k.w1+'/'+k.w2+' ('+k.desc+')').join(', ')
+    + '<br><b>FAS:</b> ' + p.fasKeys.map(k=>k.w1+'/'+k.w2+' ('+k.desc+')').join(', ');
+}
+function tryAllKeys() {
+  const p = _profiles[document.getElementById('unsealProfile').value];
+  if (!p) return;
+  const el = document.getElementById('unsealResult');
+  el.textContent = 'Trying...';
+  let chain = Promise.resolve();
+  p.unsealKeys.forEach(k => {
+    chain = chain.then(() => fetch('/api/batt/diag?unseal='+k.w1+','+k.w2).then(r=>r.json()).then(j=>{
+      el.textContent += '\n' + k.desc + ': ' + j.result + (j.sealed ? ' (still sealed)' : ' UNSEALED!');
+      if (!j.sealed) throw 'done';
+    }));
+  });
+  chain.catch(e=>{ if (e!=='done') el.textContent += '\nError: '+e; });
+}
+function tryFasKeys() {
+  const p = _profiles[document.getElementById('unsealProfile').value];
+  if (!p) return;
+  const el = document.getElementById('unsealResult');
+  el.textContent = 'Trying FAS...';
+  let chain = Promise.resolve();
+  p.fasKeys.forEach(k => {
+    chain = chain.then(() => fetch('/api/batt/diag?unseal='+k.w1+','+k.w2).then(r=>r.json()).then(j=>{
+      el.textContent += '\n' + k.desc + ': ' + j.result;
+    }));
+  });
+  chain.catch(e=>{ el.textContent += '\nError: '+e; });
+}
+function tryManualKey() {
+  const w1 = document.getElementById('unsealW1').value || '0';
+  const w2 = document.getElementById('unsealW2').value || '0';
+  const el = document.getElementById('unsealResult');
+  el.textContent = 'Sending ' + w1 + '/' + w2 + '...';
+  fetch('/api/batt/diag?unseal='+w1+','+w2).then(r=>r.json()).then(j=>{
+    el.textContent = j.result + ' | sealed=' + j.sealed + ' | opStatus=' + j.opStatus;
+  });
+}
+
+function loadMacCatalog() {
+  fetch('/api/batt/mac_catalog').then(r=>r.json()).then(c=>{
+    _macCatalog = c;
+    const sel = document.getElementById('macSelect');
+    sel.innerHTML = '';
+    c.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.sub; o.textContent = m.sub + ' ' + m.name + (m.destructive ? ' [!]' : '');
+      o.dataset.desc = m.desc; o.dataset.rlen = m.rlen; o.dataset.destructive = m.destructive;
+      sel.appendChild(o);
+    });
+    sel.onchange = () => {
+      const opt = sel.selectedOptions[0];
+      document.getElementById('macDesc').textContent = opt ? opt.dataset.desc : '';
+    };
+    sel.onchange();
+  });
+}
+function runMacCmd() {
+  const sel = document.getElementById('macSelect');
+  const opt = sel.selectedOptions[0];
+  if (!opt) return;
+  if (opt.dataset.destructive === 'true' && !confirm(opt.dataset.desc + '\nThis is destructive. Continue?')) return;
+  const sub = opt.value;
+  const rlen = parseInt(opt.dataset.rlen);
+  const el = document.getElementById('macResult');
+  el.textContent = 'Executing ' + sub + '...';
+  if (rlen > 0) {
+    fetch('/api/batt/diag?mac=' + sub).then(r=>r.json()).then(j=>{
+      el.textContent = 'MAC ' + sub + ' => len=' + j.len + '\nhex: ' + j.hex + '\nascii: ' + j.ascii;
+    });
+  } else {
+    fetch('/api/smbus/xact?addr=0x0B&op=macCmd&data=' + sub).then(r=>r.json()).then(j=>{
+      el.textContent = 'MAC ' + sub + ' => ' + (j.ok ? 'OK' : 'FAIL');
+    });
+  }
+}
+
+function smbExec() {
+  const addr = document.getElementById('smbAddr').value;
+  const op = document.getElementById('smbOp').value;
+  const reg = document.getElementById('smbReg').value;
+  const data = document.getElementById('smbData').value;
+  const el = document.getElementById('smbResult');
+  el.textContent = 'Sending...';
+  let url = '/api/smbus/xact?addr='+addr+'&op='+op+'&reg='+reg;
+  if (data) url += '&data='+encodeURIComponent(data);
+  fetch(url).then(r=>r.json()).then(j=>{
+    el.textContent = JSON.stringify(j, null, 2);
+  });
+}
+function i2cScan() {
+  const el = document.getElementById('i2cScanResult');
+  el.style.display = 'block';
+  el.textContent = 'Scanning...';
+  fetch('/api/i2c/scan').then(r=>r.text()).then(t=>{ el.textContent = t; });
+}
+function battSnapshot() {
+  fetch('/api/batt/snapshot').then(r=>r.json()).then(j=>{
+    const blob = new Blob([JSON.stringify(j, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'battery_snapshot_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.json';
+    a.click();
   });
 }
 
@@ -673,6 +887,60 @@ function clearWifi() {
   fetch('/api/wifi/clear').then(r=>r.text()).then(t=>alert(t));
 }
 
+// ===== USB mode =====
+function usbRefresh() {
+  fetch('/api/usb/mode').then(r=>r.json()).then(j=>{
+    document.getElementById('usbCurrent').textContent = j.current_name + ' (#' + j.current + ')';
+    const c = document.getElementById('usbModes');
+    c.innerHTML = '';
+    j.modes.forEach(m => {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer';
+      const r = document.createElement('input');
+      r.type = 'radio'; r.name = 'usbmode'; r.value = m.id;
+      if (m.id === j.current) r.checked = true;
+      lab.appendChild(r);
+      lab.appendChild(document.createTextNode(m.name));
+      c.appendChild(lab);
+    });
+  });
+}
+function _usbSelectedMode() {
+  const r = document.querySelector('input[name=usbmode]:checked');
+  return r ? r.value : null;
+}
+function usbApply(done) {
+  const mode = _usbSelectedMode();
+  if (mode === null) { document.getElementById('usbMsg').textContent = 'Выберите режим'; return; }
+  const fd = new FormData(); fd.append('mode', mode);
+  fetch('/api/usb/mode', {method:'POST', body:fd})
+    .then(r => r.text()).then(t => {
+      document.getElementById('usbMsg').textContent = t;
+      if (done) done();
+    });
+}
+let cpLogTimer = null;
+function cpLogRefresh() {
+  fetch('/api/cp2112/log').then(r=>r.text()).then(t=>{
+    document.getElementById('cpLog').textContent = t;
+  });
+}
+function cpLogAutoToggle() {
+  if (cpLogTimer) { clearInterval(cpLogTimer); cpLogTimer = null; }
+  if (document.getElementById('cpLogAuto').checked) {
+    cpLogTimer = setInterval(cpLogRefresh, 1000);
+  }
+}
+
+function usbReboot() {
+  if (!confirm('Сохранить новый USB-режим и перезагрузить плату?')) return;
+  usbApply(() => {
+    fetch('/api/usb/reboot', {method:'POST'}).then(()=>{
+      document.getElementById('usbMsg').textContent = 'Перезагружается...';
+    });
+  });
+}
+
 // ===== OTA =====
 function fmtBytes(b) {
   if (b >= 1048576) return (b/1048576).toFixed(2) + ' MB';
@@ -712,12 +980,11 @@ function otaCheck() {
   btn.disabled = true;
   document.getElementById('otaCompare').textContent = 'проверяю...';
   fetch('/api/ota/check', {method:'POST'})
-    .then(r => r.json().then(j => ({ok: r.ok, j, status: r.status}))
-                        .catch(() => r.text().then(t => ({ok:false, text:t, status:r.status}))))
+    .then(r => r.text().then(body => ({ok: r.ok, status: r.status, body})))
     .then(res => {
       btn.disabled = false;
       if (!res.ok) {
-        document.getElementById('otaCompare').textContent = 'ошибка HTTP ' + res.status + ': ' + (res.text || JSON.stringify(res.j));
+        document.getElementById('otaCompare').textContent = 'ошибка HTTP ' + res.status + ': ' + res.body;
         document.getElementById('otaCompare').style.color = '#f44';
         return;
       }
@@ -889,14 +1156,23 @@ function handleMsg(m) {
     document.getElementById('battMfr').textContent = m.mfr;
     document.getElementById('battDev').textContent = m.dev;
     document.getElementById('battChem').textContent = m.chem || '-';
-    document.getElementById('battSN').textContent = m.sn;
+    // Decode manufacture date (SBS format: bits 15:9=year+1980, 8:5=month, 4:0=day)
+    if (m.mfgDate) {
+      const y = ((m.mfgDate >> 9) & 0x7F) + 1980;
+      const mo = (m.mfgDate >> 5) & 0x0F;
+      const d = m.mfgDate & 0x1F;
+      document.getElementById('battSN').textContent = '#' + m.sn + ' (' + y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0') + ')';
+    } else {
+      document.getElementById('battSN').textContent = '#' + m.sn;
+    }
     document.getElementById('battModel').textContent = m.model || '-';
 
-    // Chip info
-    const chipName = m.chipType === 0x4307 ? 'BQ40z307' :
-                     m.chipType === 0x0550 ? 'BQ30z55' : 'unknown';
-    document.getElementById('battChip').textContent = '0x' + m.chipType.toString(16).toUpperCase() + ' (' + chipName + ')';
-    document.getElementById('battFwHw').textContent = 'FW:0x' + m.fwVer.toString(16) + ' HW:0x' + m.hwVer.toString(16);
+    // Chip info — human-readable
+    const chipName = m.chipType === 0x4307 ? 'BQ40Z307' :
+                     m.chipType === 0x0550 ? 'BQ30Z55' :
+                     m.chipType === 0 ? 'Clone (MAC not supported)' : 'ID: 0x' + m.chipType.toString(16).toUpperCase();
+    document.getElementById('battChip').textContent = chipName;
+    document.getElementById('battFwHw').textContent = m.fwVer ? ('FW ' + m.fwVer + ' / HW ' + m.hwVer) : 'Not available';
 
     // Seal state
     const sealEl = document.getElementById('battSealStatus');
@@ -910,21 +1186,22 @@ function handleMsg(m) {
       sealEl.className = 'status on';
     }
 
-    // Key warning
-    document.getElementById('keyWarning').style.display = m.needsKey ? 'block' : 'none';
+    // Key warning — suppress for clones (they use standard TI keys)
+    const isClone = (m.mfr === 'PTL' || m.chipType === 0);
+    document.getElementById('keyWarning').style.display = (m.needsKey && !isClone) ? 'block' : 'none';
 
-    // Extended status (hex)
+    // Extended status — show decoded first, hex as secondary
     const hex8 = v => '0x' + v.toString(16).toUpperCase().padStart(8, '0');
-    document.getElementById('opStatus').textContent = hex8(m.operationStatus);
-    document.getElementById('opDecoded').textContent = m.opDecoded;
-    document.getElementById('safetyStatus').textContent = hex8(m.safetyStatus);
-    document.getElementById('safetyDecoded').textContent = m.safetyDecoded;
-    document.getElementById('pfStatus').textContent = hex8(m.pfStatus);
+    document.getElementById('opStatus').textContent = m.opDecoded || 'N/A';
+    document.getElementById('opDecoded').textContent = hex8(m.operationStatus);
+    document.getElementById('safetyStatus').textContent = m.safetyDecoded || 'OK';
+    document.getElementById('safetyDecoded').textContent = hex8(m.safetyStatus);
     const pfEl = document.getElementById('pfDecoded');
-    pfEl.textContent = m.pfDecoded;
+    document.getElementById('pfStatus').textContent = m.pfDecoded || 'OK';
+    pfEl.textContent = hex8(m.pfStatus);
     pfEl.style.color = m.hasPF ? '#f44' : '#6f6';
-    document.getElementById('mfgStatus').textContent = hex8(m.manufacturingStatus);
-    document.getElementById('mfgDecoded').textContent = m.mfgDecoded;
+    document.getElementById('mfgStatus').textContent = m.mfgDecoded || 'N/A';
+    document.getElementById('mfgDecoded').textContent = hex8(m.manufacturingStatus);
 
     document.getElementById('cellsSync').textContent = m.cellsSync ? 'sync' : 'async';
     document.getElementById('packV').textContent = m.packV ? (m.packV/1000).toFixed(2) + ' V' : '-';

@@ -11,6 +11,12 @@
 #include "bridge/firmware_unpack.h"
 #include "crsf/crsf_service.h"
 #include "crsf/crsf_config.h"
+#include "core/usb_mode.h"
+#include "battery/battery_profiles.h"
+
+extern "C" int cp2112_log_dump(char *out, int cap);
+extern "C" uint32_t cp2112_log_seq();
+extern "C" int cp2112_ep_info(char *out, int cap);
 
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -138,6 +144,7 @@ static void broadcastTelemetry() {
         doc["cycles"] = info.cycleCount;
         doc["status"] = info.batteryStatus;
         doc["sn"] = info.serialNumber;
+        doc["mfgDate"] = info.manufactureDate;
         doc["mfr"] = info.manufacturerName;
         doc["dev"] = info.deviceName;
         doc["chem"] = info.chemistry;
@@ -481,7 +488,139 @@ void WebServer::start() {
         req->send(400, "text/plain", "use ?mac= or ?sbs= or ?unseal=");
     });
 
-    // WiFi credentials save
+    // MAC command catalog
+    s_server->on("/api/batt/mac_catalog", HTTP_GET, [](AsyncWebServerRequest *req) {
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        for (int i = 0; i < MAC_CATALOG_LEN; i++) {
+            if (i) r->print(",");
+            r->printf("{\"sub\":\"0x%04X\",\"name\":\"%s\",\"desc\":\"%s\",\"rlen\":%u,\"destructive\":%s}",
+                      MAC_CATALOG[i].subcommand, MAC_CATALOG[i].name, MAC_CATALOG[i].desc,
+                      MAC_CATALOG[i].respLen, MAC_CATALOG[i].destructive ? "true" : "false");
+        }
+        r->print("]");
+        req->send(r);
+    });
+
+    // Battery profiles (unseal key sets per model)
+    s_server->on("/api/batt/profiles", HTTP_GET, [](AsyncWebServerRequest *req) {
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        for (int i = 0; i < NUM_PROFILES; i++) {
+            if (i) r->print(",");
+            r->printf("{\"id\":%d,\"name\":\"%s\",\"chip\":\"%s\",\"unsealKeys\":[",
+                      i, BATTERY_PROFILES[i].name, BATTERY_PROFILES[i].chipName);
+            for (int k = 0; k < BATTERY_PROFILES[i].numUnsealKeys; k++) {
+                if (k) r->print(",");
+                const UnsealKey &uk = BATTERY_PROFILES[i].unsealKeys[k];
+                r->printf("{\"w1\":\"0x%04X\",\"w2\":\"0x%04X\",\"desc\":\"%s\"}", uk.w1, uk.w2, uk.desc);
+            }
+            r->print("],\"fasKeys\":[");
+            for (int k = 0; k < BATTERY_PROFILES[i].numFasKeys; k++) {
+                if (k) r->print(",");
+                const UnsealKey &fk = BATTERY_PROFILES[i].fasKeys[k];
+                r->printf("{\"w1\":\"0x%04X\",\"w2\":\"0x%04X\",\"desc\":\"%s\"}", fk.w1, fk.w2, fk.desc);
+            }
+            r->print("]}");
+        }
+        r->print("]");
+        req->send(r);
+    });
+
+    // Generic SMBus transaction endpoint
+    s_server->on("/api/smbus/xact", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("addr") || !req->hasParam("op")) {
+            req->send(400, "text/plain", "need addr=0xNN&op=readWord|writeWord|readBlock|writeBlock|macBlockRead|macCmd&reg=0xNN[&data=AA,BB][&len=N]");
+            return;
+        }
+        uint8_t addr = (uint8_t)strtoul(req->getParam("addr")->value().c_str(), nullptr, 0);
+        String op = req->getParam("op")->value();
+        uint8_t reg = req->hasParam("reg") ? (uint8_t)strtoul(req->getParam("reg")->value().c_str(), nullptr, 0) : 0;
+        JsonDocument d;
+        d["addr"] = String("0x") + String(addr, HEX);
+        d["op"] = op;
+        d["reg"] = String("0x") + String(reg, HEX);
+
+        if (op == "readWord") {
+            uint16_t w = SMBus::readWord(addr, reg);
+            d["value"] = String("0x") + String(w, HEX); d["dec"] = w; d["ok"] = (w != 0xFFFF);
+        } else if (op == "readBlock") {
+            uint8_t buf[32]; int n = SMBus::readBlock(addr, reg, buf, 32);
+            String hex; for (int i = 0; i < n; i++) { char h[4]; snprintf(h,4,"%02X ",buf[i]); hex += h; }
+            d["len"] = n; d["hex"] = hex; d["ok"] = (n >= 0);
+        } else if (op == "writeWord") {
+            uint16_t val = req->hasParam("data") ? (uint16_t)strtoul(req->getParam("data")->value().c_str(), nullptr, 0) : 0;
+            bool ok = SMBus::writeWord(addr, reg, val);
+            d["ok"] = ok; d["value"] = String("0x") + String(val, HEX);
+        } else if (op == "writeBlock") {
+            uint8_t buf[32]; uint8_t len = 0;
+            if (req->hasParam("data")) {
+                String s = req->getParam("data")->value();
+                int pos = 0;
+                while (pos < (int)s.length() && len < 32) {
+                    buf[len++] = (uint8_t)strtoul(s.c_str() + pos, nullptr, 16);
+                    int next = s.indexOf(',', pos);
+                    if (next < 0) break; pos = next + 1;
+                }
+            }
+            bool ok = SMBus::writeBlock(addr, reg, buf, len);
+            d["ok"] = ok; d["len"] = len;
+        } else if (op == "macBlockRead") {
+            uint16_t sub = (uint16_t)strtoul(req->hasParam("data") ? req->getParam("data")->value().c_str() : "0", nullptr, 0);
+            uint8_t buf[32]; int n = SMBus::macBlockRead(addr, sub, buf, 32);
+            String hex; for (int i = 0; i < n; i++) { char h[4]; snprintf(h,4,"%02X ",buf[i]); hex += h; }
+            d["sub"] = String("0x") + String(sub, HEX); d["len"] = n; d["hex"] = hex; d["ok"] = (n >= 0);
+        } else if (op == "macCmd") {
+            uint16_t sub = (uint16_t)strtoul(req->hasParam("data") ? req->getParam("data")->value().c_str() : "0", nullptr, 0);
+            bool ok = SMBus::macCommand(addr, sub);
+            d["sub"] = String("0x") + String(sub, HEX); d["ok"] = ok;
+        } else {
+            d["error"] = "unknown op"; d["ok"] = false;
+        }
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Battery snapshot — all SBS registers + status in one JSON
+    s_server->on("/api/batt/snapshot", HTTP_GET, [](AsyncWebServerRequest *req) {
+        BatteryInfo info = DJIBattery::readAll();
+        JsonDocument d;
+        d["connected"]      = info.connected;
+        d["voltage_mV"]     = info.voltage_mV;
+        d["current_mA"]     = info.current_mA;
+        d["temperature_C"]  = info.temperature_C;
+        d["soc"]            = info.stateOfCharge;
+        d["fullCap_mAh"]    = info.fullCapacity_mAh;
+        d["designCap_mAh"]  = info.designCapacity_mAh;
+        d["remainCap_mAh"]  = info.remainCapacity_mAh;
+        d["cycleCount"]     = info.cycleCount;
+        d["batteryStatus"]  = String("0x") + String(info.batteryStatus, HEX);
+        d["serialNumber"]   = info.serialNumber;
+        d["manufactureDate"]= info.manufactureDate;
+        d["mfrName"]        = info.manufacturerName;
+        d["deviceName"]     = info.deviceName;
+        d["chemistry"]      = info.chemistry;
+        JsonArray cells = d["cellVoltage_mV"].to<JsonArray>();
+        for (int i = 0; i < 4; i++) cells.add(info.cellVoltage[i]);
+        d["chipType"]       = String("0x") + String(info.chipType, HEX);
+        d["fwVersion"]      = info.firmwareVersion;
+        d["hwVersion"]      = info.hardwareVersion;
+        d["model"]          = DJIBattery::modelName(info.model);
+        d["sealed"]         = info.sealed;
+        d["hasPF"]          = info.hasPF;
+        d["opStatus"]       = String("0x") + String(info.operationStatus, HEX);
+        d["safetyStatus"]   = String("0x") + String(info.safetyStatus, HEX);
+        d["pfStatus"]       = String("0x") + String(info.pfStatus, HEX);
+        d["mfgStatus"]      = String("0x") + String(info.manufacturingStatus, HEX);
+        // DJI-specific: S/N at reg 0xD8
+        uint8_t sn[16] = {0};
+        int snLen = SMBus::readBlock(0x0B, 0xD8, sn, 16);
+        if (snLen > 0) { sn[snLen] = 0; d["djiSerialNumber"] = String((char*)sn); }
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Battery service actions
     s_server->on("/api/batt", HTTP_GET, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("action")) { req->send(400, "text/plain", "missing action"); return; }
         String action = req->getParam("action")->value();
@@ -920,6 +1059,73 @@ void WebServer::start() {
     s_server->on("/api/ota/abort", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (Update.isRunning()) Update.abort();
         req->send(200, "text/plain", "Aborted");
+    });
+
+    // ===== USB mode (descriptor selection) =====
+    s_server->on("/api/usb/mode", HTTP_GET, [](AsyncWebServerRequest *req) {
+        UsbDescriptorMode m = UsbMode::load();
+        JsonDocument j;
+        j["current"]      = (int)m;
+        j["current_name"] = UsbMode::name(m);
+        JsonArray arr = j["modes"].to<JsonArray>();
+        for (int i = 0; i <= USB_MODE_USB2I2C; i++) {
+            JsonObject o = arr.add<JsonObject>();
+            o["id"]   = i;
+            o["name"] = UsbMode::name((UsbDescriptorMode)i);
+        }
+        String out; serializeJson(j, out);
+        req->send(200, "application/json", out);
+    });
+
+    s_server->on("/api/usb/mode", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("mode", true)) {
+            req->send(400, "text/plain", "Missing 'mode' form param");
+            return;
+        }
+        int v = req->getParam("mode", true)->value().toInt();
+        if (v < 0 || v > USB_MODE_USB2I2C) {
+            req->send(400, "text/plain", "Invalid mode");
+            return;
+        }
+        UsbMode::save((UsbDescriptorMode)v);
+        req->send(200, "text/plain", "Saved. Reboot to apply.");
+    });
+
+    s_server->on("/api/cp2112/log", HTTP_GET, [](AsyncWebServerRequest *req) {
+        static char buf[4096];
+        int n = cp2112_log_dump(buf, sizeof(buf));
+        AsyncResponseStream *r = req->beginResponseStream("text/plain");
+        r->printf("seq=%lu\n", (unsigned long)cp2112_log_seq());
+        r->write((const uint8_t*)buf, n);
+        req->send(r);
+    });
+
+    s_server->on("/api/cp2112/info", HTTP_GET, [](AsyncWebServerRequest *req) {
+        char buf[128];
+        cp2112_ep_info(buf, sizeof(buf));
+        req->send(200, "text/plain", buf);
+    });
+
+    s_server->on("/api/i2c/scan", HTTP_GET, [](AsyncWebServerRequest *req) {
+        // Scan 0x08..0x77 on Wire1 (battery bus)
+        AsyncResponseStream *r = req->beginResponseStream("text/plain");
+        int found = 0;
+        for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+            Wire1.beginTransmission(addr);
+            uint8_t err = Wire1.endTransmission();
+            if (err == 0) {
+                r->printf("0x%02X  ACK\n", addr);
+                found++;
+            }
+        }
+        r->printf("--\nScanned 0x08..0x77, found %d device(s)\n", found);
+        req->send(r);
+    });
+
+    s_server->on("/api/usb/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
+        req->send(200, "text/plain", "Rebooting...");
+        delay(200);
+        ESP.restart();
     });
 
     s_server->onNotFound([](AsyncWebServerRequest *req) {
