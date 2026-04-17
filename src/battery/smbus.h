@@ -22,6 +22,11 @@ bool writeBlock(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len);
 bool macCommand(uint8_t addr, uint16_t subcommand);     // write subcommand to 0x00
 int  macBlockRead(uint8_t addr, uint16_t subcommand, uint8_t *buf, uint8_t maxLen);
 
+// I2C bus mutex — shared with CP2112 emulator
+SemaphoreHandle_t busMutex();
+bool busLock(uint32_t timeout_ms = 200);
+void busUnlock();
+
 // I2C preflight diagnostics
 struct PreflightResult {
     bool sdaOk;       // SDA line reads HIGH (pull-up working)

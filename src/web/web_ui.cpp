@@ -24,6 +24,9 @@ h1 {
   text-align: center;
   padding: 0 90px;        /* keep title clear of the fixed #connStatus badge on narrow viewports */
 }
+.ws-tabs { display: flex; justify-content: center; gap: 6px; margin-bottom: 8px; }
+.ws-tab { padding: 10px 20px; background: #12122a; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 15px; font-weight: 600; user-select: none; color: #889; border-bottom: 2px solid transparent; }
+.ws-tab.active { background: #1a1a2e; color: #0cf; border-bottom: 2px solid #0cf; }
 .tabs { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-bottom: 15px; }
 .tab { padding: 10px 14px; background: #1a1a2e; border-radius: 6px; cursor: pointer; white-space: nowrap; font-size: 14px; user-select: none; }
 .tab.active { background: #0066aa; color: #fff; }
@@ -53,28 +56,65 @@ button:disabled { background: #444; cursor: not-allowed; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .warning { color: #f66; font-size: 12px; padding: 8px; background: #2a0a0a; border-radius: 4px; margin: 8px 0; }
 .ok { color: #6f6; }
-#connStatus { position: fixed; top: 10px; right: 10px; font-size: 12px; padding: 4px 8px; border-radius: 12px; }
+#connStatus { position: fixed; top: 10px; right: 10px; font-size: 12px; padding: 4px 8px; border-radius: 12px; z-index: 10; }
 #connStatus.connected { background: #2a4; color: #fff; }
 #connStatus.disconnected { background: #a42; color: #fff; }
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+  body { padding: 6px; }
+  h1 { font-size: 16px; padding: 0 60px; margin-bottom: 6px; }
+  .ws-tabs { gap: 2px; }
+  .ws-tab { padding: 8px 12px; font-size: 13px; }
+  .tabs { gap: 2px; }
+  .tab { padding: 8px 10px; font-size: 12px; }
+  .tab-content { grid-template-columns: 1fr !important; }
+  .card { padding: 12px; max-width: 100% !important; }
+  .card h2 { font-size: 14px; }
+  .big { font-size: 26px; }
+  .grid { grid-template-columns: 1fr 1fr; gap: 4px; }
+  .row { padding: 4px 0; }
+  .label { font-size: 12px; }
+  .value { font-size: 13px; }
+  button { padding: 8px 12px; font-size: 13px; }
+  input[type=number], input[type=text], input[type=password] { font-size: 14px; }
+  pre { font-size: 10px !important; max-height: 200px !important; }
+}
 </style>
 </head>
 <body>
 <div id="connStatus" class="disconnected">...</div>
 <h1>FPV MultiTool</h1>
 
-<div class="tabs">
-  <div class="tab active" onclick="showTab('servo')">Servo</div>
-  <div class="tab" onclick="showTab('motor')">Motor</div>
-  <div class="tab" onclick="showTab('battery')">Battery</div>
-  <div class="tab" onclick="showTab('elrs')">ELRS Flash</div>
-  <div class="tab" onclick="showTab('crsf')">CRSF</div>
-  <div class="tab" onclick="showTab('sys')">System</div>
-  <div class="tab" onclick="showTab('usb')">USB</div>
-  <div class="tab" onclick="showTab('ota')">OTA</div>
+<div class="ws-tabs" id="wsTabs">
+  <div class="ws-tab active" onclick="showWorkspace('batt')">Battery Lab</div>
+  <div class="ws-tab" onclick="showWorkspace('fpv')">FPV Tools</div>
+  <div class="ws-tab" onclick="showWorkspace('sys')">System</div>
+</div>
+
+<div id="ws-batt">
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('battery')">Battery</div>
+  </div>
+</div>
+<div id="ws-fpv" style="display:none">
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('servo')">Servo</div>
+    <div class="tab" onclick="showTab('motor')">Motor</div>
+    <div class="tab" onclick="showTab('elrs')">ELRS Flash</div>
+    <div class="tab" onclick="showTab('crsf')">CRSF</div>
+  </div>
+</div>
+<div id="ws-sys" style="display:none">
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('sys')">System</div>
+    <div class="tab" onclick="showTab('usb')">USB</div>
+    <div class="tab" onclick="showTab('ota')">OTA</div>
+  </div>
 </div>
 
 <!-- ===== SERVO ===== -->
-<div id="tab-servo" class="tab-content">
+<div id="tab-servo" class="tab-content" style="display:none">
   <div class="card">
     <h2>Servo Tester (GPIO 2)</h2>
     <div class="big" id="servoUs">1500 μs</div>
@@ -144,7 +184,7 @@ button:disabled { background: #444; cursor: not-allowed; }
 </div>
 
 <!-- ===== BATTERY ===== -->
-<div id="tab-battery" class="tab-content" style="display:none">
+<div id="tab-battery" class="tab-content">
   <div class="card">
     <h2>Smart Battery</h2>
     <div class="row">
@@ -267,6 +307,25 @@ button:disabled { background: #444; cursor: not-allowed; }
     <pre id="macResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:120px;overflow:auto">(idle)</pre>
   </div>
 
+  <div class="card" style="grid-column:1/-1;max-width:100%">
+    <h2>Data Flash Editor (BQ9003/BQ40z307)</h2>
+    <div class="warning">
+      ⚠ Для чтения/записи Data Flash батарея должна быть <b>unsealed</b>.<br>
+      Запись неправильных значений может вывести батарею из строя!
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <button onclick="dfLoadMap()">Load Map</button>
+      <button onclick="dfReadAll()" id="dfReadAllBtn" disabled>Read All Values</button>
+      <button onclick="dfExport()" id="dfExportBtn" disabled>Export JSON</button>
+      <span id="dfStatus" style="color:#888;font-size:12px;align-self:center"></span>
+    </div>
+    <div id="dfFilter" style="display:none;margin:6px 0">
+      <input id="dfSearch" type="text" placeholder="Filter by name..." oninput="dfFilterApply()" style="width:200px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-size:12px">
+      <label style="font-size:12px;margin-left:8px"><input type="checkbox" id="dfDiffOnly" onchange="dfFilterApply()"> Only changed</label>
+    </div>
+    <div id="dfTree" style="font-size:12px;max-height:500px;overflow:auto"></div>
+  </div>
+
   <div class="card">
     <h2>I2C Diagnostics</h2>
     <div class="grid">
@@ -285,6 +344,7 @@ button:disabled { background: #444; cursor: not-allowed; }
     <div style="display:flex;gap:8px;align-items:center">
       <button onclick="smbLogToggle()" id="smbLogToggleBtn">Enable Logging</button>
       <button onclick="smbLogRefresh()">Refresh</button>
+      <button onclick="smbLogExport()">Export .txt</button>
       <label><input type="checkbox" id="smbLogAuto" onchange="smbLogAutoToggle()"> Auto 1s</label>
     </div>
     <pre id="smbLog" style="background:#000;color:#0f0;font-size:11px;padding:8px;margin:6px 0;max-height:300px;overflow:auto;white-space:pre-wrap">(logging off)</pre>
@@ -476,9 +536,11 @@ button:disabled { background: #444; cursor: not-allowed; }
       Каждая транзакция шины от USB2I2C. Колонки: <code>ms dir s=slave7 err=wireErr r=reqLen g=gotLen data…</code>
     </p>
     <pre id="cpLog" style="background:#000;color:#0f0;font-size:11px;padding:8px;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-all">(idle)</pre>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button onclick="cpLogRefresh()">Refresh</button>
+      <button onclick="cpLogExport()">Export .txt</button>
       <label><input type="checkbox" id="cpLogAuto" checked onchange="cpLogAutoToggle()"> Auto-refresh 1s</label>
+      <span id="cpLogStats" style="color:#888;font-size:11px"></span>
     </div>
   </div>
 </div>
@@ -551,12 +613,31 @@ function send(obj) {
   else fetch('/api', {method:'POST', body:JSON.stringify(obj)});
 }
 
+let _curWs = 'batt';
+const _wsDefTab = {batt:'battery', fpv:'servo', sys:'sys'};
+
+function showWorkspace(ws) {
+  _curWs = ws;
+  document.querySelectorAll('.ws-tab').forEach(e => e.classList.remove('active'));
+  event.target.classList.add('active');
+  ['batt','fpv','sys'].forEach(w => {
+    document.getElementById('ws-'+w).style.display = w === ws ? '' : 'none';
+  });
+  // Activate the first tab in this workspace
+  const wsEl = document.getElementById('ws-'+ws);
+  const tabs = wsEl.querySelectorAll('.tab');
+  tabs.forEach(t => t.classList.remove('active'));
+  if (tabs[0]) tabs[0].classList.add('active');
+  showTab(_wsDefTab[ws]);
+}
+
 function showTab(name) {
   document.querySelectorAll('.tab-content').forEach(e => e.style.display = 'none');
-  // CSS default is grid (multi-column on wide screens) — restore it, don't force block.
   document.getElementById('tab-'+name).style.display = '';
-  document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
-  event.target.classList.add('active');
+  // Mark active tab within current workspace
+  const wsEl = document.getElementById('ws-'+_curWs);
+  if (wsEl) wsEl.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
+  if (event && event.target && event.target.classList) event.target.classList.add('active');
   if (name === 'ota') otaRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); }
@@ -738,6 +819,163 @@ function smbExec() {
     el.textContent = JSON.stringify(j, null, 2);
   });
 }
+// === DATA FLASH EDITOR ===
+let _dfMap = [], _dfValues = {};
+
+function dfLoadMap() {
+  document.getElementById('dfStatus').textContent = 'Loading map...';
+  fetch('/api/batt/df/map').then(r=>r.json()).then(m=>{
+    _dfMap = m;
+    document.getElementById('dfReadAllBtn').disabled = false;
+    document.getElementById('dfFilter').style.display = '';
+    document.getElementById('dfStatus').textContent = m.length + ' entries loaded';
+    dfRenderTree();
+  });
+}
+
+function dfReadAll() {
+  const btn = document.getElementById('dfReadAllBtn');
+  btn.disabled = true;
+  document.getElementById('dfStatus').textContent = 'Reading all DF values...';
+  fetch('/api/batt/df/readall').then(r=>r.json()).then(vals=>{
+    _dfValues = {};
+    vals.forEach(v => { _dfValues[v.addr] = v; });
+    btn.disabled = false;
+    document.getElementById('dfExportBtn').disabled = false;
+    let ok = 0, fail = 0, diff = 0;
+    vals.forEach(v => { if (v.ok) { ok++; if (v.diff) diff++; } else fail++; });
+    document.getElementById('dfStatus').textContent = 'Read: ' + ok + ' ok, ' + fail + ' fail, ' + diff + ' differ from default';
+    dfRenderTree();
+  }).catch(e => {
+    btn.disabled = false;
+    document.getElementById('dfStatus').textContent = 'Error: ' + e;
+  });
+}
+
+function dfRenderTree() {
+  const search = (document.getElementById('dfSearch')?.value || '').toLowerCase();
+  const diffOnly = document.getElementById('dfDiffOnly')?.checked;
+  // Group by category -> subcategory
+  const groups = {};
+  _dfMap.forEach((e, idx) => {
+    const v = _dfValues[e.addr];
+    const fullName = (e.cat + ' ' + e.sub + ' ' + e.field).toLowerCase();
+    if (search && !fullName.includes(search)) return;
+    if (diffOnly && (!v || !v.diff)) return;
+    const key = e.cat;
+    if (!groups[key]) groups[key] = {};
+    if (!groups[key][e.sub]) groups[key][e.sub] = [];
+    groups[key][e.sub].push({...e, idx, v});
+  });
+
+  let html = '';
+  for (const cat in groups) {
+    html += '<div style="margin-top:8px;border-left:3px solid #55a;padding-left:8px">';
+    html += '<div style="color:#8af;font-weight:bold;margin-bottom:4px">' + cat + '</div>';
+    for (const sub in groups[cat]) {
+      html += '<div style="color:#aaa;margin:4px 0 2px 8px;font-size:11px">▸ ' + sub + '</div>';
+      html += '<table style="width:100%;border-collapse:collapse;margin-left:16px">';
+      groups[cat][sub].forEach(e => {
+        const v = e.v;
+        const hasVal = v && v.ok;
+        const curVal = hasVal ? v.val : '';
+        const isDiff = hasVal && v.diff;
+        const valColor = isDiff ? '#fa0' : '#6f6';
+        const addrHex = e.addr;
+        html += '<tr style="border-bottom:1px solid #1a1a2e">';
+        html += '<td style="padding:3px 6px;color:#ccc;width:40%">' + e.field + ' <span style="color:#555">(' + e.unit + ')</span></td>';
+        html += '<td style="padding:3px 4px;color:#666;font-family:monospace;font-size:10px;width:60px">' + addrHex + '</td>';
+        html += '<td style="padding:3px 4px;width:30%">';
+        if (hasVal) {
+          html += '<input type="number" value="' + curVal + '" min="' + e.min + '" max="' + e.max + '" '
+                + 'data-addr="' + addrHex + '" data-size="' + e.size + '" data-orig="' + curVal + '" '
+                + 'style="width:80px;background:#0a0a14;color:' + valColor + ';border:1px solid #333;padding:2px 4px;font-family:monospace;font-size:12px" '
+                + 'onchange="dfMarkChanged(this)">';
+        } else {
+          html += '<span style="color:#555">-</span>';
+        }
+        html += '</td>';
+        html += '<td style="padding:3px 4px;width:60px">';
+        if (hasVal) {
+          html += '<span style="color:#555;font-size:10px">def:' + e.def + '</span>';
+        }
+        html += '</td>';
+        html += '<td style="padding:3px 2px;width:50px">';
+        if (hasVal) {
+          html += '<button onclick="dfWriteOne(this)" data-addr="' + addrHex + '" data-size="' + e.size + '" '
+                + 'style="padding:2px 6px;font-size:10px;background:#333;display:none">Write</button>';
+        }
+        html += '</td></tr>';
+      });
+      html += '</table>';
+    }
+    html += '</div>';
+  }
+  if (!html) html = '<div style="color:#888;padding:10px">No entries. Click "Load Map" first.</div>';
+  document.getElementById('dfTree').innerHTML = html;
+}
+
+function dfMarkChanged(input) {
+  const orig = parseInt(input.dataset.orig);
+  const cur = parseInt(input.value);
+  const writeBtn = input.closest('tr').querySelector('button');
+  if (cur !== orig) {
+    input.style.color = '#f44';
+    input.style.borderColor = '#f44';
+    if (writeBtn) writeBtn.style.display = '';
+  } else {
+    input.style.color = '#6f6';
+    input.style.borderColor = '#333';
+    if (writeBtn) writeBtn.style.display = 'none';
+  }
+}
+
+function dfWriteOne(btn) {
+  const addr = btn.dataset.addr;
+  const size = btn.dataset.size;
+  const input = btn.closest('tr').querySelector('input[type=number]');
+  const value = input.value;
+  if (!confirm('Write ' + value + ' to DF ' + addr + '?\\nBattery must be unsealed!')) return;
+  btn.disabled = true;
+  btn.textContent = '...';
+  const fd = new FormData();
+  fd.append('addr', addr); fd.append('value', value); fd.append('size', size);
+  fetch('/api/batt/df/write', {method:'POST', body:fd}).then(r=>r.json()).then(j=>{
+    btn.disabled = false;
+    if (j.ok) {
+      btn.textContent = 'OK';
+      btn.style.background = '#2a4';
+      input.dataset.orig = value;
+      input.style.color = '#6f6';
+      input.style.borderColor = '#333';
+      setTimeout(()=>{ btn.textContent = 'Write'; btn.style.background = '#333'; btn.style.display = 'none'; }, 1500);
+    } else {
+      btn.textContent = 'FAIL';
+      btn.style.background = '#a42';
+      setTimeout(()=>{ btn.textContent = 'Write'; btn.style.background = '#333'; }, 2000);
+    }
+  });
+}
+
+function dfFilterApply() { dfRenderTree(); }
+
+function dfExport() {
+  const result = _dfMap.map(e => {
+    const v = _dfValues[e.addr];
+    return {
+      addr: e.addr, category: e.cat, subcat: e.sub, field: e.field,
+      type: e.type, unit: e.unit, default: e.def,
+      current: v && v.ok ? v.val : null,
+      differs: v ? !!v.diff : null
+    };
+  });
+  const blob = new Blob([JSON.stringify(result, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'dataflash_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.json';
+  a.click();
+}
+
 function i2cPreflight() {
   const el = document.getElementById('preflightResult');
   el.style.display = 'block';
@@ -764,6 +1002,14 @@ function smbLogRefresh() {
   fetch('/api/smbus/log').then(r=>r.text()).then(t=>{
     document.getElementById('smbLog').textContent = t;
   });
+}
+function smbLogExport() {
+  const text = document.getElementById('smbLog').textContent;
+  const blob = new Blob([text], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'smbus_log_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+  a.click();
 }
 function smbLogToggle() {
   fetch('/api/smbus/log/toggle', {method:'POST'}).then(r=>r.text()).then(t=>{
@@ -988,8 +1234,21 @@ function usbApply(done) {
 let cpLogTimer = null;
 function cpLogRefresh() {
   fetch('/api/cp2112/log').then(r=>r.text()).then(t=>{
-    document.getElementById('cpLog').textContent = t;
+    const el = document.getElementById('cpLog');
+    el.textContent = t;
+    // Count lines for stats
+    const lines = t.split('\n').filter(l => l.trim().length > 0);
+    const stats = document.getElementById('cpLogStats');
+    if (stats) stats.textContent = lines.length > 1 ? (lines.length - 1) + ' entries' : '';
   });
+}
+function cpLogExport() {
+  const text = document.getElementById('cpLog').textContent;
+  const blob = new Blob([text], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cp2112_log_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+  a.click();
 }
 function cpLogAutoToggle() {
   if (cpLogTimer) { clearInterval(cpLogTimer); cpLogTimer = null; }

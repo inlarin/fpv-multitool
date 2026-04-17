@@ -33,6 +33,7 @@
 #include <Wire.h>
 #include "USB.h"
 #include "esp32-hal-tinyusb.h"
+#include "battery/smbus.h"  // for I2C bus mutex
 #include "class/hid/hid.h"
 #include "class/hid/hid_device.h"
 #include "tusb.h"
@@ -165,9 +166,11 @@ extern "C" int cp2112_log_dump(char *out, int cap) {
 namespace {
 
 bool doWrite(uint8_t slave7, const uint8_t *data, uint8_t len) {
+    if (!SMBus::busLock(500)) { g_status0 = 3; g_status1 = 4; return false; }
     Wire1.beginTransmission(slave7);
     Wire1.write(data, len);
     uint8_t err = Wire1.endTransmission();
+    SMBus::busUnlock();
     g_status0 = (err == 0) ? 2 : 3;
     g_status1 = err;
     logAdd('W', slave7, err, len, len, data);
@@ -177,15 +180,16 @@ bool doWrite(uint8_t slave7, const uint8_t *data, uint8_t len) {
 void emitReadResponse();
 
 bool doWriteRead(uint8_t slave7, const uint8_t *tgt, uint8_t tgtLen, uint16_t rLen) {
+    if (!SMBus::busLock(500)) { g_status0 = 3; g_status1 = 4; g_readLen = 0; return false; }
     Wire1.beginTransmission(slave7);
     Wire1.write(tgt, tgtLen);
     uint8_t err = Wire1.endTransmission(false);
     if (err != 0) {
-        // Sr fallback: STOP + fresh START
         Wire1.beginTransmission(slave7);
         Wire1.write(tgt, tgtLen);
         err = Wire1.endTransmission(true);
         if (err != 0) {
+            SMBus::busUnlock();
             g_status0 = 3; g_status1 = err; g_readLen = 0;
             logAdd('X', slave7, err, tgtLen, 0, tgt);
             if (g_cfg.autoRead) emitReadResponse();
@@ -199,6 +203,7 @@ bool doWriteRead(uint8_t slave7, const uint8_t *tgt, uint8_t tgtLen, uint16_t rL
     while (got < rLen && (millis() - t0) < g_cfg.readTimeout) {
         if (Wire1.available()) g_readBuf[got++] = Wire1.read();
     }
+    SMBus::busUnlock();
     g_readLen = got; g_readStatus = 2; g_status0 = 2; g_bytesRead = got;
     logAdd('X', slave7, 0, tgtLen, (uint8_t)got, g_readBuf);
     if (g_cfg.autoRead) emitReadResponse();
@@ -206,6 +211,7 @@ bool doWriteRead(uint8_t slave7, const uint8_t *tgt, uint8_t tgtLen, uint16_t rL
 }
 
 bool doRead(uint8_t slave7, uint16_t rLen) {
+    if (!SMBus::busLock(500)) { g_status0 = 3; g_status1 = 4; g_readLen = 0; return false; }
     if (rLen > sizeof(g_readBuf)) rLen = sizeof(g_readBuf);
     Wire1.requestFrom(slave7, (uint8_t)rLen);
     uint16_t got = 0;
@@ -213,6 +219,7 @@ bool doRead(uint8_t slave7, uint16_t rLen) {
     while (got < rLen && (millis() - t0) < g_cfg.readTimeout) {
         if (Wire1.available()) g_readBuf[got++] = Wire1.read();
     }
+    SMBus::busUnlock();
     g_readLen = got; g_readStatus = 2; g_status0 = 2; g_bytesRead = got;
     logAdd('R', slave7, 0, (uint8_t)rLen, (uint8_t)got, g_readBuf);
     if (g_cfg.autoRead) emitReadResponse();

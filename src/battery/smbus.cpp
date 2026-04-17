@@ -5,6 +5,19 @@
 static TwoWire *s_wire = &Wire1;
 
 static uint8_t s_sda = 0, s_scl = 0;
+static SemaphoreHandle_t s_busMutex = nullptr;
+
+SemaphoreHandle_t SMBus::busMutex() {
+    if (!s_busMutex) s_busMutex = xSemaphoreCreateMutex();
+    return s_busMutex;
+}
+bool SMBus::busLock(uint32_t timeout_ms) {
+    if (!s_busMutex) s_busMutex = xSemaphoreCreateMutex();
+    return xSemaphoreTake(s_busMutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+void SMBus::busUnlock() {
+    if (s_busMutex) xSemaphoreGive(s_busMutex);
+}
 
 // ===== Transaction log ring buffer =====
 static SMBus::LogEntry s_log[SMBus::LOG_SIZE];
@@ -88,19 +101,23 @@ static bool waitBytes(TwoWire *w, int n, uint32_t timeout_ms) {
 }
 
 uint16_t SMBus::readWord(uint8_t addr, uint8_t reg) {
+    if (!busLock()) { logPush(LOG_READ_WORD, addr, reg, false, -1, nullptr); return 0xFFFF; }
     s_wire->beginTransmission(addr);
     s_wire->write(reg);
     if (s_wire->endTransmission(false) != 0) {
+        busUnlock();
         logPush(LOG_READ_WORD, addr, reg, false, -1, nullptr);
         return 0xFFFF;
     }
     s_wire->requestFrom(addr, (uint8_t)2);
     if (!waitBytes(s_wire, 2, 100)) {
+        busUnlock();
         logPush(LOG_READ_WORD, addr, reg, false, -1, nullptr);
         return 0xFFFF;
     }
     uint16_t lo = s_wire->read();
     uint16_t hi = s_wire->read();
+    busUnlock();
     uint16_t val = (hi << 8) | lo;
     uint8_t d[2] = {(uint8_t)lo, (uint8_t)hi};
     logPush(LOG_READ_WORD, addr, reg, true, 2, d);
@@ -116,14 +133,17 @@ uint32_t SMBus::readDword(uint8_t addr, uint8_t reg) {
 }
 
 int SMBus::readBlock(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t maxLen) {
+    if (!busLock()) { logPush(LOG_READ_BLOCK, addr, reg, false, -1, nullptr); return -1; }
     s_wire->beginTransmission(addr);
     s_wire->write(reg);
     if (s_wire->endTransmission(false) != 0) {
+        busUnlock();
         logPush(LOG_READ_BLOCK, addr, reg, false, -1, nullptr);
         return -1;
     }
     s_wire->requestFrom(addr, (uint8_t)(maxLen + 1));
     if (!waitBytes(s_wire, 1, 100)) {
+        busUnlock();
         logPush(LOG_READ_BLOCK, addr, reg, false, -1, nullptr);
         return -1;
     }
@@ -133,6 +153,7 @@ int SMBus::readBlock(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t maxLen) {
     for (int i = 0; i < len && s_wire->available(); i++) {
         buf[i] = s_wire->read();
     }
+    busUnlock();
     logPush(LOG_READ_BLOCK, addr, reg, true, len, buf);
     return len;
 }
@@ -146,22 +167,26 @@ String SMBus::readString(uint8_t addr, uint8_t reg) {
 }
 
 bool SMBus::writeWord(uint8_t addr, uint8_t reg, uint16_t value) {
+    if (!busLock()) { logPush(LOG_WRITE_WORD, addr, reg, false, -1, nullptr); return false; }
     s_wire->beginTransmission(addr);
     s_wire->write(reg);
     s_wire->write(value & 0xFF);
     s_wire->write((value >> 8) & 0xFF);
     bool ok = s_wire->endTransmission() == 0;
+    busUnlock();
     uint8_t d[2] = {(uint8_t)(value & 0xFF), (uint8_t)(value >> 8)};
     logPush(LOG_WRITE_WORD, addr, reg, ok, 2, d);
     return ok;
 }
 
 bool SMBus::writeBlock(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len) {
+    if (!busLock()) { logPush(LOG_WRITE_BLOCK, addr, reg, false, -1, nullptr); return false; }
     s_wire->beginTransmission(addr);
     s_wire->write(reg);
     s_wire->write(len);
     for (uint8_t i = 0; i < len; i++) s_wire->write(data[i]);
     bool ok = s_wire->endTransmission() == 0;
+    busUnlock();
     logPush(LOG_WRITE_BLOCK, addr, reg, ok, len, data);
     return ok;
 }

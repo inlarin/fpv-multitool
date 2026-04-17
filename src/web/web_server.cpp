@@ -13,6 +13,7 @@
 #include "crsf/crsf_config.h"
 #include "core/usb_mode.h"
 #include "battery/battery_profiles.h"
+#include "battery/dataflash_map.h"
 
 extern "C" int cp2112_log_dump(char *out, int cap);
 extern "C" uint32_t cp2112_log_seq();
@@ -431,9 +432,9 @@ void WebServer::start() {
     s_ws->onEvent(onWsEvent);
     s_server->addHandler(s_ws);
 
-    // Root
+    // Root — stream from PROGMEM, no heap copy (HTML is ~70KB+)
     s_server->on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-        req->send(200, "text/html", WEB_INDEX_HTML);
+        req->send_P(200, "text/html", (const uint8_t*)WEB_INDEX_HTML, WEB_INDEX_HTML_LEN);
     });
 
     // Battery service actions
@@ -1147,6 +1148,105 @@ void WebServer::start() {
         char buf[128];
         cp2112_ep_info(buf, sizeof(buf));
         req->send(200, "text/plain", buf);
+    });
+
+    // ===== Data Flash editor =====
+
+    // Serve the DF map as JSON
+    s_server->on("/api/batt/df/map", HTTP_GET, [](AsyncWebServerRequest *req) {
+        static const char *typeNames[] = {"I1","I2","U1","U2","U4","H1"};
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        for (int i = 0; i < DF_MAP_LEN; i++) {
+            const auto &e = DF_MAP[i];
+            if (i) r->print(",");
+            r->printf("{\"addr\":\"0x%04X\",\"type\":\"%s\",\"size\":%d,"
+                      "\"min\":%ld,\"max\":%ld,\"def\":%ld,"
+                      "\"cat\":\"%s\",\"sub\":\"%s\",\"field\":\"%s\",\"unit\":\"%s\"}",
+                      e.addr, typeNames[e.type], dfTypeSize(e.type),
+                      e.minVal, e.maxVal, e.defVal,
+                      e.category, e.subcat, e.field, e.unit);
+        }
+        r->print("]");
+        req->send(r);
+    });
+
+    // Read single DF value via ManufacturerBlockAccess
+    s_server->on("/api/batt/df/read", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("addr")) { req->send(400, "text/plain", "need addr=0xNNNN"); return; }
+        uint16_t addr = (uint16_t)strtoul(req->getParam("addr")->value().c_str(), nullptr, 0);
+        uint8_t buf[8] = {0};
+        int n = SMBus::macBlockRead(0x0B, addr, buf, 8);
+        JsonDocument d;
+        d["addr"] = String("0x") + String(addr, HEX);
+        d["len"] = n;
+        if (n > 0) {
+            // Interpret based on type param or raw
+            String hex; for (int i = 0; i < n; i++) { char h[4]; snprintf(h,4,"%02X",buf[i]); hex += h; }
+            d["hex"] = hex;
+            if (n >= 1) d["u8"]  = buf[0];
+            if (n >= 1) d["i8"]  = (int8_t)buf[0];
+            if (n >= 2) d["u16"] = (uint16_t)(buf[0] | (buf[1] << 8));
+            if (n >= 2) d["i16"] = (int16_t)(buf[0] | (buf[1] << 8));
+            if (n >= 4) d["u32"] = (uint32_t)(buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24));
+            d["ok"] = true;
+        } else {
+            d["ok"] = false;
+        }
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Write single DF value via ManufacturerBlockAccess
+    s_server->on("/api/batt/df/write", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("addr", true) || !req->hasParam("value", true) || !req->hasParam("size", true)) {
+            req->send(400, "text/plain", "need addr, value, size (1/2/4)");
+            return;
+        }
+        uint16_t addr = (uint16_t)strtoul(req->getParam("addr", true)->value().c_str(), nullptr, 0);
+        int32_t value = (int32_t)strtol(req->getParam("value", true)->value().c_str(), nullptr, 0);
+        uint8_t size = (uint8_t)req->getParam("size", true)->value().toInt();
+        if (size < 1 || size > 4) { req->send(400, "text/plain", "size must be 1,2,4"); return; }
+
+        // Build MAC write payload: [addr_lo, addr_hi, data...]
+        uint8_t payload[6] = {(uint8_t)(addr & 0xFF), (uint8_t)(addr >> 8)};
+        for (int i = 0; i < size; i++) payload[2 + i] = (value >> (i * 8)) & 0xFF;
+
+        bool ok = SMBus::writeBlock(0x0B, 0x44, payload, 2 + size);
+        JsonDocument d;
+        d["addr"] = String("0x") + String(addr, HEX);
+        d["value"] = value;
+        d["size"] = size;
+        d["ok"] = ok;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Read ALL DF values (bulk read for snapshot/comparison)
+    s_server->on("/api/batt/df/readall", HTTP_GET, [](AsyncWebServerRequest *req) {
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("[");
+        for (int i = 0; i < DF_MAP_LEN; i++) {
+            const auto &e = DF_MAP[i];
+            uint8_t buf[8] = {0};
+            int n = SMBus::macBlockRead(0x0B, e.addr, buf, dfTypeSize(e.type));
+            if (i) r->print(",");
+            r->printf("{\"addr\":\"0x%04X\",\"ok\":%s", e.addr, (n > 0) ? "true" : "false");
+            if (n > 0) {
+                int32_t val = 0;
+                uint8_t sz = dfTypeSize(e.type);
+                for (int j = 0; j < sz && j < n; j++) val |= ((int32_t)buf[j] << (j * 8));
+                // Sign-extend for signed types
+                if (e.type == DF_I1 && (val & 0x80)) val |= 0xFFFFFF00;
+                if (e.type == DF_I2 && (val & 0x8000)) val |= 0xFFFF0000;
+                r->printf(",\"val\":%ld", val);
+                bool diff = (val != e.defVal);
+                if (diff) r->print(",\"diff\":true");
+            }
+            r->print("}");
+        }
+        r->print("]");
+        req->send(r);
     });
 
     // SMBus transaction log (ring buffer)
