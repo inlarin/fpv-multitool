@@ -637,7 +637,7 @@ function showTab(name) {
   // Mark active tab within current workspace
   const wsEl = document.getElementById('ws-'+_curWs);
   if (wsEl) wsEl.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
-  if (event && event.target && event.target.classList) event.target.classList.add('active');
+  if (typeof event !== 'undefined' && event && event.target && event.target.classList) event.target.classList.add('active');
   if (name === 'ota') otaRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); }
@@ -1666,6 +1666,9 @@ function handleMsg(m) {
 }
 
 connect();
+
+// Initialize default workspace (Battery Lab)
+showTab(_wsDefTab[_curWs]);
 
 // Fetch and display firmware version in footer
 fetch('/api/ota/info').then(r=>r.json()).then(j=>{
