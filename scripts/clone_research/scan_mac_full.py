@@ -3,7 +3,7 @@ for undocumented vendor commands on clone batteries.
 
 Only reports subcommands that return non-zero, non-all-FF data. Writes a
 CSV log for deeper analysis. Each probe takes ~10-15ms, so the full scan
-is ~15-20 minutes on CP2112 direct — much faster than the web UI.
+is ~15-20 minutes on CP2112 direct -- much faster than the web UI.
 
 Args:
     --from 0x0000     start subcommand (hex/dec)
@@ -36,7 +36,7 @@ def main():
             if i % 512 == 0 and i:
                 elapsed = time.time() - t0
                 eta = elapsed * (total - i) / i
-                print(f"  {i}/{total} ({100*i/total:.0f}%) — {hits} hits, {elapsed:.0f}s elapsed, ~{eta:.0f}s ETA")
+                print(f"  {i}/{total} ({100*i/total:.0f}%) -- {hits} hits, {elapsed:.0f}s elapsed, ~{eta:.0f}s ETA")
             data = cp.mac_block_read(sub, 32)
             if not data:
                 continue

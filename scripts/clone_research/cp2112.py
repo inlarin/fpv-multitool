@@ -31,12 +31,23 @@ class CP2112:
         self.dev.close()
 
     def _config_smbus(self, rate_hz):
-        # Feature report 0x06: SMBus Configuration
-        # [0x06, rate[4], addr, autoSendRead, writeTimeout[2], readTimeout[2],
-        #  sclLowTimeout, retryLimit[2]]
+        # Feature report 0x06 per AN495: SMBus Configuration (14 bytes incl ID)
+        # [0]    report ID 0x06
+        # [1..4] clock speed BE (Hz)
+        # [5]    device address (7bit << 1 — unused by us since we always specify slave per-tx)
+        # [6]    autoSendRead (0=off, 1=on — if on, Read Responses come without explicit req)
+        # [7..8] write timeout BE (ms, 0 = no timeout)
+        # [9..10] read timeout BE (ms)
+        # [11]   SCL low timeout enable
+        # [12..13] retry time BE
         rate = rate_hz.to_bytes(4, 'big')
-        cfg = bytes([0x06]) + rate + bytes([0x02, 0x00]) + (0).to_bytes(2,'big') + (0).to_bytes(2,'big') + bytes([0x00]) + (0).to_bytes(2,'big')
-        self.dev.send_feature_report(cfg + bytes(14 - (len(cfg) - 1)))
+        cfg = bytes([0x06]) + rate + bytes([0x00, 0x01]) \
+              + (200).to_bytes(2, 'big') + (200).to_bytes(2, 'big') \
+              + bytes([0x00]) + (0).to_bytes(2, 'big')
+        # Pad to full 14 bytes (report ID already included)
+        if len(cfg) < 14:
+            cfg += bytes(14 - len(cfg))
+        self.dev.send_feature_report(cfg)
 
     def __enter__(self):
         return self
@@ -46,29 +57,37 @@ class CP2112:
 
     # ===== Raw transactions =====
 
+    # Output report length is 64 bytes (including report ID) per CP2112 spec.
+    # hidapi on Windows requires the full output length to be written.
+    _OUT_LEN = 64
+
+    def _pad(self, report: bytes) -> bytes:
+        if len(report) < self._OUT_LEN:
+            return report + bytes(self._OUT_LEN - len(report))
+        return report[:self._OUT_LEN]
+
     def write(self, data: bytes):
         """Write N bytes to slave (SBS command + data). Returns True on ACK."""
         if len(data) > 61:
             raise ValueError("max 61 bytes per write")
-        # Output 0x14 Data Write: [0x14, slave, len, data[61]]
-        report = bytes([0x14, self.slave, len(data)]) + data + bytes(61 - len(data))
-        self.dev.write(report)
+        # CP2112 protocol: slave passed as 8-bit (7-bit addr << 1)
+        report = bytes([0x14, self.slave << 1, len(data)]) + data
+        self.dev.write(self._pad(report))
         return self._wait_status()
 
     def write_read(self, target: bytes, read_len: int) -> bytes:
         """Repeated-start read: write target (SBS cmd), then read N bytes."""
         if read_len > 512 or len(target) > 16:
             raise ValueError("bad lengths")
-        # Output 0x11 Write-Read: [0x11, slave, rLen[2 BE], tgtLen, tgt[16]]
-        report = bytes([0x11, self.slave, (read_len >> 8) & 0xFF, read_len & 0xFF,
-                        len(target)]) + target + bytes(16 - len(target))
-        self.dev.write(report)
+        report = bytes([0x11, self.slave << 1, (read_len >> 8) & 0xFF, read_len & 0xFF,
+                        len(target)]) + target
+        self.dev.write(self._pad(report))
         return self._read_response(read_len)
 
     def read(self, length: int) -> bytes:
         """Read N bytes (no command first)."""
-        report = bytes([0x10, self.slave, (length >> 8) & 0xFF, length & 0xFF])
-        self.dev.write(report)
+        report = bytes([0x10, self.slave << 1, (length >> 8) & 0xFF, length & 0xFF])
+        self.dev.write(self._pad(report))
         return self._read_response(length)
 
     def _wait_status(self, timeout_s=0.5) -> bool:
@@ -81,16 +100,19 @@ class CP2112:
                 return r[1] == 0x05  # 5 = completed
         return False
 
-    def _read_response(self, expected_len: int, timeout_s=0.3) -> bytes:
+    def _read_response(self, expected_len: int, timeout_s=0.5) -> bytes:
+        """Collect Read Response (0x13) frames until we have expected_len bytes
+        or timeout. Ignores non-0x13 interrupt frames."""
         data = bytearray()
         deadline = time.time() + timeout_s
         while len(data) < expected_len and time.time() < deadline:
-            r = self.dev.read(64, timeout_ms=50)
+            r = self.dev.read(64, timeout_ms=100)
             if not r or r[0] != 0x13:
                 continue
-            status, cnt = r[1], r[2]
-            if status != 0x01:  # 1 = idle/ok
-                break
+            # 0x13 layout: [0]=id [1]=status [2]=len [3..]=data
+            cnt = r[2]
+            if cnt == 0:
+                continue
             data.extend(r[3:3+cnt])
         return bytes(data)
 

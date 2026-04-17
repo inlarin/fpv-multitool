@@ -61,17 +61,17 @@ def main():
             r = probe_sbs_write(cp, reg)
             if r is None:
                 continue
-            mark = '⚠ CHANGED' if r['changed'] else 'ok (sealed)'
+            mark = '[!] CHANGED' if r['changed'] else 'ok (sealed)'
             print(f"  0x{reg:02X}: before=0x{r['before']:04X} sentinel=0x{r['sentinel']:04X} after=0x{r['after']:04X}  {mark}")
             if r['changed']:
                 bypassed.append(r)
 
         if bypassed:
-            print(f"\n⚠⚠⚠ SEAL BYPASS FOUND on {len(bypassed)} registers ⚠⚠⚠")
+            print(f"\n[!][!][!] SEAL BYPASS FOUND on {len(bypassed)} registers [!][!][!]")
             for r in bypassed:
                 print(f"  0x{r['reg']:02X} accepts arbitrary writes while sealed")
         else:
-            print("\n✓ Seal enforced on all tested SBS registers")
+            print("\nOK: Seal enforced on all tested SBS registers")
 
         # === Test 2: DF write via MAC 0x44 ===
         print("\n--- DF write probe (MAC 0x44 → addr 0x4340, cycle count) ---")
@@ -85,9 +85,9 @@ def main():
         cyc_after = cp.read_word(0x17)
         print(f"  Cycle count after:  {cyc_after}")
         if cyc_after != cyc_before:
-            print(f"  ⚠ DF WRITE BYPASSED SEAL — cycles changed from {cyc_before} to {cyc_after}")
+            print(f"  [!] DF WRITE BYPASSED SEAL — cycles changed from {cyc_before} to {cyc_after}")
         else:
-            print("  ✓ DF protected")
+            print("  OK: DF protected")
 
 
 if __name__ == '__main__':
