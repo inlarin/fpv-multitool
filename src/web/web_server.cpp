@@ -999,9 +999,119 @@ void WebServer::start() {
         req->send(200, "application/json", out);
     });
 
+    // Background MAC brute: starts a long-running scan task and returns immediately.
+    // Use /api/batt/clone/brute_status to poll progress + hits so far.
+    static struct {
+        volatile bool     running;
+        volatile uint32_t pos;
+        uint32_t          from, to;
+        int               stable;
+        uint8_t           probes[16];
+        int               nProbes;
+        String            hits;       // accumulated JSON-encoded hits
+        int               hitCount;
+        int               flappyCount;
+    } s_brute = {false, 0, 0, 0, 3, {0}, 0, "", 0, 0};
+
+    auto bruteSnapshotReg = [](uint8_t reg, int stable, uint8_t *out) -> int {
+        uint8_t buf[8][16]; int lens[8];
+        int samples = stable + 2;
+        if (samples > 8) samples = 8;
+        for (int s = 0; s < samples; s++) {
+            lens[s] = SMBus::readBlock(0x0B, reg, buf[s], 16);
+            delay(1);
+        }
+        int best = 0, bestCount = 0;
+        for (int i = 0; i < samples; i++) {
+            int c = 0;
+            for (int j = 0; j < samples; j++) {
+                if (lens[i] == lens[j] && memcmp(buf[i], buf[j], lens[i]) == 0) c++;
+            }
+            if (c > bestCount) { best = i; bestCount = c; }
+        }
+        if (lens[best] > 0) memcpy(out, buf[best], lens[best]);
+        return (bestCount >= (samples + 1) / 2) ? lens[best] : -1;
+    };
+
+    s_server->on("/api/batt/clone/brute_start", HTTP_POST, [bruteSnapshotReg](AsyncWebServerRequest *req) {
+        if (s_brute.running) { req->send(409, "text/plain", "already running"); return; }
+        s_brute.from = req->hasParam("from", true) ? strtoul(req->getParam("from", true)->value().c_str(), nullptr, 0) : 0;
+        s_brute.to   = req->hasParam("to", true)   ? strtoul(req->getParam("to", true)->value().c_str(), nullptr, 0)   : 0xFFFF;
+        s_brute.stable = req->hasParam("stable", true) ? req->getParam("stable", true)->value().toInt() : 3;
+        String probeStr = req->hasParam("probe", true) ? req->getParam("probe", true)->value() : "0xEE,0xF0,0xFF";
+        s_brute.nProbes = 0;
+        int pos = 0;
+        while (pos < (int)probeStr.length() && s_brute.nProbes < 16) {
+            s_brute.probes[s_brute.nProbes++] = (uint8_t)strtoul(probeStr.c_str() + pos, nullptr, 0);
+            int c = probeStr.indexOf(',', pos);
+            if (c < 0) break; pos = c + 1;
+        }
+        s_brute.hits = "";
+        s_brute.hitCount = 0;
+        s_brute.flappyCount = 0;
+        s_brute.pos = s_brute.from;
+        s_brute.running = true;
+
+        xTaskCreate([](void *argSnapRegPtr) {
+            auto snapRegPtr = (int (*)(uint8_t, int, uint8_t *))argSnapRegPtr;
+            uint8_t baseline[16][16]; int baselineLen[16];
+            for (int i = 0; i < s_brute.nProbes; i++) {
+                baselineLen[i] = snapRegPtr(s_brute.probes[i], s_brute.stable, baseline[i]);
+            }
+            uint32_t last = s_brute.from;
+            for (uint32_t v = s_brute.from; v <= s_brute.to && s_brute.running; v++) {
+                SMBus::writeWord(0x0B, 0x00, (uint16_t)v);
+                vTaskDelay(pdMS_TO_TICKS(3));
+                for (int i = 0; i < s_brute.nProbes; i++) {
+                    uint8_t cur[16];
+                    int n = snapRegPtr(s_brute.probes[i], s_brute.stable, cur);
+                    if (n < 0) { s_brute.flappyCount++; continue; }
+                    if (n != baselineLen[i] || memcmp(cur, baseline[i], n) != 0) {
+                        char entry[128];
+                        int ofs = snprintf(entry, sizeof(entry), "%s{\"mac\":\"0x%04X\",\"reg\":\"0x%02X\",\"before\":\"",
+                                           s_brute.hits.length() ? "," : "", v, s_brute.probes[i]);
+                        for (int j = 0; j < baselineLen[i] && j < 16 && ofs < (int)sizeof(entry)-3; j++) {
+                            ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "%02X", baseline[i][j]);
+                        }
+                        ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "\",\"after\":\"");
+                        for (int j = 0; j < n && j < 16 && ofs < (int)sizeof(entry)-3; j++) {
+                            ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "%02X", cur[j]);
+                        }
+                        snprintf(entry+ofs, sizeof(entry)-ofs, "\"}");
+                        s_brute.hits += entry;
+                        s_brute.hitCount++;
+                        memcpy(baseline[i], cur, n);
+                        baselineLen[i] = n;
+                    }
+                }
+                s_brute.pos = v;
+                (void)last;
+            }
+            s_brute.running = false;
+            vTaskDelete(nullptr);
+        }, "macbrute", 8192, (void*)(int (*)(uint8_t, int, uint8_t*))bruteSnapshotReg, 1, nullptr);
+
+        req->send(202, "text/plain", "started — poll /api/batt/clone/brute_status");
+    });
+
+    s_server->on("/api/batt/clone/brute_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->printf("{\"running\":%s,\"pos\":\"0x%04X\",\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"hits\":%d,\"flapping\":%d,\"stable\":%d,\"entries\":[%s]}",
+                  s_brute.running ? "true" : "false",
+                  (unsigned)s_brute.pos, (unsigned)s_brute.from, (unsigned)s_brute.to,
+                  s_brute.hitCount, s_brute.flappyCount, s_brute.stable,
+                  s_brute.hits.c_str());
+        req->send(r);
+    });
+
+    s_server->on("/api/batt/clone/brute_stop", HTTP_POST, [](AsyncWebServerRequest *req) {
+        s_brute.running = false;
+        req->send(200, "text/plain", "stop requested");
+    });
+
+    // (Original synchronous brute retained for small ranges)
     // Brute-force writes to reg 0x00 (ManufacturerAccess) and monitor for
-    // state changes in vendor regs. Writes each value in [from..to], after each
-    // one reads specified probe regs as block, records any that differ from baseline.
+    // state changes in vendor regs.
     //   GET /api/batt/clone/mac_brute?from=0x0000&to=0x0010&probe=0xEE,0xF0
     s_server->on("/api/batt/clone/mac_brute", HTTP_GET, [](AsyncWebServerRequest *req) {
         uint32_t from = req->hasParam("from") ?
@@ -1027,17 +1137,52 @@ void WebServer::start() {
             baselineLen[i] = SMBus::readBlock(0x0B, probes[i], baseline[i], 16);
         }
 
+        // Noise-filtering: before declaring a probe-reg change a "hit", confirm
+        // that N consecutive reads show the new stable value AND that N reads
+        // of the baseline showed the old stable value. Prevents false-positive
+        // from registers that naturally flap between two values.
+        int stable = req->hasParam("stable") ? req->getParam("stable")->value().toInt() : 3;
+        if (stable < 1) stable = 1;
+
+        // Re-check baseline: majority-vote over N reads
+        auto snapshotReg = [&](uint8_t reg, uint8_t *out) -> int {
+            // Take stable+2 reads, pick the MODE (most common). If majority < stable, mark flapping.
+            uint8_t buf[8][16]; int lens[8]; int votes[8] = {0};
+            int samples = stable + 2;
+            if (samples > 8) samples = 8;
+            for (int s = 0; s < samples; s++) {
+                lens[s] = SMBus::readBlock(0x0B, reg, buf[s], 16);
+                delay(1);
+            }
+            // Find most common among the samples
+            int best = 0, bestCount = 0;
+            for (int i = 0; i < samples; i++) {
+                int c = 0;
+                for (int j = 0; j < samples; j++) {
+                    if (lens[i] == lens[j] && memcmp(buf[i], buf[j], lens[i]) == 0) c++;
+                }
+                if (c > bestCount) { best = i; bestCount = c; }
+            }
+            if (lens[best] > 0) memcpy(out, buf[best], lens[best]);
+            return (bestCount >= (samples + 1) / 2) ? lens[best] : -1;  // -1 = flapping
+        };
+
+        for (int i = 0; i < n_probes; i++) {
+            baselineLen[i] = snapshotReg(probes[i], baseline[i]);
+        }
+
         AsyncResponseStream *r = req->beginResponseStream("application/json");
         r->print("{\"hits\":[");
         bool first = true;
-        int hitCount = 0;
+        int hitCount = 0, flappyCount = 0;
         uint32_t lastYield = millis();
         for (uint32_t v = from; v <= to; v++) {
             SMBus::writeWord(0x0B, 0x00, (uint16_t)v);
-            delay(2);
+            delay(3);
             for (int i = 0; i < n_probes; i++) {
                 uint8_t cur[16];
-                int n = SMBus::readBlock(0x0B, probes[i], cur, 16);
+                int n = snapshotReg(probes[i], cur);
+                if (n < 0) { flappyCount++; continue; }  // register is currently flapping, skip
                 if (n != baselineLen[i] || memcmp(cur, baseline[i], n) != 0) {
                     if (!first) r->print(",");
                     first = false;
@@ -1051,14 +1196,13 @@ void WebServer::start() {
                     baselineLen[i] = n;
                 }
             }
-            // Yield every 50ms so AsyncTCP + main loop + WDT stay happy
             if (millis() - lastYield > 50) {
                 vTaskDelay(pdMS_TO_TICKS(5));
                 lastYield = millis();
             }
         }
-        r->printf("],\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"probes\":%d,\"hits\":%d}",
-                  from, to, n_probes, hitCount);
+        r->printf("],\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"probes\":%d,\"stable\":%d,\"hits\":%d,\"flapping_skipped\":%d}",
+                  from, to, n_probes, stable, hitCount, flappyCount);
         req->send(r);
     });
 
