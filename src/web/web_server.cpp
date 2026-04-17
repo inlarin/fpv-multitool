@@ -934,6 +934,134 @@ void WebServer::start() {
         req->send(200, "application/json", out);
     });
 
+    // PEC-enabled variant of SBS writes — some strict SMBus devices/clones
+    // silently drop non-PEC writes. Retry unseal keys + anything else with PEC.
+    //   POST reg=0xNN&type=word&value=0xNNNN
+    //   POST reg=0xNN&type=block&data=HEX
+    s_server->on("/api/batt/clone/wpec", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("reg", true)) { req->send(400, "text/plain", "need reg"); return; }
+        uint8_t reg = (uint8_t)strtoul(req->getParam("reg", true)->value().c_str(), nullptr, 0);
+        String type = req->hasParam("type", true) ? req->getParam("type", true)->value() : "word";
+        bool ok = false;
+        JsonDocument d;
+        if (type == "word") {
+            uint16_t v = (uint16_t)strtoul(req->getParam("value", true)->value().c_str(), nullptr, 0);
+            ok = SMBus::writeWordPEC(0x0B, reg, v);
+            d["value"] = String("0x") + String(v, HEX);
+        } else if (type == "block") {
+            String hex = req->getParam("data", true)->value();
+            hex.replace(" ", "");
+            uint8_t buf[32]; int n = 0;
+            for (size_t i = 0; i < hex.length() && n < 32; i += 2) {
+                char p[3] = {hex[i], hex[i+1], 0};
+                buf[n++] = (uint8_t)strtol(p, nullptr, 16);
+            }
+            ok = SMBus::writeBlockPEC(0x0B, reg, buf, n);
+            d["len"] = n;
+        }
+        d["ok"] = ok;
+        d["reg"] = String("0x") + String(reg, HEX);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Retry unseal attempt with PEC enabled (strict SMBus) — clone may require.
+    //   GET /api/batt/clone/unseal_pec?w1=0x7EE0&w2=0xCCDF
+    s_server->on("/api/batt/clone/unseal_pec", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("w1") || !req->hasParam("w2")) {
+            req->send(400, "text/plain", "need w1,w2"); return;
+        }
+        uint16_t w1 = (uint16_t)strtoul(req->getParam("w1")->value().c_str(), nullptr, 0);
+        uint16_t w2 = (uint16_t)strtoul(req->getParam("w2")->value().c_str(), nullptr, 0);
+        // Attempt 1: write to MAC 0x00 as two separate PEC-protected word writes
+        bool ok1 = SMBus::writeWordPEC(0x0B, 0x00, w1);
+        delay(20);
+        bool ok2 = SMBus::writeWordPEC(0x0B, 0x00, w2);
+        delay(100);
+        // Attempt 2: also write as block-form to 0x44 (BK-style)
+        uint8_t key1[2] = {(uint8_t)(w1 & 0xFF), (uint8_t)(w1 >> 8)};
+        uint8_t key2[2] = {(uint8_t)(w2 & 0xFF), (uint8_t)(w2 >> 8)};
+        bool okB1 = SMBus::writeBlockPEC(0x0B, 0x44, key1, 2);
+        delay(20);
+        bool okB2 = SMBus::writeBlockPEC(0x0B, 0x44, key2, 2);
+        delay(200);
+        uint32_t op = DJIBattery::readOperationStatus();
+        uint8_t sec = (op >> 8) & 0x03;
+        JsonDocument d;
+        d["w1"] = String("0x") + String(w1, HEX);
+        d["w2"] = String("0x") + String(w2, HEX);
+        d["mac_word_pec"] = ok1 && ok2;
+        d["mac_block_pec"] = okB1 && okB2;
+        d["opStatus"] = String("0x") + String(op, HEX);
+        d["sealed"] = (sec == 3);
+        d["sec"] = sec;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Brute-force writes to reg 0x00 (ManufacturerAccess) and monitor for
+    // state changes in vendor regs. Writes each value in [from..to], after each
+    // one reads specified probe regs as block, records any that differ from baseline.
+    //   GET /api/batt/clone/mac_brute?from=0x0000&to=0x0010&probe=0xEE,0xF0
+    s_server->on("/api/batt/clone/mac_brute", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint32_t from = req->hasParam("from") ?
+            strtoul(req->getParam("from")->value().c_str(), nullptr, 0) : 0x0000;
+        uint32_t to   = req->hasParam("to") ?
+            strtoul(req->getParam("to")->value().c_str(), nullptr, 0) : 0x00FF;
+        if (to < from) { req->send(400, "text/plain", "bad range"); return; }
+        if (to - from > 4096) to = from + 4096;  // cap per-request
+
+        String probe_s = req->hasParam("probe") ? req->getParam("probe")->value() : "0xEE,0xF0,0xFF";
+        uint8_t probes[16]; int n_probes = 0;
+        int pos = 0;
+        while (pos < (int)probe_s.length() && n_probes < 16) {
+            probes[n_probes++] = (uint8_t)strtoul(probe_s.c_str() + pos, nullptr, 0);
+            int c = probe_s.indexOf(',', pos);
+            if (c < 0) break;
+            pos = c + 1;
+        }
+
+        // Capture baseline snapshot of probe regs
+        uint8_t baseline[16][16]; int baselineLen[16];
+        for (int i = 0; i < n_probes; i++) {
+            baselineLen[i] = SMBus::readBlock(0x0B, probes[i], baseline[i], 16);
+        }
+
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("{\"hits\":[");
+        bool first = true;
+        int hitCount = 0;
+        uint32_t lastYield = millis();
+        for (uint32_t v = from; v <= to; v++) {
+            SMBus::writeWord(0x0B, 0x00, (uint16_t)v);
+            delay(2);
+            for (int i = 0; i < n_probes; i++) {
+                uint8_t cur[16];
+                int n = SMBus::readBlock(0x0B, probes[i], cur, 16);
+                if (n != baselineLen[i] || memcmp(cur, baseline[i], n) != 0) {
+                    if (!first) r->print(",");
+                    first = false;
+                    r->printf("{\"mac\":\"0x%04X\",\"reg\":\"0x%02X\",\"before\":\"", v, probes[i]);
+                    for (int j = 0; j < baselineLen[i] && j < 16; j++) r->printf("%02X", baseline[i][j]);
+                    r->print("\",\"after\":\"");
+                    for (int j = 0; j < n && j < 16; j++) r->printf("%02X", cur[j]);
+                    r->print("\"}");
+                    hitCount++;
+                    memcpy(baseline[i], cur, n);
+                    baselineLen[i] = n;
+                }
+            }
+            // Yield every 50ms so AsyncTCP + main loop + WDT stay happy
+            if (millis() - lastYield > 50) {
+                vTaskDelay(pdMS_TO_TICKS(5));
+                lastYield = millis();
+            }
+        }
+        r->printf("],\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"probes\":%d,\"hits\":%d}",
+                  from, to, n_probes, hitCount);
+        req->send(r);
+    });
+
     // Battery service actions
     s_server->on("/api/batt", HTTP_GET, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("action")) { req->send(400, "text/plain", "missing action"); return; }

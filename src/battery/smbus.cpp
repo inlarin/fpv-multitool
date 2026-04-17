@@ -179,6 +179,54 @@ bool SMBus::writeWord(uint8_t addr, uint8_t reg, uint16_t value) {
     return ok;
 }
 
+// SMBus Packet Error Check: CRC-8 polynomial 0x07, init 0x00.
+uint8_t SMBus::smbusPEC(const uint8_t *data, size_t len) {
+    uint8_t crc = 0;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : (crc << 1);
+        }
+    }
+    return crc;
+}
+
+bool SMBus::writeWordPEC(uint8_t addr, uint8_t reg, uint16_t value) {
+    if (!busLock()) { logPush(LOG_WRITE_WORD, addr, reg, false, -1, nullptr); return false; }
+    uint8_t frame[5] = {(uint8_t)(addr << 1), reg, (uint8_t)(value & 0xFF), (uint8_t)(value >> 8)};
+    frame[4] = smbusPEC(frame, 4);  // PEC over write_addr + reg + data
+    s_wire->beginTransmission(addr);
+    s_wire->write(reg);
+    s_wire->write(value & 0xFF);
+    s_wire->write((value >> 8) & 0xFF);
+    s_wire->write(frame[4]);
+    bool ok = s_wire->endTransmission() == 0;
+    busUnlock();
+    uint8_t d[3] = {(uint8_t)(value & 0xFF), (uint8_t)(value >> 8), frame[4]};
+    logPush(LOG_WRITE_WORD, addr, reg, ok, 3, d);
+    return ok;
+}
+
+bool SMBus::writeBlockPEC(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len) {
+    if (!busLock()) { logPush(LOG_WRITE_BLOCK, addr, reg, false, -1, nullptr); return false; }
+    // Build frame for PEC calculation: write_addr + reg + len + data
+    uint8_t frame[36];
+    frame[0] = addr << 1;
+    frame[1] = reg;
+    frame[2] = len;
+    for (uint8_t i = 0; i < len; i++) frame[3+i] = data[i];
+    uint8_t pec = smbusPEC(frame, 3 + len);
+    s_wire->beginTransmission(addr);
+    s_wire->write(reg);
+    s_wire->write(len);
+    for (uint8_t i = 0; i < len; i++) s_wire->write(data[i]);
+    s_wire->write(pec);
+    bool ok = s_wire->endTransmission() == 0;
+    busUnlock();
+    logPush(LOG_WRITE_BLOCK, addr, reg, ok, len, data);
+    return ok;
+}
+
 bool SMBus::writeBlock(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len) {
     if (!busLock()) { logPush(LOG_WRITE_BLOCK, addr, reg, false, -1, nullptr); return false; }
     s_wire->beginTransmission(addr);

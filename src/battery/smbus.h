@@ -18,6 +18,12 @@ String readString(uint8_t addr, uint8_t reg);
 bool writeWord(uint8_t addr, uint8_t reg, uint16_t value);
 bool writeBlock(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len);
 
+// PEC-enabled variants: append SMBus packet-error-check (CRC-8 poly 0x07) as
+// final byte. Required by strict SMBus-spec devices (some clones / bq chips).
+bool writeWordPEC(uint8_t addr, uint8_t reg, uint16_t value);
+bool writeBlockPEC(uint8_t addr, uint8_t reg, const uint8_t *data, uint8_t len);
+uint8_t smbusPEC(const uint8_t *data, size_t len);
+
 // ManufacturerAccess (MAC) sub-commands via register 0x00 (word) or 0x44 (block)
 bool macCommand(uint8_t addr, uint16_t subcommand);     // write subcommand to 0x00
 int  macBlockRead(uint8_t addr, uint16_t subcommand, uint8_t *buf, uint8_t maxLen);
