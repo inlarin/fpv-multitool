@@ -985,6 +985,7 @@ void WebServer::start() {
             WiFiClientSecure client;
             client.setInsecure();
 
+            httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
             httpUpdate.rebootOnUpdate(false);
             httpUpdate.onProgress([](int cur, int total) {
                 if (total > 0) s_otaPull.progress = (int)((int64_t)cur * 100 / total);
