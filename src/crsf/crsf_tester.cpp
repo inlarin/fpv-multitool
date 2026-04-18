@@ -34,7 +34,10 @@ static void ensureRunning() {
     }
     bool inv = false;
     { WebState::Lock lock; inv = WebState::crsf.inverted; }
-    CRSFService::begin(&Serial1, ELRS_RX, ELRS_TX, 420000, inv);
+    CRSFService::begin(&Serial1,
+                       PinPort::rx_pin(PinPort::PORT_B),
+                       PinPort::tx_pin(PinPort::PORT_B),
+                       420000, inv);
     { WebState::Lock lock; WebState::crsf.enabled = true; }
     s_startedHere = true;
 }

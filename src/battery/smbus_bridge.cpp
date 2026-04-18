@@ -168,9 +168,11 @@ void handleCmd(uint8_t cmd, const uint8_t *args, uint8_t argLen) {
     case CMD_RESCAN: {
         Wire1.end();
         delay(10);
-        pinMode(BATT_SDA, INPUT_PULLUP);
-        pinMode(BATT_SCL, INPUT_PULLUP);
-        Wire1.begin(BATT_SDA, BATT_SCL);
+        int sda = PinPort::sda_pin(PinPort::PORT_B);
+        int scl = PinPort::scl_pin(PinPort::PORT_B);
+        pinMode(sda, INPUT_PULLUP);
+        pinMode(scl, INPUT_PULLUP);
+        Wire1.begin(sda, scl);
         Wire1.setClock(100000);
         Wire1.setTimeOut(50);
         sendResp(ST_OK, nullptr, 0);

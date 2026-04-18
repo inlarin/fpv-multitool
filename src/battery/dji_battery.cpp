@@ -106,7 +106,8 @@ void DJIBattery::init() {
         Serial.println("[DJIBattery] Port B busy, skipping I2C init");
         return;
     }
-    SMBus::init(BATT_SDA, BATT_SCL);
+    SMBus::init(PinPort::sda_pin(PinPort::PORT_B),
+                PinPort::scl_pin(PinPort::PORT_B));
 }
 
 bool DJIBattery::isConnected() {

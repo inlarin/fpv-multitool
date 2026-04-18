@@ -68,12 +68,16 @@ void start(uint8_t poleCount) {
     s_state = {};
     s_pos = 0;
     Serial1.end();
-    Serial1.begin(115200, SERIAL_8N1, ELRS_RX, ELRS_TX);
+    Serial1.begin(115200, SERIAL_8N1,
+                  PinPort::rx_pin(PinPort::PORT_B),
+                  PinPort::tx_pin(PinPort::PORT_B));
     s_running = true;
     s_rateWindowStart = millis();
     s_framesInWindow  = 0;
     s_state.running = true;
-    Serial.println("[ESCTelem] started on ELRS_RX @ 115200 8N1");
+    Serial.printf("[ESCTelem] started @ 115200 8N1 rx=%d tx=%d\n",
+                  PinPort::rx_pin(PinPort::PORT_B),
+                  PinPort::tx_pin(PinPort::PORT_B));
 }
 
 void stop() {

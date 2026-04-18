@@ -67,4 +67,18 @@ namespace PinPort {
     // the preferred mode with owner="boot" so that sensors/features that
     // the user pre-selected start working immediately.
     void applyAtBoot();
+
+    // Pin swap — when true, roles of pin_a and pin_b are swapped for I2C/UART
+    // so user doesn't have to solder SDA↔SCL or RX↔TX correctly the first
+    // time. Persisted in NVS. Consumers MUST query the helpers below
+    // (tx_pin/rx_pin/sda_pin/scl_pin) instead of hard-coding ELRS_TX etc.
+    bool swapped(int portId);
+    void setSwapped(int portId, bool swap);  // persists + reacquires if active
+
+    // Pinout queries — respect the swap flag. Return -1 if port is invalid.
+    int tx_pin(int portId);   // UART: ESP → peripheral (SDA-equivalent = pin_a normally)
+    int rx_pin(int portId);   // UART: peripheral → ESP
+    int sda_pin(int portId);  // I2C: data line
+    int scl_pin(int portId);  // I2C: clock line
+    int signal_pin(int portId);  // PWM: always pin_a (swap ignored — only one signal)
 }

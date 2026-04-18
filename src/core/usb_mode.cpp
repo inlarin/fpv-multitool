@@ -94,7 +94,9 @@ void UsbMode::pumpLoop() {
             }
         }
         Serial1.end();
-        Serial1.begin(want, SERIAL_8N1, ELRS_RX, ELRS_TX);
+        Serial1.begin(want, SERIAL_8N1,
+                      PinPort::rx_pin(PinPort::PORT_B),
+                      PinPort::tx_pin(PinPort::PORT_B));
         cur_baud = want;
         inited = true;
     }

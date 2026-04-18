@@ -157,21 +157,23 @@ void start(RCProto proto) {
     s_state = {};
     s_state.proto = proto;
 
+    int rxPin = PinPort::rx_pin(PinPort::PORT_B);
+    int txPin = PinPort::tx_pin(PinPort::PORT_B);
     switch (proto) {
         case RC_PROTO_SBUS:
             // 100000 baud 8E2 inverted — ESP32 HardwareSerial supports invert arg
             Serial1.end();
-            Serial1.begin(100000, SERIAL_8E2, ELRS_RX, ELRS_TX, /*invert=*/true);
+            Serial1.begin(100000, SERIAL_8E2, rxPin, txPin, /*invert=*/true);
             s_sbusPos = 0;
             break;
         case RC_PROTO_IBUS:
             Serial1.end();
-            Serial1.begin(115200, SERIAL_8N1, ELRS_RX, ELRS_TX);
+            Serial1.begin(115200, SERIAL_8N1, rxPin, txPin);
             s_ibusPos = 0;
             break;
         case RC_PROTO_PPM:
-            pinMode(ELRS_RX, INPUT_PULLUP);
-            attachInterrupt(digitalPinToInterrupt(ELRS_RX), ppmIsr, FALLING);
+            pinMode(rxPin, INPUT_PULLUP);
+            attachInterrupt(digitalPinToInterrupt(rxPin), ppmIsr, FALLING);
             s_ppmChIdx = 0;
             s_ppmFrameReady = false;
             break;
@@ -193,7 +195,7 @@ void stop() {
             Serial1.end();
             break;
         case RC_PROTO_PPM:
-            detachInterrupt(digitalPinToInterrupt(ELRS_RX));
+            detachInterrupt(digitalPinToInterrupt(PinPort::rx_pin(PinPort::PORT_B)));
             break;
         default: break;
     }

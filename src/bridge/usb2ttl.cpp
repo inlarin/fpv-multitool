@@ -318,7 +318,9 @@ void runUSB2TTL() {
                 s_rxCount = 0;
                 s_currentBaud = 420000;
 
-                uart.begin(s_currentBaud, SERIAL_8N1, ELRS_RX, ELRS_TX);
+                uart.begin(s_currentBaud, SERIAL_8N1,
+                           PinPort::rx_pin(PinPort::PORT_B),
+                           PinPort::tx_pin(PinPort::PORT_B));
                 uart.setRxBufferSize(4096);
 
                 // Enter flash mode: pull BOOT low (skipped if no BOOT pin —

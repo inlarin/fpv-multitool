@@ -471,8 +471,8 @@ static void executeFlash() {
 
     ESPFlasher::Config cfg;
     cfg.uart = &Serial1;
-    cfg.tx_pin = ELRS_TX;
-    cfg.rx_pin = ELRS_RX;
+    cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+    cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
     cfg.baud_rate = 115200;
     cfg.flash_offset = 0;
     cfg.progress = flashProgress;
@@ -2036,7 +2036,10 @@ void WebServer::start() {
         }
         bool inv = req->hasParam("inverted") ? req->getParam("inverted")->value() == "1" : false;
         WebState::crsf.inverted = inv;
-        CRSFService::begin(&Serial1, ELRS_RX, ELRS_TX, 420000, inv);
+        CRSFService::begin(&Serial1,
+                           PinPort::rx_pin(PinPort::PORT_B),
+                           PinPort::tx_pin(PinPort::PORT_B),
+                           420000, inv);
         CRSFConfig::init();
         WebState::crsf.enabled = true;
         req->send(200, "text/plain", inv ? "CRSF started (inverted)" : "CRSF started");
@@ -2386,6 +2389,154 @@ void WebServer::start() {
     s_server->on("/api/port/release", HTTP_POST, [](AsyncWebServerRequest *req) {
         PinPort::release(PinPort::PORT_B);
         req->send(200, "text/plain", "Released");
+    });
+
+    // Manual swap override (advanced) — toggles PinPort pin_a/pin_b
+    // assignment for I2C/UART and re-acquires if port is live.
+    s_server->on("/api/port/swap", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool swap = !PinPort::swapped(PinPort::PORT_B);
+        if (req->hasParam("swap", true)) {
+            swap = req->getParam("swap", true)->value() == "1";
+        }
+        PinPort::setSwapped(PinPort::PORT_B, swap);
+        JsonDocument d;
+        d["swapped"] = PinPort::swapped(PinPort::PORT_B);
+        d["tx_pin"]  = PinPort::tx_pin(PinPort::PORT_B);
+        d["rx_pin"]  = PinPort::rx_pin(PinPort::PORT_B);
+        d["sda_pin"] = PinPort::sda_pin(PinPort::PORT_B);
+        d["scl_pin"] = PinPort::scl_pin(PinPort::PORT_B);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Auto-detect wiring — tries both pin_a↔pin_b assignments and reports
+    // which one produced a valid signal. Saves swap flag to NVS on success.
+    //   signal=crsf   → listen for CRSF frame start 0xC8 @ 420000 8N1
+    //   signal=sbus   → listen for SBUS start 0x0F @ 100000 8E2 inverted
+    //   signal=ibus   → listen for iBus header 0x20,0x40 @ 115200 8N1
+    //   signal=i2c    → I2C bus scan 0x08..0x77, success if ≥1 ACK
+    //   signal=elrs_rom → ROM bootloader SYNC @ 115200 (user must hold BOOT)
+    // Returns JSON with "swap_used", "detected", and the swap flag state.
+    s_server->on("/api/port/autodetect", HTTP_POST, [](AsyncWebServerRequest *req) {
+        String signal = req->hasParam("signal", true)
+            ? req->getParam("signal", true)->value() : "crsf";
+
+        auto tryOnce = [&](bool swap, unsigned long waitMs) -> bool {
+            PinPort::setSwapped(PinPort::PORT_B, swap);
+            PinPort::release(PinPort::PORT_B);
+
+            if (signal == "i2c") {
+                if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "autodetect")) return false;
+                Wire1.end();
+                int sda = PinPort::sda_pin(PinPort::PORT_B);
+                int scl = PinPort::scl_pin(PinPort::PORT_B);
+                pinMode(sda, INPUT_PULLUP);
+                pinMode(scl, INPUT_PULLUP);
+                Wire1.begin(sda, scl);
+                Wire1.setClock(100000);
+                Wire1.setTimeOut(30);
+                for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+                    Wire1.beginTransmission(addr);
+                    if (Wire1.endTransmission() == 0) return true;
+                }
+                return false;
+            }
+
+            // UART-based detection — pick baud/framing per signal.
+            if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "autodetect")) return false;
+            Serial1.end();
+            int rxPin = PinPort::rx_pin(PinPort::PORT_B);
+            int txPin = PinPort::tx_pin(PinPort::PORT_B);
+
+            uint32_t baud; uint32_t cfg; bool invert;
+            uint8_t syncByte1 = 0, syncByte2 = 0; bool needTwo = false;
+            if (signal == "crsf") {
+                baud = 420000; cfg = SERIAL_8N1; invert = false;
+                syncByte1 = 0xC8;  // CRSF broadcast address
+            } else if (signal == "sbus") {
+                baud = 100000; cfg = SERIAL_8E2; invert = true;
+                syncByte1 = 0x0F;
+            } else if (signal == "ibus") {
+                baud = 115200; cfg = SERIAL_8N1; invert = false;
+                syncByte1 = 0x20; syncByte2 = 0x40; needTwo = true;
+            } else if (signal == "elrs_rom") {
+                // ROM bootloader doesn't emit unsolicited bytes. We send a SYNC
+                // and wait for any response byte. A SYNC is 36 bytes with SLIP
+                // framing; we'll crudely emit 0xC0 then flood 0x07 0x07 0x12 0x20
+                // followed by 32× 0x55, then listen.
+                baud = 115200; cfg = SERIAL_8N1; invert = false;
+                syncByte1 = 0x00; // any byte counts
+            } else {
+                baud = 420000; cfg = SERIAL_8N1; invert = false; syncByte1 = 0xC8;
+            }
+
+            Serial1.begin(baud, cfg, rxPin, txPin, invert);
+
+            if (signal == "elrs_rom") {
+                // emit SYNC framing
+                static const uint8_t syncPayload[] = {0x07, 0x07, 0x12, 0x20};
+                Serial1.write((uint8_t)0xC0);
+                Serial1.write((uint8_t)0x00);       // direction
+                Serial1.write((uint8_t)0x08);       // SYNC cmd
+                Serial1.write((uint8_t)36); Serial1.write((uint8_t)0);  // size LE
+                Serial1.write((uint8_t)0); Serial1.write((uint8_t)0);   // cksum x4 (ignored by ROM for SYNC)
+                Serial1.write((uint8_t)0); Serial1.write((uint8_t)0);
+                Serial1.write(syncPayload, sizeof(syncPayload));
+                for (int i = 0; i < 32; i++) Serial1.write((uint8_t)0x55);
+                Serial1.write((uint8_t)0xC0);
+                Serial1.flush();
+            }
+
+            uint32_t start = millis();
+            bool sawFirst = false;
+            while (millis() - start < waitMs) {
+                if (!Serial1.available()) { delay(2); continue; }
+                uint8_t b = (uint8_t)Serial1.read();
+                if (signal == "elrs_rom") {
+                    // Any non-0xC0-only byte = bootloader replied
+                    if (b != 0xC0) return true;
+                }
+                if (!needTwo) {
+                    if (b == syncByte1) return true;
+                } else {
+                    if (!sawFirst) { sawFirst = (b == syncByte1); }
+                    else if (b == syncByte2) return true;
+                    else sawFirst = (b == syncByte1);
+                }
+            }
+            return false;
+        };
+
+        bool origSwap = PinPort::swapped(PinPort::PORT_B);
+        unsigned long perSideMs = 1500;
+
+        bool okDirect = tryOnce(false, perSideMs);
+        bool okSwapped = false;
+        if (!okDirect) {
+            okSwapped = tryOnce(true, perSideMs);
+        }
+
+        // Leave the working swap (or revert to original if neither worked).
+        bool detected = okDirect || okSwapped;
+        bool finalSwap = okDirect ? false : (okSwapped ? true : origSwap);
+        PinPort::setSwapped(PinPort::PORT_B, finalSwap);
+        PinPort::release(PinPort::PORT_B);
+
+        JsonDocument d;
+        d["signal"]      = signal;
+        d["detected"]    = detected;
+        d["swap_used"]   = detected ? finalSwap : (bool)false;
+        d["swapped_now"] = PinPort::swapped(PinPort::PORT_B);
+        d["tx_pin"]      = PinPort::tx_pin(PinPort::PORT_B);
+        d["rx_pin"]      = PinPort::rx_pin(PinPort::PORT_B);
+        d["sda_pin"]     = PinPort::sda_pin(PinPort::PORT_B);
+        d["scl_pin"]     = PinPort::scl_pin(PinPort::PORT_B);
+        d["note"]        = detected
+            ? (finalSwap ? "signal found with pins SWAPPED — flag persisted to NVS"
+                         : "signal found with DIRECT pinout (no swap needed)")
+            : "no signal detected in either pinout — check GND/power, or signal type";
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     // ===== Setup wizard — HOST / BRIDGE + device preset =====

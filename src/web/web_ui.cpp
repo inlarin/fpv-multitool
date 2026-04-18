@@ -807,6 +807,22 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       <button class="success" onclick="setupApply()" id="setupApplyBtn" disabled>Apply</button>
       <span id="setupApplyMsg" style="margin-left:10px;color:#0f0"></span>
     </div>
+
+    <hr style="margin:14px 0;border:none;border-top:1px solid var(--border)">
+    <div class="row"><span class="label">Auto-detect wiring:</span></div>
+    <p style="color:#888;font-size:11px;margin:2px 0 8px">
+      Убедись что <b>GND</b> и <b>питание</b> подключены верно, а <b>RX/TX</b> или
+      <b>SDA/SCL</b> могут быть перепутаны — плата сама попробует обе раскладки
+      и запомнит ту, которая сработала.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:4px">
+      <button onclick="autodetectWiring('crsf')">📡 CRSF @ 420k</button>
+      <button onclick="autodetectWiring('sbus')">📡 SBUS</button>
+      <button onclick="autodetectWiring('ibus')">📡 iBus</button>
+      <button onclick="autodetectWiring('i2c')">🔋 I2C scan</button>
+      <button onclick="autodetectWiring('elrs_rom')">🔧 ELRS ROM</button>
+    </div>
+    <div id="autodetectMsg" style="margin-top:8px;font-size:12px;font-family:monospace;color:var(--text-dim)"></div>
     <hr style="margin:14px 0;border:none;border-top:1px solid var(--border)">
     <div class="row"><span class="label">Активно сейчас:</span>
       <span class="value" id="setupActive">-</span>
@@ -2253,6 +2269,28 @@ function setupApply() {
       document.getElementById('setupApplyMsg').textContent = 'Ошибка: ' + e;
     });
 }
+function autodetectWiring(signal) {
+  const el = document.getElementById('autodetectMsg');
+  el.textContent = 'Ищу сигнал ' + signal + '... (до 3 секунд)';
+  const fd = new FormData(); fd.append('signal', signal);
+  fetch('/api/port/autodetect', {method:'POST', body: fd})
+    .then(r => r.json())
+    .then(j => {
+      let msg = '';
+      if (j.detected) {
+        msg = '✓ ' + signal.toUpperCase() + ' найден';
+        msg += j.swap_used ? ' (пины SWAPPED — сохранил в NVS)'
+                           : ' (прямая раскладка, swap не нужен)';
+        msg += `. Пины: TX=GP${j.tx_pin} RX=GP${j.rx_pin} SDA=GP${j.sda_pin} SCL=GP${j.scl_pin}`;
+      } else {
+        msg = '✗ ' + signal.toUpperCase() + ' не найден. Проверь GND/питание и тип сигнала.';
+      }
+      el.textContent = msg;
+      setTimeout(setupRefresh, 300);
+    })
+    .catch(e => { el.textContent = 'Ошибка: ' + e; });
+}
+
 function setupRefresh() {
   fetch('/api/setup/status').then(r => r.json()).then(j => {
     const a = j.active, p = j.preferred;

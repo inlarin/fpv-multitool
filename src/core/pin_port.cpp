@@ -17,8 +17,24 @@ static PortState g_ports[PinPort::PORT_COUNT] = {
     { {"B", PORT_B_PIN_A, PORT_B_PIN_B, -1, -1}, PORT_IDLE, nullptr },
 };
 
-constexpr const char *NVS_NS  = "pinport";
-constexpr const char *NVS_KEY = "modeB";      // per-port key; only Port B for now
+constexpr const char *NVS_NS       = "pinport";
+constexpr const char *NVS_KEY      = "modeB";      // per-port key; only Port B for now
+constexpr const char *NVS_KEY_SWAP = "swapB";      // pin_a/pin_b swap flag
+
+// In-memory cache of the swap flag so every pin query doesn't hit NVS.
+// Loaded lazily on first call; written through setSwapped().
+static bool g_swapB = false;
+static bool g_swapBLoaded = false;
+
+static bool loadSwap() {
+    if (g_swapBLoaded) return g_swapB;
+    Preferences p;
+    p.begin(NVS_NS, true);
+    g_swapB = p.getBool(NVS_KEY_SWAP, false);
+    p.end();
+    g_swapBLoaded = true;
+    return g_swapB;
+}
 
 static void tearDown(int portId) {
     const PortState &p = g_ports[portId];
@@ -128,6 +144,7 @@ void PinPort::setPreferredMode(int /*portId*/, PortMode mode) {
 
 void PinPort::applyAtBoot() {
     PortMode pref = preferredMode(PORT_B);
+    loadSwap();  // warm cache
     if (pref == PORT_IDLE) {
         Serial.println("[PinPort] boot: Port B idle (no preferred mode)");
         return;
@@ -135,6 +152,54 @@ void PinPort::applyAtBoot() {
     // Force-release anything stale (shouldn't happen on boot, but safe)
     release(PORT_B);
     if (acquire(PORT_B, pref, "boot")) {
-        Serial.printf("[PinPort] boot: Port B pre-acquired as %s\n", modeName(pref));
+        Serial.printf("[PinPort] boot: Port B pre-acquired as %s (swap=%d)\n",
+                      modeName(pref), g_swapB);
     }
+}
+
+bool PinPort::swapped(int /*portId*/) {
+    return loadSwap();
+}
+
+void PinPort::setSwapped(int portId, bool swap) {
+    loadSwap();
+    if (g_swapB == swap) return;
+    g_swapB = swap;
+    Preferences p;
+    p.begin(NVS_NS, false);
+    p.putBool(NVS_KEY_SWAP, swap);
+    p.end();
+    Serial.printf("[PinPort] swap=%d persisted\n", (int)swap);
+
+    // If port is currently acquired, re-acquire so pins get re-applied.
+    PortMode cur = currentMode(portId);
+    if (cur != PORT_IDLE) {
+        const char *owner = currentOwner(portId);
+        // tearDown + re-acquire with same owner/mode (pin assignment
+        // is read fresh from the swap flag by the consumer on re-init).
+        release(portId);
+        acquire(portId, cur, owner ? owner : "swap-re-apply");
+    }
+}
+
+int PinPort::tx_pin(int portId) {
+    const PortDef *d = def(portId); if (!d) return -1;
+    return loadSwap() ? d->pin_b : d->pin_a;
+}
+int PinPort::rx_pin(int portId) {
+    const PortDef *d = def(portId); if (!d) return -1;
+    return loadSwap() ? d->pin_a : d->pin_b;
+}
+int PinPort::sda_pin(int portId) {
+    const PortDef *d = def(portId); if (!d) return -1;
+    return loadSwap() ? d->pin_b : d->pin_a;
+}
+int PinPort::scl_pin(int portId) {
+    const PortDef *d = def(portId); if (!d) return -1;
+    return loadSwap() ? d->pin_a : d->pin_b;
+}
+int PinPort::signal_pin(int portId) {
+    const PortDef *d = def(portId); if (!d) return -1;
+    // PWM has only one signal — always on pin_a regardless of swap.
+    return d->pin_a;
 }
