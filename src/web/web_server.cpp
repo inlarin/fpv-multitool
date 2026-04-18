@@ -1109,6 +1109,173 @@ void WebServer::start() {
         req->send(200, "text/plain", "stop requested");
     });
 
+    // =====================================================================
+    // MAC Response Brute — different angle: TI-standard flow is
+    //   writeWord(0x00, cmd); then readBlock(0x00) — reads cmd-specific data.
+    // For each MAC value 0x0000..0xFFFF: write cmd, read block back from 0x00,
+    // log ANY response whose content is non-default.
+    // Default response is what we get with MAC 0x0000 (reading current cmd latch).
+    // Any MAC returning DIFFERENT data = a real command that returns something.
+    // =====================================================================
+    static struct {
+        volatile bool     running;
+        volatile uint32_t pos;
+        uint32_t          from, to;
+        String            baselineHex;
+        String            hits;  // JSON entries
+        int               hitCount;
+    } s_macResp = {false, 0, 0, 0, "", "", 0};
+
+    s_server->on("/api/batt/clone/macresp_start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (s_macResp.running) { req->send(409, "text/plain", "already running"); return; }
+        s_macResp.from = req->hasParam("from", true) ? strtoul(req->getParam("from", true)->value().c_str(), nullptr, 0) : 0;
+        s_macResp.to   = req->hasParam("to", true)   ? strtoul(req->getParam("to", true)->value().c_str(), nullptr, 0)   : 0xFFFF;
+        s_macResp.hits = "";
+        s_macResp.hitCount = 0;
+        s_macResp.pos = s_macResp.from;
+        s_macResp.running = true;
+
+        xTaskCreate([](void *) {
+            // Capture baseline: write 0x0000, read back
+            uint8_t bBuf[33] = {0};
+            SMBus::writeWord(0x0B, 0x00, 0x0000);
+            vTaskDelay(pdMS_TO_TICKS(5));
+            int bLen = SMBus::readBlock(0x0B, 0x00, bBuf, 32);
+            char hex[128]; hex[0] = 0;
+            if (bLen > 0) {
+                for (int i = 0; i < bLen && i < 16; i++) sprintf(hex + strlen(hex), "%02X", bBuf[i]);
+            }
+            s_macResp.baselineHex = String(hex);
+
+            uint8_t cur[33];
+            for (uint32_t v = s_macResp.from; v <= s_macResp.to && s_macResp.running; v++) {
+                SMBus::writeWord(0x0B, 0x00, (uint16_t)v);
+                vTaskDelay(pdMS_TO_TICKS(3));
+                int n = SMBus::readBlock(0x0B, 0x00, cur, 32);
+
+                // PTL clone pattern: len = cmd_lo, byte[0] = cmd_hi echo,
+                // byte[1] = chaotic state, bytes 2+ = 0xFF filler.
+                // Only treat as INTERESTING hit if bytes 2+ contain non-0xFF data.
+                // (Means chip actually returned something meaningful for this cmd.)
+                bool isHit = false;
+                if (n >= 3) {
+                    for (int j = 2; j < n && j < 16; j++) {
+                        if (cur[j] != 0xFF) { isHit = true; break; }
+                    }
+                }
+
+                if (isHit && s_macResp.hitCount < 500) {
+                    char entry[128];
+                    int ofs = snprintf(entry, sizeof(entry), "%s{\"mac\":\"0x%04X\",\"len\":%d,\"hex\":\"",
+                                       s_macResp.hits.length() ? "," : "", (unsigned)v, n);
+                    for (int j = 0; j < n && j < 16 && ofs < (int)sizeof(entry)-3; j++) {
+                        ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "%02X", cur[j]);
+                    }
+                    snprintf(entry+ofs, sizeof(entry)-ofs, "\"}");
+                    s_macResp.hits += entry;
+                    s_macResp.hitCount++;
+                }
+                s_macResp.pos = v;
+                if ((v & 0x1F) == 0) vTaskDelay(pdMS_TO_TICKS(1));
+            }
+            s_macResp.running = false;
+            vTaskDelete(nullptr);
+        }, "macresp", 8192, nullptr, 1, nullptr);
+
+        req->send(202, "text/plain", "started — poll /api/batt/clone/macresp_status");
+    });
+
+    s_server->on("/api/batt/clone/macresp_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->printf("{\"running\":%s,\"pos\":\"0x%04X\",\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"hits\":%d,\"baseline\":\"%s\",\"entries\":[%s]}",
+                  s_macResp.running ? "true" : "false",
+                  (unsigned)s_macResp.pos, (unsigned)s_macResp.from, (unsigned)s_macResp.to,
+                  s_macResp.hitCount, s_macResp.baselineHex.c_str(), s_macResp.hits.c_str());
+        req->send(r);
+    });
+
+    s_server->on("/api/batt/clone/macresp_stop", HTTP_POST, [](AsyncWebServerRequest *req) {
+        s_macResp.running = false;
+        req->send(200, "text/plain", "stop requested");
+    });
+
+    // MAC Transition Brute — writes MAC_A, then MAC_B, reads between them.
+    // Hypothesis: clone's "publish cell voltage" response only appears after
+    // a TRANSITION between specific MAC values. Scan N combinations fast.
+    //   GET /api/batt/clone/trans_brute?macA=0x0000&from=0x0000&to=0x00FF
+    //       For each B in [from..to], sequence: write(A), read#1, write(B), read#2.
+    //       Report only responses where bytes 2+ are non-0xFF.
+    s_server->on("/api/batt/clone/trans_brute", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint16_t macA = req->hasParam("macA") ? (uint16_t)strtoul(req->getParam("macA")->value().c_str(), nullptr, 0) : 0x0000;
+        uint16_t from = req->hasParam("from") ? (uint16_t)strtoul(req->getParam("from")->value().c_str(), nullptr, 0) : 0x0100;
+        uint16_t to   = req->hasParam("to")   ? (uint16_t)strtoul(req->getParam("to")->value().c_str(), nullptr, 0)   : 0x01FF;
+        if ((uint32_t)to - from > 2048) to = from + 2048;
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->printf("{\"macA\":\"0x%04X\",\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"hits\":[", macA, from, to);
+        bool first = true;
+        int hitCount = 0;
+        uint8_t buf[32];
+        uint32_t lastYield = millis();
+        for (uint32_t v = from; v <= to; v++) {
+            // Set baseline with macA
+            SMBus::writeWord(0x0B, 0x00, macA);
+            delay(1);
+            // Now write v and immediately read
+            SMBus::writeWord(0x0B, 0x00, (uint16_t)v);
+            int n = SMBus::readBlock(0x0B, 0x00, buf, 32);
+            if (n >= 3) {
+                bool has = false;
+                for (int j = 2; j < n && j < 16; j++) if (buf[j] != 0xFF) { has = true; break; }
+                if (has) {
+                    if (!first) r->print(",");
+                    first = false;
+                    r->printf("{\"b\":\"0x%04X\",\"len\":%d,\"hex\":\"", (unsigned)v, n);
+                    for (int j = 0; j < n && j < 32; j++) r->printf("%02X", buf[j]);
+                    r->print("\"}");
+                    hitCount++;
+                }
+            }
+            if (millis() - lastYield > 50) { vTaskDelay(pdMS_TO_TICKS(3)); lastYield = millis(); }
+        }
+        r->printf("],\"count\":%d}", hitCount);
+        req->send(r);
+    });
+
+    // Read reg 0x00 rapidly N times onboard, return only unique non-echo responses.
+    //   GET /api/batt/clone/async_catch?count=1000&intervalUs=0
+    s_server->on("/api/batt/clone/async_catch", HTTP_GET, [](AsyncWebServerRequest *req) {
+        int count = req->hasParam("count") ? req->getParam("count")->value().toInt() : 1000;
+        if (count > 5000) count = 5000;
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("{\"unique\":[");
+        uint8_t buf[32];
+        String seen;  // csv of first 8-byte hex of unique responses
+        bool first = true;
+        uint32_t lastYield = millis();
+        for (int i = 0; i < count; i++) {
+            int n = SMBus::readBlock(0x0B, 0x00, buf, 32);
+            if (n >= 3) {
+                bool hasData = false;
+                for (int j = 2; j < n && j < 16; j++) if (buf[j] != 0xFF) { hasData = true; break; }
+                if (hasData) {
+                    char sig[33]; int sp = 0;
+                    for (int j = 0; j < 8 && j < n; j++) sp += snprintf(sig+sp, sizeof(sig)-sp, "%02X", buf[j]);
+                    if (seen.indexOf(sig) < 0) {
+                        seen += sig; seen += ",";
+                        if (!first) r->print(",");
+                        first = false;
+                        r->printf("{\"i\":%d,\"len\":%d,\"hex\":\"", i, n);
+                        for (int j = 0; j < n && j < 32; j++) r->printf("%02X", buf[j]);
+                        r->print("\"}");
+                    }
+                }
+            }
+            if (millis() - lastYield > 50) { vTaskDelay(pdMS_TO_TICKS(3)); lastYield = millis(); }
+        }
+        r->printf("],\"reads\":%d}", count);
+        req->send(r);
+    });
+
     // (Original synchronous brute retained for small ranges)
     // Brute-force writes to reg 0x00 (ManufacturerAccess) and monitor for
     // state changes in vendor regs.
