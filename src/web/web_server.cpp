@@ -2257,10 +2257,17 @@ void WebServer::start() {
 
     // ===== USB mode (descriptor selection) =====
     s_server->on("/api/usb/mode", HTTP_GET, [](AsyncWebServerRequest *req) {
-        UsbDescriptorMode m = UsbMode::load();
+        UsbDescriptorMode prefer = UsbMode::load();
+        UsbDescriptorMode act    = UsbMode::active();
         JsonDocument j;
-        j["current"]      = (int)m;
-        j["current_name"] = UsbMode::name(m);
+        j["active"]         = (int)act;
+        j["active_name"]    = UsbMode::name(act);
+        j["preferred"]      = (int)prefer;
+        j["preferred_name"] = UsbMode::name(prefer);
+        j["reboot_pending"] = (act != prefer);
+        // Back-compat: older UI builds still read `current` / `current_name`.
+        j["current"]        = (int)act;
+        j["current_name"]   = UsbMode::name(act);
         JsonArray arr = j["modes"].to<JsonArray>();
         for (int i = 0; i <= USB_MODE_USB2I2C; i++) {
             JsonObject o = arr.add<JsonObject>();

@@ -12,7 +12,8 @@ enum UsbDescriptorMode : uint8_t {
 };
 
 namespace UsbMode {
-    UsbDescriptorMode load();
+    UsbDescriptorMode load();                     // preferred mode from NVS
+    UsbDescriptorMode active();                   // mode actually applied at this boot
     void save(UsbDescriptorMode m);
     void applyAtBoot();                           // called from setup() before USB.begin()
     const char *name(UsbDescriptorMode m);

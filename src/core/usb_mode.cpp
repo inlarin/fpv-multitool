@@ -17,7 +17,11 @@ namespace {
 
     bool modeHasCDC(UsbDescriptorMode m) { return m == USB_MODE_CDC || m == USB_MODE_USB2TTL; }
     bool modeHasHID(UsbDescriptorMode m) { return m == USB_MODE_USB2I2C; }
+
+    UsbDescriptorMode s_activeMode = USB_MODE_CDC;  // what applyAtBoot() actually set up
 }
+
+UsbDescriptorMode UsbMode::active() { return s_activeMode; }
 
 UsbDescriptorMode UsbMode::load() {
     Preferences p;
@@ -54,6 +58,7 @@ extern void CP2112_attach();
 
 void UsbMode::applyAtBoot() {
     UsbDescriptorMode m = load();
+    s_activeMode = m;
     Serial.printf("[UsbMode] boot mode: %s (%u)\n", name(m), (unsigned)m);
 
     if (modeHasCDC(m)) g_cdc.begin();

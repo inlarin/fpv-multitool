@@ -12,7 +12,7 @@ __attribute__((unused)) static const char WEB_INDEX_HTML_RAW[] PROGMEM = R"HTML(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FPV MultiTool</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f0f1e'/><path d='M18 3 L7 18 h6 l-3 11 L25 13 h-6 l3-10z' fill='%230cf'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><style>.p{transform-origin:center;transform-box:fill-box;animation:s .35s linear infinite}.cw{animation-direction:reverse}.ring{transform-origin:16px 16px;animation:r 2.4s ease-out infinite}@keyframes s{to{transform:rotate(360deg)}}@keyframes r{0%{r:6;opacity:.8}100%{r:15;opacity:0}}</style></defs><rect width='32' height='32' rx='6' fill='%230f0f1e'/><circle class='ring' cx='16' cy='16' r='6' fill='none' stroke='%230cf' stroke-width='.6'/><path d='M16 16 L7 7 M16 16 L25 7 M16 16 L7 25 M16 16 L25 25' stroke='%23444' stroke-width='1.4' stroke-linecap='round'/><ellipse class='p' cx='7' cy='7' rx='4' ry='1' fill='%230cf' opacity='.85'/><ellipse class='p cw' cx='25' cy='7' rx='4' ry='1' fill='%23f0c' opacity='.85'/><ellipse class='p cw' cx='7' cy='25' rx='4' ry='1' fill='%23f0c' opacity='.85'/><ellipse class='p' cx='25' cy='25' rx='4' ry='1' fill='%230cf' opacity='.85'/><circle cx='16' cy='16' r='2.2' fill='%230f0f1e' stroke='%230cf' stroke-width='.8'/></svg>">
 <style>
 :root {
   /* Dark theme (default) */
@@ -838,17 +838,20 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   <div class="card">
     <h2>USB Mode</h2>
     <p style="color:#888;font-size:12px;margin:4px 0 10px">
-      Переключает USB-дескриптор платы. <b>Требует перезагрузки</b>.<br>
+      USB-дескриптор фиксируется при загрузке — любое переключение <b>требует перезагрузки</b>.<br>
       • <b>CDC</b> — стандартный USB Serial (прошивка, отладка).<br>
       • <b>USB2TTL</b> — CDC + прозрачный мост на аппаратный UART1.<br>
       • <b>USB2I2C</b> — эмулятор CP2112 HID (DJI Battery Killer, bqStudio, SMBus-инструменты).
     </p>
-    <div class="row"><span class="label">Текущий:</span><span class="value" id="usbCurrent">-</span></div>
+    <div class="row"><span class="label">Активен сейчас:</span><span class="value" id="usbActive">-</span></div>
+    <div class="row"><span class="label">Выбран в NVS:</span>
+      <span><span class="value" id="usbPreferred">-</span>
+      <span id="usbPendingBadge" class="status off" style="display:none;margin-left:8px">REBOOT PENDING</span></span>
+    </div>
     <div id="usbModes" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="usbRefresh()">Refresh</button>
-      <button onclick="usbApply()" id="usbApplyBtn">Save</button>
-      <button class="danger" onclick="usbReboot()">Save &amp; Reboot</button>
+      <button class="danger" onclick="usbApplyReboot()" id="usbApplyBtn">Применить и перезагрузить</button>
     </div>
     <div id="usbMsg" style="margin-top:10px;color:#0f0"></div>
     <p style="color:#f80;font-size:11px;margin:12px 0 0">
@@ -2125,7 +2128,10 @@ function clearWifi() {
 // ===== USB mode =====
 function usbRefresh() {
   fetch('/api/usb/mode').then(r=>r.json()).then(j=>{
-    document.getElementById('usbCurrent').textContent = j.current_name + ' (#' + j.current + ')';
+    document.getElementById('usbActive').textContent = j.active_name + ' (#' + j.active + ')';
+    document.getElementById('usbPreferred').textContent = j.preferred_name + ' (#' + j.preferred + ')';
+    const badge = document.getElementById('usbPendingBadge');
+    badge.style.display = j.reboot_pending ? 'inline-block' : 'none';
     const c = document.getElementById('usbModes');
     c.innerHTML = '';
     j.modes.forEach(m => {
@@ -2133,26 +2139,29 @@ function usbRefresh() {
       lab.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer';
       const r = document.createElement('input');
       r.type = 'radio'; r.name = 'usbmode'; r.value = m.id;
-      if (m.id === j.current) r.checked = true;
+      if (m.id === j.preferred) r.checked = true;
       lab.appendChild(r);
       lab.appendChild(document.createTextNode(m.name));
       c.appendChild(lab);
     });
-  });
+  }).catch(e => { document.getElementById('usbMsg').textContent = 'Ошибка: ' + e; });
 }
 function _usbSelectedMode() {
   const r = document.querySelector('input[name=usbmode]:checked');
   return r ? r.value : null;
 }
-function usbApply(done) {
+function usbApplyReboot() {
   const mode = _usbSelectedMode();
   if (mode === null) { document.getElementById('usbMsg').textContent = 'Выберите режим'; return; }
+  if (!confirm('Сохранить USB-режим в NVS и перезагрузить плату?')) return;
   const fd = new FormData(); fd.append('mode', mode);
-  fetch('/api/usb/mode', {method:'POST', body:fd})
-    .then(r => r.text()).then(t => {
-      document.getElementById('usbMsg').textContent = t;
-      if (done) done();
-    });
+  document.getElementById('usbMsg').textContent = 'Сохраняю...';
+  fetch('/api/usb/mode', {method:'POST', body:fd}).then(r=>r.text()).then(t=>{
+    document.getElementById('usbMsg').textContent = t + ' → reboot...';
+    return fetch('/api/usb/reboot', {method:'POST'});
+  }).then(() => {
+    document.getElementById('usbMsg').textContent = 'Плата перезагружается, через 5-7с refresh страницы.';
+  }).catch(e => { document.getElementById('usbMsg').textContent = 'Ошибка: ' + e; });
 }
 // ---------- Port B Mode Selector ----------
 function portBRefresh() {
@@ -2222,15 +2231,6 @@ function cpLogAutoToggle() {
   if (document.getElementById('cpLogAuto').checked) {
     cpLogTimer = setInterval(cpLogRefresh, 1000);
   }
-}
-
-function usbReboot() {
-  if (!confirm('Сохранить новый USB-режим и перезагрузить плату?')) return;
-  usbApply(() => {
-    fetch('/api/usb/reboot', {method:'POST'}).then(()=>{
-      document.getElementById('usbMsg').textContent = 'Перезагружается...';
-    });
-  });
 }
 
 // ===== OTA =====
