@@ -232,9 +232,21 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
         <button onclick="motor3DOff()">3D OFF</button>
       </div>
       <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
-      <div class="row"><span class="label">ESC configurator:</span></div>
-      <div class="warning" style="font-size:11px">WIP — only detects ESC presence via signal wire for now. Full BLHeli 4way passthrough + BLHeliSuite32 integration coming later.</div>
-      <button onclick="escProbe()" style="width:100%">Probe connected ESC</button>
+      <div class="row"><span class="label">ESC tools:</span></div>
+      <div class="warning" style="font-size:11px">
+        Подключи signal-wire ESC к GPIO 2, GND, 5V (BEC). Для BLHeli passthrough
+        запусти TCP server и в BLHeliSuite32 укажи <b>Interface: 4way TCP</b>,
+        адрес <span id="blhServerAddr" style="color:var(--accent)">&lt;board-IP&gt;</span>:4321.
+        OneWire bit-bang пока stub — часть команд возвращает 0xFF (нужны реальные тесты с железом).
+      </div>
+      <div class="grid">
+        <button onclick="escProbe()">ESC Probe</button>
+        <button onclick="blh4wayStart()" class="success">Start 4way</button>
+      </div>
+      <div class="grid">
+        <button onclick="blh4wayStatus()">Status</button>
+        <button onclick="blh4wayStop()" class="danger">Stop 4way</button>
+      </div>
       <div id="escResult" style="font-family:monospace;font-size:11px;margin-top:6px;color:var(--text-dim)"></div>
     </div>
   </div>
@@ -1702,6 +1714,29 @@ function battSnapshot() {
 }
 
 // === ESC ===
+function blh4wayStart() {
+  fetch('/api/esc/4way/start', {method:'POST'}).then(r=>r.text()).then(t=>{
+    const el = document.getElementById('escResult');
+    el.textContent = t + '\n\nBLHeliSuite32 setup:\n  Interface: 4way TCP\n  Host: ' + location.hostname + '\n  Port: 4321\n  Then Connect → ESC index 0';
+    el.style.color = 'var(--status-on)';
+    document.getElementById('blhServerAddr').textContent = location.hostname;
+  });
+}
+function blh4wayStop() {
+  fetch('/api/esc/4way/stop', {method:'POST'}).then(r=>r.text()).then(t=>{
+    document.getElementById('escResult').textContent = t;
+    document.getElementById('escResult').style.color = 'var(--text-dim)';
+  });
+}
+function blh4wayStatus() {
+  fetch('/api/esc/4way/status').then(r=>r.json()).then(j=>{
+    const el = document.getElementById('escResult');
+    el.textContent = 'running=' + j.running + ' connected=' + j.connected +
+      '\ncommands=' + j.commands + ' lastCmd=' + j.lastCmdName +
+      '\nESC read=' + j.escReadBytes + 'B write=' + j.escWriteBytes + 'B errors=' + j.escErrors;
+    el.style.color = 'var(--text)';
+  });
+}
 function escProbe() {
   const el = document.getElementById('escResult');
   el.textContent = 'Probing...';

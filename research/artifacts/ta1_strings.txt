@@ -1,0 +1,481 @@
+0x0105E1	hb8"h 8
+0x012865	#B9`J68
+0x013B0A	06`J@y
+0x01481F	JChq8/
+0x01486D	$@9nhd8Ihj8
+0x01489E	@9shi8Ihi8
+0x0148BB	JShi8k
+0x0148C3	Jshe8k
+0x0148E2	@9Ihv8
+0x0148FF	Juhi8Ihi8J
+0x014918	whu8Uhu8)
+0x014943	JThw8uhv8
+0x014967	9yht8Tht8
+0x01499F	Jyh`8`hw8.
+0x0149B3	J@hd8bhq8
+0x014A5E	@9hhf81
+0x014A72	@9Ohg8Rhi8jhh8
+0x014A89	hf8Thh81
+0x014A97	Jjhi8s
+0x014AB6	@9lhj8
+0x014AC2	@9Uhl8
+0x014AD3	JUhm8R
+0x014ADB	Johl8phm8R
+0x014B39	(@9lhj8
+0x014B4F	Jxhm8Whl8
+0x014B8D	hl8lhk8
+0x014BAD	hl8[hl8
+0x014BCF	JYh`86
+0x014BE7	Jyh`83
+0x014C07	Jyhl88
+0x014C13	J[hk85 
+0x014C25	h`8`hk8l
+0x014C37	J@hj89
+0x014C45	hh8dhg8
+0x014CD4	bj`8A 
+0x014D1A	a8aj 8
+0x016401	&@9B8#
+0x01C345	hb8$hb8
+0x01CCCC	5:86b;
+0x01D188	 <@9'$@9& @9%
+0x01D745	hd8&hd8
+0x0216C8	keymgr_inject_key
+0x0216E8	keymgr_add_user_key_by_id
+0x021A38	keymgr_get_prak
+0x021CD8	TA_KeyDerivation
+0x021CF8	fw_util_verify
+0x021D08	fw_util_load
+0x021D18	fw_util_verify_load2ion
+0x021D38	000000010002000301040400120012011202120308010806090109071100110518011802180328012803060006010901140101061301070101060105010313050401050026071101110224002401240224032404090502050402040304040405080228051302150201070506050305040505160231050306136601002405050105023000300130071204120528040702120612072800270027012702270327042705270627073002300330043005300622012202050725072503190128661306fw_image_verify
+0x021EC8	fw_image_load
+0x021ED8	fw_image_verify_load2ion
+0x021EF8	inject_key_from_keyrepo
+0x021F18	dji_fw_verify_init
+0x021F38	dji_fw_verify_init_ext
+0x021F58	dji_fw_verify_update
+0x021F78	dji_fw_verify_final
+0x0220D9	Qkkbal
+0x022397	-crypto_init
+0x0223A8	crypto_algo_mapping
+0x0223C8	dji_gen_key
+0x0223D8	dji_asym_init
+0x0223E8	dji_asym_verify
+0x0223F8	dji_cipher_init
+0x022408	dji_cipher_update
+0x022428	dji_cipher_final
+0x022448	dji_digest_init
+0x022458	dji_digest_final
+0x022478	dji_digest
+0x022488	keymgr_build_aes_handle
+0x0224A8	keymgr_build_rsa_handle
+0x0224C8	keymgr_build_key_handle
+0x0224E8	keymgr_add_key
+0x0224F8	generate_cmac
+0x022508	generate_cmac
+0x022518	se_key_derivate_prokey_group
+0x022538	se_key_derivate_romkey_group
+0x022558	se_keymgr_add_key_group
+0x022588	se_keymgr_remove_key_group
+0x0225A8	hex_dump
+0x0225B8	image_verify_common
+0x0225D8	chunk_load
+0x0225E8	image_verify_header
+0x022608	image_extract_payload
+0x022628	image_verify_digest
+0x022648	image_verify_checksum
+0x022668	image_verify_payload
+0x022688	image_decrypt_payload
+0x0226A8	dji_image_verify_init
+0x0226C8	dji_image_verify_update
+0x0226E8	dji_image_decrypt_scram_key
+0x022708	dji_image_verify_chunk
+0x022728	dji_image_verify_final
+0x022758	 "$&(*,.02468:<>@BDFHJLNPRTVXZ\^`bdfhjlnprtvxz|~
+0x0227D8	;9?=3175+)/-#!'%[Y_]SQWUKIOMCAGE{y
+0x0227FB	}sqwukiomcage
+0x022858	0365<?:9(+.-$'"!`cfelojix{~}twrqPSVU\_ZYHKNMDGBA
+0x022908	[X]^WTQRC@EFOLIJkhmngdabspuv
+0x022925	|yz;8=>7412# %&/,)*
+0x02294C	,':1XSNEt
+0x022968	{pmfW\AJ#(5>
+0x022998	FMP[ja|w
+0x0229C0	ensxIB_T
+0x0229D8	GLQZk`}v
+0x022A00	doryHC^U
+0x022A0C	-&;0YRODu~ch
+0x022A28	zqlgV]@K")4?
+0x022A4C	86$*p~lbHFTZ
+0x022A80	KEWYs}oa
+0x022A98	MCQ_u{ig=3!/
+0x022AA8	vxjdN@R\
+0x022AC8	AO]Sywek1?-#
+0x022AF8	ztfhBL^P
+0x022B1C	4:(&|r`nDJXV79+%
+0x022B4C	49.#her
+0x022B78	kfq|_REH
+0x022B84	7:- m`wzYTCN
+0x022BBC	2?(%nctyZW@M
+0x022BDC	>3$)boxuV[LAal{vUXOB
+0x022C18	gj}pS^ID
+0x022C2C	85"/di~sP]JG
+0x022C4C	$-6?HAZSle~w
+0x022C70	szahW^EL
+0x022C8A	dmR[@I>7,%
+0x022CA8	MD_Vi`{r
+0x022CD8	|ungXQJC4=&/
+0x022CF8	GNU\cjqx
+0x022D1C	.'<5BKPYfot}
+0x022D40	ypkb]TOF
+0x022D7B	TEE_Malloc
+0x0234A7	(C0AR0
+0x0239F7	+OY HAH?
+0x023AE0	TEE_CryptoCell_GetLCS failure res:0x%x
+0x023B08	se_key_derivation_group failure res:0x%x
+0x023B32	keymgr_get_prak failure res:0x%x
+0x023B54	keymgr_get_romrrpk failure res:0x%x
+0x023B79	keymgr_get_romrrak failure res:0x%x
+0x023B9E	param_types = 0x%x, exp_types = 0x%x
+0x023BC4	TA_KeyDerivation failure res:0x%x
+0x023BE7	failed to invalidate image cache before do verify
+0x023C1A	chunk num %d is not supported yet.
+0x023C3E	too many chunks (%d) for parsing
+0x023C60	failed to verify the image
+0x023C7C	TEE_CacheFlush failed(0x%x)
+0x023C99	failed to invalidate image cache before do load
+0x023CCA	cnnmodel
+0x023CD3	fail to get key size(name:%s, ver:%d) from keyrepo with error code 0x%x
+0x023D1C	fail to alloc data(size = %d)
+0x023D3B	fail to read key(name:%s, ver:%d) from keyrepo with error code 0x%x
+0x023D80	the type(%d) of key(name:%s, ver:%d) is not right(wanted: %d)
+0x023DBF	dji_image_verify_init failed with res = %#x
+0x023DEC	dji_init_state_check failed
+0x023E09	inject_key_from_keyrepo(%s_%d) failed
+0x023E30	param_types = 0x%x, exp_param_types= %#x
+0x023E5A	dji_image_verify_update fw load update failed(%#x)
+0x023E8E	current state %d not expected for update
+0x023EB8	param_types = 0x%x, exp_types = %#x
+0x023EDD	dji fw load finalize failed(%#x)
+0x023EFF	current state %d not expected for finalize
+0x023F2B	crypto is NULL
+0x023F3B	OP-TEE only support decrypt
+0x023F58	algo 0x%x not support
+0x023F6F	algo 0x%x map to tee failed
+0x023F8C	TEE_AllocateTransientObject failed
+0x023FB0	TEE_PopulateTransientObject failed
+0x023FD4	TEE_AllocateOperation failed
+0x023FF2	TEE_SetOperationKey failed
+0x02400E	input signature is invalid
+0x024029	TEE_CipherUpdate out buf is too short
+0x024050	TEE_AllocateOperation %u, MODE DIGEST failed
+0x02407E	TEE_DigestDoFinal hash len too small
+0x0240A4	keymgr_build_aes_handle (0x%x) failed
+0x0240CB	fail to alloc modules(size = %d bytes)
+0x0240F3	keymgr_build_rsa_handle (0x%x) failed
+0x02411A	key type(0x%x) not supported
+0x024138	no key slot for id=0x%08x
+0x024153	%s: unsupported id (0x%x)
+0x02416E	keymgr_inject_key (0x%x) failed
+0x02418F	keymgr add key(0x%x) failed
+0x0241AC	TEE_PRAK_Get failed, res 0x%x
+0x0241CB	[%s:%d]TEE_AllocateOperation Error res 0x%x 
+0x0241F9	[%s:%d]TEE_AllocateTransientObject Error res 0x%x 
+0x02422D	[%s:%d]TEE_PopulateTransientObject Error res 0x%x 
+0x024261	[%s:%d]TEE_SetOperationKey Error res 0x%x 
+0x02428D	[%s:%d]res 0x%x 
+0x02429F	TEE_CryptoCell_KeyDerivation fail res:0x%x
+0x0242CB	PRF_KeyDerivation fail res:0x%x
+0x0242EC	key derive mode %d not supported
+0x02430E	IMAGE ENC KEY
+0x02431C	IMAGE ENC KEY V2
+0x024333	0x%-4x
+0x02433D	magic does't match: 0x%x(img) != 0x%x
+0x024364	image head
+0x02436F	too short image size %zd
+0x024389	type does't match: %d != %d(img)
+0x0243AB	name does't match: %s != %s(img)
+0x0243CD	header auth_alg is not right(%d)
+0x0243EF	header auth_alg(%d) and the signature size(%d) are not matching
+0x024430	can NOT support ciphertext verification
+0x024459	can NOT support plaintext verification
+0x024481	TEE_DspChunkLoad failed(0x%x)
+0x0244A0	failed to get auth_key(0x%08x)
+0x0244C0	Not support ROM Key
+0x0244D5	failed to calculate sha256
+0x0244F1	failed to auth the image
+0x02450B	image head digest
+0x02451D	failed to initialize cipher
+0x02453A	failed to calculate hash
+0x024554	failed: payload digest is not consistent
+0x02457E	payload digest
+0x02458D	checksum verify failed
+0x0245A5	failed to get enc_key for 0x%08x
+0x0245C7	failed to decrypt scramble key
+0x0245E7	failed to get scram key
+0x024600	failed to verify payload digest
+0x024621	failed to decrypt image
+0x02463A	failed to verify payload plaintext checksum
+0x024667	failed to decrypt & load payload
+0x024689	failed to load clear payload
+0x0246A7	image name or image name len illegal
+0x0246CD	input must be %d aligned
+0x0246E7	chunk num %d is not supported now.
+0x02470B	image size is too short, it(%d) should be lager then %d
+0x024744	image size size too short image size = %#x, min(dji image header size + signature size) = %#x
+0x0247A3	Don't support decrypt this image NOW ...
+0x0247CD	image verify common failed with res = %#x
+0x0247F8	image verify header failed
+0x024814	failed to decrypt scram key
+0x024831	dji_digest_init failed
+0x024849	failed to get key_data_t format scram key
+0x024874	dji_cipher_init failed
+0x02488C	keymgr failed to free key_data_t format scram key
+0x0248BF	too short lenth to hold payload
+0x0248E0	dji_cipher_update error ...
+0x0248FD	failed to verify image chunk
+0x02491B	dji_digest_final failed
+0x024934	dji_cipher_final failed
+0x02494D	failed to check image checksum
+0x02496D	failed to check payload plaintext checksum
+0x024999	gpd.ta.singleInstance
+0x0249AF	gpd.ta.multiSession
+0x0249C3	gpd.ta.instanceKeepAlive
+0x0249DC	gpd.ta.dataSize
+0x0249EC	gpd.ta.stackSize
+0x0249FD	gpd.ta.version
+0x024A0C	Undefined version
+0x024A1E	gpd.ta.description
+0x024A31	Undefined description
+0x024A47	gp.ta.description
+0x024A59	FW UTIL TA
+0x024A64	gp.ta.version
+0x024A72	KRKEkeyrepo_key_process
+0x024A8A	keyrepo_read_pack_version
+0x024AA4	keyrepo_read_pack_anti
+0x024ABB	keyrepo_read_pack_product
+0x024AD5	get_key_latest_version
+0x024AEC	keyrepo_get_key_length
+0x024B03	keyrepo_read_key
+0x024B14	keyrepo_update_pack
+0x024B28	keyrepo_clear_unrd
+0x024B3B	keyrepo_update_each_key
+0x024B53	keyrepo_check_each_key
+0x024B6A	ROOT KEY
+0x024B73	TEE_AllocateOperation Error, res is 0x%x
+0x024B9D	TEE_AllocateTransientObject Error, res is 0x%x
+0x024BCD	TEE_PopulateTransientObject Error, res is 0x%x
+0x024BFD	TEE_SetOperationKey Error, res is 0x%x
+0x024C25	TEE_CipherDoFinal Error, res is 0x%x
+0x024C4B	TEE_UNRD_OPEN failed(0x%x)
+0x024C67	key_repo
+0x024C70	TEE_UNRD_Alloc_Handle failed(0x%x)
+0x024C94	keyrepo_get_value failed(0x%x)
+0x024CB4	antirollback
+0x024CC1	product
+0x024CC9	TEE_UNRD_Get_Binary length failed(0x%x)
+0x024CF2	TEE_UNRD_Get_Binary failed(0x%x)
+0x024D14	get_unrd_item_count failed
+0x024D30	calloc key_list_in_unrd failed
+0x024D50	get_all_unrd_tags failed
+0x024D6A	get_key_latest_version of key %s failed(0x%x)
+0x024D99	%s-V%02d
+0x024DA2	keyrepo_decry failed(0x%x)
+0x024DBE	keyrepo read key crc error
+0x024DDA	keyrepo_update_pack but image is NULL
+0x024E01	name length out of size
+0x024E1A	device name mismatch, pakage is %s, device is %s
+0x024E4C	read keyrepo anti fail(0x%x)
+0x024E6B	read anti version in unrd  %d
+0x024E8A	anti in pakage %d
+0x024E9D	anti roolback did not allow to update
+0x024EC4	keyrepo is not full update mode
+0x024EE5	del keyrepo unrd tag:%s
+0x024EFE	keyrepo_clear_unrd failed
+0x024F19	current_offset out of size
+0x024F35	free all_key_data
+0x024F48	malloc all_key_data failed
+0x024F64	keyrepo_encry failed(0x%x)
+0x024F80	TEE_UNRD_Set_Binary failed(0x%x)
+0x024FA2	TEE_UNRD_Set_value failed(0x%x)
+0x024FC3	version set to %d
+0x024FD5	keyrepo_set_value failed(0x%x)
+0x024FF5	TEE_UNRD_Flush failed(0x%x)
+0x025012	in check key name length %d out of size
+0x02503B	in check key key version %d out of size
+0x025064	get key %s-V%02d length failed(0x%x)
+0x02508A	in check key malloc keyinfo_with_data failed
+0x0250B7	in check key %s-V%02d failed(0x%x)
+0x0250DB	check each key after flush failed(0x%x)
+0x025104	Invalid hint %#x
+0x025115	TEE_UNRD_Open
+0x025123	TEE_UNRD_Close
+0x025132	TEE_UNRD_Alloc_Handle
+0x025148	TEE_UNRD_Release_Handle
+0x025160	TEE_UNRD_Set_Binary
+0x025174	TEE_UNRD_Get_Binary_Length
+0x02518F	TEE_UNRD_Get_Binary
+0x0251A3	TEE_UNRD_Get_All_Tag
+0x0251B8	TEE_UNRD_Get_Item_Count
+0x0251D0	TEE_UNRD_Flush
+0x0251DF	TEE_UNRD_Delete
+0x0251EF	Fail to call TEE_UNRD_Open, res 0x%x 
+0x025215	Fail to call TEE_UNRD_Close, res 0x%x 
+0x02523C	Fail to call TEE_UNRD_Alloc_Handle, res 0x%x 
+0x02526A	Fail to call TEE_UNRD_Release_Handle, res 0x%x 
+0x02529A	Fail to call TEE_UNRD_Set_Binary, res 0x%x 
+0x0252C6	Fail to call TEE_UNRD_Get_Binary, res 0x%x 
+0x0252F2	Fail to call TEE_UNRD_Get_All_Tag, res 0x%x 
+0x02531F	Fail to call TEE_UNRD_Get_Item_Count, res 0x%x 
+0x02534F	Fail to call TEE_UNRD_Flush, res 0x%x 
+0x025376	Fail to call TEE_UNRD_Delete, res 0x%x 
+0x02539E	TEE_PRAK_Get
+0x0253AB	Fail to call TEE_PRAK_Get, res 0x%x 
+0x0253D0	PANIC: %s
+0x0253DB	Divisor is zero
+0x0253EB	Modulus is too short
+0x025400	too small modulus or trying to invert zero
+0x02542B	create_free_block
+0x025459	bstats
+0x025460	raw_memalign
+0x02546D	brel_before
+0x025479	brel_after
+0x025484	malloc_add_pool
+0x025494	bget_buf_size
+0x0254A2	bpool_foreach_pool
+0x0254B5	lib/libutils/isoc/bget_malloc.c
+0x0254D5	BH((char *)bf + size) == bn
+0x0254F1	bn->bsize < 0
+0x0254FF	bn->prevfree == 0
+0x025511	poolset->freelist.ql.blink->ql.flink == &poolset->freelist
+0x02554C	poolset->freelist.ql.flink->ql.blink == &poolset->freelist
+0x025587	lib/libutils/isoc/bget.c
+0x0255A0	bn->prevfree == b->bh.bsize
+0x0255BC	ba->prevfree == b->bh.bsize
+0x0255D8	b->ql.blink->ql.flink == b
+0x0255F3	b->ql.flink->ql.blink == b
+0x02560E	rsize >= size
+0x02561C	buf != NULL
+0x025628	b->bh.bsize < 0
+0x025638	BH((char *) b - b->bh.bsize)->prevfree == 0
+0x025664	poolset->totalloc >= 0
+0x02567B	BH((char *) b - b->bh.prevfree)->bsize == b->bh.prevfree
+0x0256B4	BH((char *) bn + bn->bh.bsize)->prevfree == bn->bh.bsize
+0x0256ED	bn->ql.blink->ql.flink == bn
+0x02570A	bn->ql.flink->ql.blink == bn
+0x025727	bn->bh.bsize < 0
+0x025738	osize > 0
+0x025742	len - sizeof(struct bhead) <= -((bufsize) ESent + 1)
+0x025777	b->bh.bsize > 0
+0x025787	(p + hdr_size + ftr_size + size) <= (b + s)
+0x0257B3	orig_buf < new_buf
+0x0257C6	size >= (SizeQ + sizeof(struct bhead))
+0x0257ED	bfp->bh.bsize == bf->bh.prevfree
+0x02580E	new_size <= -b->bsize
+0x025824	bfn->bh.prevfree == 0
+0x02583A	bnn->prevfree == bfn->bh.bsize
+0x025859	bfn->ql.blink->ql.flink == bfn
+0x025878	bfn->ql.flink->ql.blink == bfn
+0x025897	start < end
+0x0258A5	get_sn_from_rpmb
+0x0258B6	tee_utils_get_sn
+0x0258C7	get_unrd_item_count
+0x0258DB	get_all_unrd_tags
+0x0258F2	[%s] fail to get %s's binary length
+0x025917	[%s] sn_len is too big
+0x02592F	[%s] fail to get %s's binary with length = %d
+0x02595E	[%s] there is not enough memory
+0x02597F	BoardSN
+0x025987	ProductSN
+0x025991	[%s] sn_type(%d) doesn't support
+0x0259B3	[%s] sn_info length is less than offset
+0x0259DC	[%s] sn is out of memory
+0x0259F6	[%s:%d] error: invalid parameter
+0x025A18	[%s:%d] error: %d
+0x025A2B	0123456789ABCDEF
+0x025A3C	0123456789abcdef
+0x025A4D	(null)
+0x025A54	%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x
+0x025A85	UEIDF%c/
+0x025A9D	%s:%d 
+0x025AA4	mempool_alloc_pool
+0x025AB7	lib/libutils/ext/mempool.c
+0x025AD2	!((vaddr_t)data & (POOL_ALIGN - 1))
+0x025AF6	mpa_set_str
+0x025B02	mpa_get_str
+0x025B0E	data len (%d) > max size (%d)
+0x025B2C	binary buffer (%d) > alloced buffer (%d)
+0x025B55	lib/libmpa/mpa_io.c
+0x025B6D	assertion '%s' failed at %s:%d in %s()
+0x026281	__stack_chk_guard
+0x026293	ta_heap_size
+0x0262A0	const_one
+0x0262AA	trace_level
+0x0262B6	utee_authenc_update_payload
+0x0262D2	trace_ext_prefix
+0x0262E3	ta_heap
+0x0262EB	ta_param_types
+0x0262FA	utee_cipher_update
+0x02630D	key_initialized
+0x02631D	Const_1_LShift_Base
+0x026331	ta_params
+0x02633B	ta_head
+0x027394	a0uJHie
+0x0279C1	;[B7-z
+0x027A8F	:/ERkH
+0x027F47	*B;M@sK
+0x0280C1	W_o,cA9
+0x028227	Pc/Ix>
+0x0292F1	w :OV6
+0x029BA3	.(%'^}F
+0x029EA0	_&P]nV
+0x02A000	B;M@sK
+0x02A0F0	A9,c_o
+0x02A2D1	w :OV6
+0x02A3A4	58N7Vm
+0x02B2E9	w :OV6
+0x02B3F7	h58N7Z
+0x02B419	@,&Hie
+0x02BE29	n9#VO/
+0x02BF60	B;M@sK
+0x02C0D8	9Ac,o_W
+0x02C1C5	.8vy]9
+0x02C1F3	#?3+4:
+0x02C261	6VO: w
+0x02C3EB	Z7N85`
+0x02C409	eiH&,@
+0x02C525	MeHNOy
+0x02CBD6	XyeZq 
+0x02D062	o_c,9A
+0x02D545	+n?v<R
+0x02DB75	uyXZe q
+0x02DD71	n9#VO/
+0x02E000	;B@MKs/
+0x02EB37	DJUMA]
+0x02EE58	&_]PVn2
+0x02F062	o_c,9A
+0x02F197	:4+3?#
+0x02F1C5	9]yv8.
+0x02F359	@,&Hie
+0x02F3B7	h58N7Z
+0x02FDD1	n9#VO/
+0x02FE78	&_]PVn2
+0x02FF60	;B@MKs/
+0x030217	oa~fjv
+0x030A65	FpqwZr
+0x030B10	V/YTg_
+0x030B93	`|phwy
+0x030DB1	BJz9vT,
+0x030F71	ma@.$H
+0x030F93	R?F0=`
+0x031050	4MOBD| 
+0x031150	CNNMCNND
+0x031334	GCC: (GNU) 4.9.x 20150123 (prerelease)
+0x03135B	GCC: (Linaro GCC 7.2-2017.11) 7.2.1 20171011
+0x031389	.shstrtab
+0x031393	.ta_head
+0x0313A2	.rodata
+0x0313AA	.dynsym
+0x0313B2	.rela.dyn
+0x0313BC	.rela.got
+0x0313C6	.dynamic
+0x0313CF	.dynstr
+0x0313E8	.comment

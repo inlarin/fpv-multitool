@@ -8,6 +8,7 @@
 #include "battery/smbus.h"
 #include "motor/dshot.h"
 #include "motor/blheli_onewire.h"
+#include "blheli/blheli_4way.h"
 #include "servo/servo_pwm.h"
 #include "bridge/esp_rom_flasher.h"
 #include "bridge/firmware_unpack.h"
@@ -2293,6 +2294,29 @@ void WebServer::start() {
         JsonArray devs = d["devices"].to<JsonArray>();
         for (int i = 0; i < r.devCount && i < 8; i++)
             devs.add(String("0x") + String(r.devAddrs[i], HEX));
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // ===== BLHeli 4way passthrough (TCP server on :4321) =====
+    s_server->on("/api/esc/4way/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        BLHeli4Way::start(SIGNAL_OUT);
+        req->send(200, "text/plain", "4way server started on port 4321");
+    });
+    s_server->on("/api/esc/4way/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
+        BLHeli4Way::stop();
+        req->send(200, "text/plain", "stopped");
+    });
+    s_server->on("/api/esc/4way/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        const auto &st = BLHeli4Way::status();
+        JsonDocument d;
+        d["running"]         = BLHeli4Way::isRunning();
+        d["connected"]       = st.clientConnected;
+        d["commands"]        = st.commandsHandled;
+        d["escReadBytes"]    = st.escReadBytes;
+        d["escWriteBytes"]   = st.escWriteBytes;
+        d["escErrors"]       = st.escErrors;
+        d["lastCmdName"]     = st.lastCmdName;
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });

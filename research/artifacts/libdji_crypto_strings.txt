@@ -1,0 +1,500 @@
+-----BEGIN PRIVATE KEY-----
+-----BEGIN PUBLIC KEY-----
+-----BEGIN RSA PRIVATE KEY-----
+-----BEGIN RSA PUBLIC KEY-----
+-----END PRIVATE KEY-----
+-----END PUBLIC KEY-----
+-----END RSA PRIVATE KEY-----
+-----END RSA PUBLIC KEY-----
+/tmp/cert_%p_%d.cert.tmp
+AES-128-CBC
+AES-128-CFB128
+AES-128-CTR
+AES-128-ECB
+AES-128-OFB
+AES-128-XTS
+AES-192-CBC
+AES-192-CFB128
+AES-192-CTR
+AES-192-ECB
+AES-192-OFB
+AES-256-CBC
+AES-256-CFB128
+AES-256-CTR
+AES-256-ECB
+AES-256-OFB
+AES-256-XTS
+AES_cbc_encrypt
+AES_decrypt
+AES_encrypt
+AES_set_decrypt_key
+AES_set_encrypt_key
+DEK-Info: AES-
+DEK-Info: AES-128-CBC,
+DEK-Info: AES-192-CBC,
+DEK-Info: AES-256-CBC,
+EC key for ECDH
+Generic EC key
+HMAC-SHA-1
+HMAC-SHA-224
+HMAC-SHA-256
+HMAC-SHA-384
+HMAC-SHA-512
+RSA with MD5
+RSA with SHA-224
+RSA with SHA-256
+RSA with SHA-384
+RSA with SHA-512
+RSA with SHA1
+RSASSA-PSS
+RSA_verify
+SECP256r1_b
+SECP256r1_n
+SECP256r1_p
+SHA256_final
+SHA256_hash
+SHA256_init
+SHA256_update
+SHA_final
+SHA_hash
+SHA_init
+SHA_update
+SecureDebug
+[SEC DC] bad parameter resp_size
+[SEC DC] currently only support version 0, but request version is %d
+[SEC DC] currently we only support version 0, your input version %d
+[SEC DC] delete logs failed
+[SEC DC] device type doesn't match, input device type %d
+[SEC DC] fail to get notice host
+[SEC DC] fail to make directory.
+[SEC DC] fail to parse dir.
+[SEC DC] fail to set operations
+[SEC DC] failed to clean
+[SEC DC] failed to get serial number
+[SEC DC] failed to load public key
+[SEC DC] failed to open %s, reason = %s
+[SEC DC] failed to verify the signature
+[SEC DC] failed to write %s, result = %d
+[SEC DC] flag [0x%x] is invailed
+[SEC DC] getting latest record return err
+[SEC DC] getting latest record return success
+[SEC DC] input product sn isn't same as local sn
+[SEC DC] invalid app operations
+[SEC DC] message length is not right
+[SEC DC] record compliance failed
+[SEC DC] sec_cmd_dc_notice failed
+[SEC DC] signature verify failed
+[SEC DC] the record path is too long.
+[SEC DC] there is no data compliance record, errno = %d, reason = %s on file %s
+[SEC DC] there is no enough data to be read, read bytes = %d
+[SEC DC] time in request isn't newer than record
+[SEC DC] we have received the same command
+[SEC DC] wrong message length
+[SEC DEV] fail to wait usb to be ready
+[SEC DEV] set usb's property from %s to rndis,mass_storage,bulk,acm,adb
+[SEC DP] buffer is shorter than expected
+[SEC DP] generate flyctrl message of func_id [%d] failed
+[SEC DP] illegal subcmd 0x%x
+[SEC DP] invalid app operations
+[SEC DP] password length is not expected
+[SEC DP] there is no registed master app operations
+[SEC DP] there is no registed slave app operations
+[SEC DUSS] sending message failed, host=%x, msg_id=%x, subcmd=%x, result=%d 
+[SEC DUSS] sending message success, but ack error,                     host=%x, msg_id=%x, subcmd=%x, ack=%x 
+[SEC activate] buffer is shorter than expected
+[SEC activate] check nonce failed in onetime auth
+[SEC activate] get internal inactive message failed
+[SEC activate] illegal subcmd 0x%x
+[SEC activate] invalid app operations
+[SEC activate] invalid trial time control type 0x[%x]
+[SEC activate] no active verify handler
+[SEC activate] received an imcompatialbe device sn
+[SEC activate] received an imcompatialbe device sn in onetime auth
+[SEC activate] received device sn not default product sn, try agent
+[SEC activate] there is no registed app operations
+[SEC activate] verify active message of module [%d] failed
+[SEC activate] verify internal inactive message failed
+[SEC activate] verify onetime auth message failed
+[SEC auth] a1006 authentication failed with 0x%x
+[SEC auth] a1006 get cipher_0 failed with 0x%x
+[SEC auth] a1006 get cipher_1 failed with 0x%x
+[SEC auth] a1006 write cipher_0 failed with 0x%x
+[SEC auth] a1006 write cipher_1 failed with 0x%x
+[SEC auth] auth response failed with 0x%02x
+[SEC auth] get certificate failed with 0x%02x
+[SEC auth] verify cert failed with 0x%02x
+[SEC auth] verify response failed with 0x%02x
+[SEC care_cmd]Generate djicare mac failed:%x
+[SEC care_cmd]Genrate djicare mac msg fail:%x
+[SEC care_cmd]Get device_sn from CMDLINE is error:%x
+[SEC care_cmd]Start generate bind mac msg
+[SEC care_cmd]Start generate remove bind mac msg
+[SEC care_cmd]The pointer is NULL
+[SEC cert] %s is not exist
+[SEC cert] cert
+[SEC cert] cert' pathes are not set
+[SEC cert] cert(%d) has been inited
+[SEC cert] cert(%d) hasn't been inited
+[SEC cert] cert(%d) should has a parent
+[SEC cert] cert(%d)'s parent(%d) doesn't set
+[SEC cert] cert(%d)'s path are not set
+[SEC cert] cert(0x%x) is not exist
+[SEC cert] cert(0x%x) is not ready
+[SEC cert] cert(0x%x)'s path is too long, it should be shorter than %d
+[SEC cert] check in cert(%d) doesn't implement
+[SEC cert] current cert type doesn't support
+[SEC cert] fail to alloc memory
+[SEC cert] fail to calc %s's md5 with error code 0x%x
+[SEC cert] fail to change cert(%d) from der to pem with error code(0x%x)
+[SEC cert] fail to deinit cert(%d) with error code 0x%x
+[SEC cert] fail to do %d' rsa sign with error code 0x%x
+[SEC cert] fail to find %s while cert(%d) init
+[SEC cert] fail to find child(%d) in cert(%d)
+[SEC cert] fail to init cert(%d) with error code 0x%x
+[SEC cert] fail to init child(%d) in cert(%d)
+[SEC cert] fail to parse cert(%d) with error code(0x%x)
+[SEC cert] get_md5 in cert(%d) doesn't implement
+[SEC cert] get_path in cert(%d) doesn't implement
+[SEC cert] input cert is null
+[SEC cert] it's illega to check cert(0x%x)
+[SEC cert] req_rsa_sign in cert(%d) doesn't implement
+[SEC cert] set cert(%d)'s state from %d to %d
+[SEC cert] try to init cert(%d), state = %d
+[SEC comm network] action(0x%04x) received
+[SEC comm network] cert(0x%x) check result is 0x%02x
+[SEC comm network] cert(0x%x) md5 req retcode is 0x%02x
+[SEC comm network] cert(0x%x) path req retcode is 0x%02x
+[SEC comm network] cert(0x%x) sign req ret code is 0x%02x
+[SEC comm network] device secret in device secret is %s
+[SEC comm network] fail to PEM_write_X509_fp
+[SEC comm network] fail to d2i_X509_fp
+[SEC comm network] fail to find cert(%d) in certs
+[SEC comm network] fail to get device secret from ta with error code 0x%x
+[SEC comm network] fail to open %s or %s
+[SEC comm network] nonce in device secret is %s
+[SEC comm network] output buffer is not enough
+[SEC comm network] output buffer is not enouth(%d)
+[SEC comm network] output len(%d) is not big enough
+[SEC comm network] unsupport action(0x%04x)
+[SEC comm network] unsupport sign type(0x%x
+[SEC comm] input length(%d) is shorter than the size need
+[SEC comm] unsupport subcmd(0x%02x)
+[SEC debug] check internal request passed
+[SEC debug] input length(%d) is shorter than needed
+[SEC debug] input length(%d) is shorter than the size need
+[SEC debug] internal request response's length(%d) is too short
+[SEC debug] internal request response's retcode is 0x%x
+[SEC debug] sec_tee_amt_debug_verify_internal_msg failed with error code 0x%x
+[SEC debug] sec_tee_amt_gen_internal_msg failed with error code 0x%x
+[SEC debug] sec_tee_amt_get_secure_debug_count failed
+[SEC debug] ssd_id = %d, type = %d
+[SEC osal] get active state from rpmb failed res is 0x%x
+[SEC rpmb clear] data req invalid input message len
+[SEC rpmb clear] data req output buffer is shorter than expected
+[SEC rpmb clear] get rpmb clear message failed with error: %08x
+[SEC rpmb clear] illegal type_cmd_id 0x%x
+[SEC rpmb clear] invalid app operations
+[SEC rpmb clear] verify req invalid input message len
+[SEC rpmb clear] verify req output buffer is shorter than expected
+[SEC rpmb clear] verify rpmb clear message failed with error: %08x
+[SEC ssd] illegal subcmd 0x%x
+[SEC ssd] input length(%d) is shorter than needed
+[SEC ssd] ssd_id = %d, type = %d
+a1006_auth_challenge
+a1006_auth_get_certification
+a1006_auth_response
+a1006_auth_verify
+a1006_bind_device
+a1006_duss_i2c_device_deinit
+a1006_duss_i2c_device_init
+a1006_duss_i2c_device_init failed with 0x%x
+a1006_duss_open_i2c_device
+a1006_duss_read_i2c_data
+a1006_duss_write_i2c_data
+a1006_get_cipher
+a1006_lock_device
+a1006_oneway_authentication
+a1006_oneway_verify failed!
+a1006_set_cipher
+a1006_set_cipher %d
+a1006_update_cipher_1
+a1006_verify_device
+a100x_decompressCert
+a100x_generateChallenge
+a100x_generate_v1_challenge
+a100x_host_deinit
+a100x_host_init
+a100x_host_readData
+a100x_host_status
+a100x_host_writeData
+a100x_host_writeData_2
+a100x_init_i2c_device
+a100x_v1_challenge
+a100x_v1_verify_response
+a100x_verifyDERSig
+a100x_verifyResponse
+auth chip init failed, [%s : %d]
+auth chip init success!
+auth_chip %s bind device failed with 0x%x. [%s : %d]
+auth_chip %s verify device failed with 0x%x. [%s : %d]
+auth_chip_config
+auth_chip_init
+bECC_fromEPIF
+bECC_generateChallenge
+bECC_precomputeResponse
+bECC_toEPIF
+bECC_verifyResponse
+bind external %d
+cat /proc/cmdline | busybox grep androidboot.secure_debug=1
+cert_check_childs
+cert_init_childs
+cert_p12_check
+cert_p12_init
+cert_req_md5
+cert_req_path
+cert_req_rsa_sign
+cert_set_state
+cert_x509_in_p12_check
+cert_x509_in_p12_init
+check_onetime_auth_msg
+cloud_get_device_secret
+dev_info_is_secure_debug
+dji_device_bind_generate_verify_msg
+dji_device_bind_get_security_sn
+dji_device_bind_verify_relationship_msg
+dji_ssd_bind
+dji_ssd_bind_external
+dji_ssd_unbind
+djicare_verify_binding_mac_msg
+duss_hal_storage_get_sec_verify_info
+ecc_make_key_compressed
+ecc_make_key_uncompressed
+ecdh_shared_secret
+ecdsa_sign
+ecdsa_verify
+generate_djicare_binding_mac_msg
+get auth chip config failed with 0x%x, ssd_id = %d. [%s : %d]
+get cipher %d
+get nxp certificate failed with 0x%x
+get_auth_chip_config_from_file
+hardware/dji/common/tools/dji_secure/platform/common/adaption/tee_ssd.c
+hardware/dji/common/tools/dji_secure/platform/common/comm/duss.c
+hardware/dji/common/tools/dji_secure/platform/common/osal/dev_info.c
+hardware/dji/common/tools/dji_secure/platform/common/osal/sec_cert.c
+hardware/dji/common/tools/dji_secure/platform/common/osal/util.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_act.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_care.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_comm.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_comm_network.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_comm_rpmb_clear.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_dbg.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_dc.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_dp.c
+hardware/dji/common/tools/dji_secure/platform/common/protocol/cmd_ssd.c
+hardware/dji/common/tools/dji_secure/vendor/a1006/a1006_v1.c
+hardware/dji/common/tools/dji_secure/vendor/auth_chip.c
+hardware/dji/common/tools/dji_secure/vendor/config_helper.c
+hmacSHA1
+hmacSHA224
+hmacSHA256
+hmacSHA384
+hmacSHA512
+https_check_private_key
+id-ecPublicKey
+id-sha224
+id-sha256
+id-sha384
+id-sha512
+init a1006 i2c device
+init_auth_chip_from_json
+key %s not exist. [%s, %d]
+key [%s] = %d not support. [%s : %d]
+key [%s] = %s not support. [%s : %d]
+key [%s] not found. [%s : %d]
+libdji_secure.so
+mbedtls_aes_cmac_prf_128
+mbedtls_aes_crypt_cbc
+mbedtls_aes_crypt_cfb128
+mbedtls_aes_crypt_cfb8
+mbedtls_aes_crypt_ctr
+mbedtls_aes_crypt_ecb
+mbedtls_aes_crypt_ofb
+mbedtls_aes_crypt_xts
+mbedtls_aes_decrypt
+mbedtls_aes_encrypt
+mbedtls_aes_free
+mbedtls_aes_init
+mbedtls_aes_setkey_dec
+mbedtls_aes_setkey_enc
+mbedtls_aes_xts_free
+mbedtls_aes_xts_init
+mbedtls_aes_xts_setkey_dec
+mbedtls_aes_xts_setkey_enc
+mbedtls_cipher_cmac
+mbedtls_cipher_cmac_finish
+mbedtls_cipher_cmac_reset
+mbedtls_cipher_cmac_starts
+mbedtls_cipher_cmac_update
+mbedtls_cipher_crypt
+mbedtls_cipher_definitions
+mbedtls_cipher_finish
+mbedtls_cipher_free
+mbedtls_cipher_info_from_string
+mbedtls_cipher_info_from_type
+mbedtls_cipher_info_from_values
+mbedtls_cipher_init
+mbedtls_cipher_list
+mbedtls_cipher_reset
+mbedtls_cipher_set_iv
+mbedtls_cipher_set_padding_mode
+mbedtls_cipher_setkey
+mbedtls_cipher_setup
+mbedtls_cipher_supported
+mbedtls_cipher_update
+mbedtls_internal_aes_decrypt
+mbedtls_internal_aes_encrypt
+mbedtls_internal_sha1_process
+mbedtls_internal_sha256_process
+mbedtls_internal_sha512_process
+mbedtls_md_hmac
+mbedtls_md_hmac_finish
+mbedtls_md_hmac_reset
+mbedtls_md_hmac_starts
+mbedtls_md_hmac_update
+mbedtls_oid_get_cipher_alg
+mbedtls_oid_get_md_hmac
+mbedtls_pk_parse_key
+mbedtls_pk_parse_keyfile
+mbedtls_pk_parse_public_key
+mbedtls_pk_parse_public_keyfile
+mbedtls_pk_parse_subpubkey
+mbedtls_pk_setup_rsa_alt
+mbedtls_rsa_alt_info
+mbedtls_rsa_check_privkey
+mbedtls_rsa_check_pub_priv
+mbedtls_rsa_check_pubkey
+mbedtls_rsa_complete
+mbedtls_rsa_copy
+mbedtls_rsa_deduce_crt
+mbedtls_rsa_deduce_primes
+mbedtls_rsa_deduce_private_exponent
+mbedtls_rsa_export
+mbedtls_rsa_export_crt
+mbedtls_rsa_export_raw
+mbedtls_rsa_free
+mbedtls_rsa_gen_key
+mbedtls_rsa_get_len
+mbedtls_rsa_import
+mbedtls_rsa_import_raw
+mbedtls_rsa_info
+mbedtls_rsa_init
+mbedtls_rsa_pkcs1_decrypt
+mbedtls_rsa_pkcs1_encrypt
+mbedtls_rsa_pkcs1_sign
+mbedtls_rsa_pkcs1_verify
+mbedtls_rsa_private
+mbedtls_rsa_public
+mbedtls_rsa_rsaes_oaep_decrypt
+mbedtls_rsa_rsaes_oaep_encrypt
+mbedtls_rsa_rsaes_pkcs1_v15_decrypt
+mbedtls_rsa_rsaes_pkcs1_v15_encrypt
+mbedtls_rsa_rsassa_pkcs1_v15_sign
+mbedtls_rsa_rsassa_pkcs1_v15_verify
+mbedtls_rsa_rsassa_pss_sign
+mbedtls_rsa_rsassa_pss_verify
+mbedtls_rsa_rsassa_pss_verify_ext
+mbedtls_rsa_set_padding
+mbedtls_rsa_validate_crt
+mbedtls_rsa_validate_params
+mbedtls_sha1
+mbedtls_sha1_clone
+mbedtls_sha1_finish
+mbedtls_sha1_finish_ret
+mbedtls_sha1_free
+mbedtls_sha1_info
+mbedtls_sha1_init
+mbedtls_sha1_process
+mbedtls_sha1_ret
+mbedtls_sha1_starts
+mbedtls_sha1_starts_ret
+mbedtls_sha1_update
+mbedtls_sha1_update_ret
+mbedtls_sha224_info
+mbedtls_sha256
+mbedtls_sha256_clone
+mbedtls_sha256_finish
+mbedtls_sha256_finish_ret
+mbedtls_sha256_free
+mbedtls_sha256_info
+mbedtls_sha256_init
+mbedtls_sha256_process
+mbedtls_sha256_ret
+mbedtls_sha256_starts
+mbedtls_sha256_starts_ret
+mbedtls_sha256_update
+mbedtls_sha256_update_ret
+mbedtls_sha384_info
+mbedtls_sha512
+mbedtls_sha512_clone
+mbedtls_sha512_finish
+mbedtls_sha512_finish_ret
+mbedtls_sha512_free
+mbedtls_sha512_info
+mbedtls_sha512_init
+mbedtls_sha512_process
+mbedtls_sha512_ret
+mbedtls_sha512_starts
+mbedtls_sha512_starts_ret
+mbedtls_sha512_update
+mbedtls_sha512_update_ret
+md5WithRSAEncryption
+network_check_cert
+network_req_cert_md5
+network_req_cert_path
+network_req_device_secret
+open a1006 i2c device
+p256_ecdsa_verify
+rsaEncryption
+sec_cert_check
+sec_cert_find_cert
+sec_cert_get_md5
+sec_cert_get_path
+sec_cert_list_deinit
+sec_cert_list_init
+sec_cert_req_rsa_sign
+sec_cipher_aes_cbc_dec
+sec_cipher_aes_cbc_enc
+sec_cipher_cmac
+sec_cipher_ecc_makekey
+sec_cipher_ecc_sha256_verify
+sec_cipher_ecc_sign
+sec_cipher_ecc_verify
+sec_cipher_rsa_sha256_sign
+sec_cipher_rsa_sha256_verify
+sec_cmd_act_command_handler
+sec_cmd_act_pack_v1_inact
+sec_cmd_act_pack_v1_state_from_v3
+sec_cmd_act_send_auth
+sec_cmd_act_send_notice_msg
+sec_cmd_act_send_onetime_auth
+sec_cmd_act_set_operations
+sec_cmd_act_start_send
+sec_cmd_act_state_resp
+sec_cmd_act_trial_times_resp
+sec_cmd_act_verify_auth
+sec_cmd_care_push_binding_result
+sec_cmd_care_push_remove_binding_result
+sec_cmd_comm_event_handler
+sec_cmd_comm_network_event_handler
+sec_cmd_comm_network_set_certs_list
+sec_cmd_comm_rpmb_clear_event_handler
+sec_cmd_comm_rpmb_clear_register_notify
+sec_cmd_comm_rpmb_clear_set_operations
+sec_cmd_dbg_auth_event_handler
+sec_cmd_dbg_misc_check_internal_request
+sec_cmd_dbg_misc_event_handler
+sec_cmd_dbg_misc_internal_notify
+sec_cmd_dbg_misc_internal_request
+sec_cmd_dbg_req_event_handler
+sec_cmd_dbg_set_operations
+sec_cmd_dc_clean_request_command_handler

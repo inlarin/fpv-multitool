@@ -1,0 +1,778 @@
+0x010AFE	@9u"@9b
+0x010C7F	Rc^@9B 
+0x010C88	`J@9B@
+0x010C90	`N@9B`
+0x010D34	`f@9ab@9br@9! 
+0x010D4A	@9d~@9!@
+0x010D54	`n@9!`
+0x010D64	bv@9` 
+0x01161B	rsB@Qs
+0x012682	B9@K38
+0x01653C	`&A9f"A9e
+0x0182C6	@9@h48B
+0x018C7C	b:F9FL
+0x01ADA8	aBA9! 
+0x01ADB0	`JA9D(L
+0x01ADBC	`NA9!`
+0x01B02C	`&A9a*A9b"A9@ 
+0x01B63A	@9@h!8B
+0x01BC4B	5`BA9aFA9b>A9@ 
+0x01BD1F	T`"A9a&A9b
+0x01BD7A	 6`"A9u&A9a
+0x01BEDF	KMia8!
+0x01D3C4	Dkd8dj 8
+0x01F59F	QDhd8dh!8!
+0x021CF7	TbHb8e
+0x023F07	S%hexB
+0x02451F	T%hd8Eh$8
+0x02460B	*`j#xc
+0x025D25	&@9BL,
+0x02BE59	hb8$hb8
+0x02BE85	hd8%hd8
+0x02C81C	5:86b;
+0x02CCD8	 <@9'$@9& @9%
+0x02D295	hd8&hd8
+0x0311E8	sn_unrd_set
+0x0311F8	active_rpmb_get
+0x031208	active_rpmb_set
+0x031218	upgrade_unrd_set
+0x031238	aes_operation
+0x031248	dji_generate_internal_inactive_msg
+0x031278	dji_generate_internal_inactive_msg
+0x0312A8	efuse_pro
+0x0312B8	efuse_pro
+0x0312C8	ssd_info_verify
+0x0312D8	dji_erase_rpmb
+0x0312E8	dji_erase_rpmb
+0x0312F8	calcu_hash
+0x031308	dji_verify_internal_inactive_msg
+0x031338	dji_verify_internal_inactive_msg
+0x031360	SEC ROOT KEYV1
+0x031378	upgrade_unrd_get
+0x031398	https_check_private_key
+0x0313B8	dji_sec_active_rpmb_set
+0x0313D8	dji_sec_active_rpmb_set
+0x0313F8	dji_local_active_state_set
+0x031428	dji_verify_onetime_active_mac_msg
+0x031458	generate_cmac
+0x031468	generate_cmac
+0x031480	MODULE KEY
+0x031498	dji_generate_active_mac_msg
+0x0314B8	dji_generate_active_mac_msg
+0x0314D8	dji_verify_active_mac_msg
+0x031500	PKCS12 KEY
+0x031518	pkcs12_parse
+0x031528	pkcs1_rsa_parse
+0x031540	RTK ENC KEY
+0x031558	dji_encrypt_rtk_msg
+0x031578	aes_ccm_encrypt
+0x0315C8	dji_enc_fc_dtcm
+0x0315D8	generate_hmac_sha256
+0x0315F8	generate_hmac_sha256
+0x031610	SEC ENH
+0x031618	DJICARE KEY
+0x031628	dji_generate_djicare_binding_mac_msg
+0x031658	dji_generate_djicare_binding_mac_msg
+0x031688	dji_generate_djicare_mac_msg
+0x0316A8	dji_generate_djicare_mac_msg
+0x0316C8	SECURE BIND
+0x0316D8	dji_device_bind_calcu_mac
+0x0316F8	dji_generate_rpmb_clear_msg
+0x031718	dji_generate_rpmb_clear_msg
+0x031738	cloud_get_device_secret
+0x031758	fc_tee_session_key_derive
+0x031778	dji_dec_cal_file
+0x031798	amt_derive_dec_cal_key
+0x0317B8	dji_derive_accessory_auth_activate_key
+0x0317E8	dji_derive_accessory_auth_activate_key
+0x031810	ACCESSORY ACTIVATE
+0x031828	ACCESSORY AUTH
+0x031838	ACCESSORYENCRYPTdji_check_accessory_key_inject_correctness
+0x031878	dji_check_accessory_key_inject_correctness
+0x0318A8	dji_generate_accessory_activate_msg
+0x0318D8	dji_generate_accessory_activate_msg
+0x031908	dji_verify_accessory_auth_msg
+0x031928	dji_verify_accessory_auth_msg
+0x031948	SSD AUTH KEY
+0x031960	SSD KEY
+0x031978	decrypt_ssd_root_key
+0x031998	decrypt_ssd_root_key
+0x0319B8	ssd_derive_key
+0x0319C8	decrypt_ssd_info
+0x0319E8	ssd_verify_external
+0x031A08	ssd_verify_onetime_msg
+0x031A28	ssd_bind_external
+0x031A48	encrypt_ssd_info
+0x031A68	dji_sec_unrd_set
+0x031A88	ssd_bind
+0x031A98	save_ssd_info_to_rpmb
+0x031AB8	dji_sec_unrd_get
+0x031AD8	dji_fc_set_ag_contract_msg
+0x031AF8	dji_fc_get_ag_contract_msg
+0x031B18	get_ssd_info_from_rpmb
+0x031B38	ssd_get_challenge
+0x031B58	dji_verify_djicare_binding_mac_msg
+0x031B88	dji_verify_djicare_binding_mac_msg
+0x031BB8	dji_verify_rc_matching_status
+0x031BD8	dji_get_djicare_status
+0x031BF8	dji_write_djicare_whitelist
+0x031C18	dji_write_djicare_whitelist
+0x031C38	dji_get_djicare_whitelist
+0x031C58	dji_sec_unrd_del
+0x031C78	ssd_unbind
+0x031C88	del_ssd_info_from_rpmb
+0x031CA8	dji_clear_rpmb_by_unrd_tag
+0x031CC8	dji_clear_rpmb_by_unrd_tag
+0x031CE8	dji_factory_clear_unrd
+0x031D08	dji_factory_clear_unrd
+0x031D28	dji_verify_rpmb_clear_msg
+0x031D48	dji_verify_rpmb_clear_msg
+0x031D68	dji_clear_rpmb
+0x031D78	dji_clear_rpmb
+0x031D88	dji_keyrepo_update_package
+0x031DA8	dji_keyrepo_read_pack_version
+0x031DC8	dji_keyrepo_get_key_length
+0x031DE8	dji_keyrepo_read_key
+0x031E08	rpmb_key_inject
+0x031E18	unrd_get
+0x031E28	ONE TIME
+0x031E38	dji_generate_onetime_active_mac_msg
+0x031E68	dji_generate_onetime_active_mac_msg
+0x031E98	https_client_sign
+0x031EB8	ssd_verify
+0x031EC8	ssd_get_info
+0x031ED8	dji_device_bind_get_security_sn
+0x031EF8	dji_device_bind_get_security_sn
+0x031F18	dji_device_bind_generate_verify_msg
+0x031F48	dji_device_bind_verify_relationship_msg
+0x031F78	dji_get_djicare_unmatch_fly_num
+0x031F98	dji_get_djicare_unmatch_fly_num
+0x031FB8	dji_set_djicare_unmatch_fly_num
+0x031FD8	dji_set_djicare_unmatch_fly_num
+0x031FF8	dji_generate_device_passwaord_flyctrl_mac_msg
+0x032028	dji_generate_device_passwaord_flyctrl_mac_msg
+0x032058	SEC DEBUG KEYV1
+0x032068	NO EMMC
+0x032070	Secure Debug
+0x032088	get_sec_debug_internal_key
+0x0320A8	AUTH KEYule0
+0x0320B8	securedebug_verify_onetime_auth
+0x0320D8	securedebug_verify_onetime_auth
+0x032100	WHITELIST CTX
+0x032118	securedebug_verify_whitelist
+0x032138	securedebug_verify_whitelist
+0x032158	LOG EXPORT
+0x032168	ADSB EXPORT
+0x032188	sec_debug_state
+0x032198	sec_debug_verify_internal_msg
+0x032409	Qkkbal
+0x032758	d2i_PKCS12
+0x032878	cbs_get_asn1
+0x032898	EVP_EncryptUpdate
+0x0328B8	EVP_EncryptFinal_ex
+0x0328D8	EVP_DecryptUpdate
+0x0328F8	EVP_DecryptFinal_ex
+0x032918	EVP_CipherInit_ex
+0x032BCF	TEE_Malloc
+0x0332FB	(C0AR0
+0x03384B	+OY HAH?
+0x033934	TEE_UNRD_OPEN failed(0x%x)
+0x033955	TEE_UNRD_Alloc_Handle failed(0x%x)
+0x033979	[%s] there is %s in rpmb already
+0x03399B	TEE_UNRD_Set_Binary failed(0x%x)
+0x0339BD	TEE_UNRD_Flush failed(0x%x)
+0x0339DA	Do not find legal area to read
+0x0339FA	TEE_RPMB_Get_EMMC_Size failed in antirollback, res=%#x
+0x033A32	TEE_RPMB_Read failed in antirollback, res=%#x
+0x033A61	TEE_RPMB_Read, rpmb is not init yet, return default value
+0x033A9C	firmware.enforce
+0x033AAD	firmware.antirollback
+0x033AC3	Antirollback tag is not supported, %s
+0x033AEA	TEE_AllocateOperation failed with 0x%x
+0x033B12	TEE_AllocateTransientObject failed with 0x%x
+0x033B40	TEE_PopulateTransientObject failed with 0x%x
+0x033B6E	TEE_SetOperationKey failed with 0x%x
+0x033B94	TEE_CipherDoFinal failed with 0x%x
+0x033BB8	[%s:%d]
+0x033BC1	[%s:%d]lcs 0x%x
+0x033BD2	ssd info verify success
+0x033BEA	ssd info wrong volume: [%lu : %lu]
+0x033C0D	ssd info wrong ssd SN
+0x033C23	ssd info wrong vendor
+0x033C39	[%s:%d] TEE_RPMB_Get_EMMC_Size failed with res = %#x
+0x033C6F	[%s:%d] clear rpmb failed with res = %#x
+0x033C99	[%s:%d] clear type %d region not found.
+0x033CC2	TEE_AllocateOperation failed 0x%x
+0x033CE4	TEE_DigestDoFinal failed 0x%x
+0x033D02	[%s:%d] compare parameters failed
+0x033D25	TEE_PRAK_Get failed, res 0x%x
+0x033D44	[%s:%d] incompitable public key
+0x033D65	[%s:%d] signature verify failed
+0x033D86	dji_verify_inactive_mac_msg clear rpmb failed with res = %#x
+0x033DC4	TEE_GetObjectBufferAttribute TEE_ATTR_RSA_MODULUS failed
+0x033DFE	modules' size aren't same, %d, %d
+0x033E21	public exponents' size aren't same, %d, %d
+0x033E4D	modules aren't same
+0x033E61	public exponents aren't same
+0x033E7F	[%s:%d]
+0x033E87	Do not find legal area to write
+0x033EA8	Action verify failed to save board time info
+0x033ED6	Action verify failed to save local active state
+0x033F07	ECDSA verify sig failed!
+0x033F20	failed to save onetime info to rpmb
+0x033F45	[%s:%d]TEE_AllocateOperation Error res 0x%x 
+0x033F73	[%s:%d]TEE_AllocateTransientObject Error res 0x%x 
+0x033FA7	[%s:%d]TEE_PopulateTransientObject Error res 0x%x 
+0x033FDB	[%s:%d]TEE_SetOperationKey Error res 0x%x 
+0x034007	dji_generate_active_mac_msg PRF_KDF res 0x%x
+0x034035	dji_verify_active_mac_msg generate cmac failed res 0x%x
+0x03406E	Action verify failed to save board info
+0x034097	Action verify failed to save camera info
+0x0340C1	Action verify failed to save camera sn info
+0x0340EE	Action verify failed to save camera time info
+0x03411D	pkcs12_parse couldn't find BoardSN
+0x034141	pkcs12_parse PRF_KDF res 0x%x
+0x034160	Error read PKCS#12 file
+0x034179	Error parse PKCS#12 file
+0x034193	failed to parse pkcs1
+0x0341AA	TEE_AllocateTransientObject failed
+0x0341CE	TEE_PopulateTransientObject failed
+0x0341F2	0123456789abcdef
+0x034203	Get ProductSN failed, res = 0x%x
+0x034225	TEE_AllocateOperation failed
+0x034243	TEE_AllocateTransientObject failed
+0x034266	TEE_PopulateTransientObject failed
+0x034289	TEE_SetOperationKey failed
+0x0342A5	TEE_AEInit failed
+0x0342B8	TEE_AEEncryptFinal failed
+0x0342D3	aes_ccm_encrypt failed, res = 0x%x
+0x0342F7	param_types = 0x%x, exp_types = 0x%x
+0x03431D	Error magic_num:%x
+0x034330	Error input data size:%x
+0x034349	TEE_CryptoCell_GetLCS failure res:0x%x
+0x034371	DTCM DUMP
+0x03437B	fail to derive secondary key, res:0x%x
+0x0343A8	fail to derive enc_dtcm key, res:0x%x
+0x0343CF	TEE_AllocateOperation Error, res is 0x%x
+0x0343F9	TEE_AllocateTransientObject Error, res is 0x%x
+0x034429	TEE_PopulateTransientObject Error, res is 0x%x
+0x034459	TEE_SetOperationKey Error, res is 0x%x
+0x034481	TEE_CipherUpdate Error, res is 0x%x
+0x0344A6	calcu hash Error, res is 0x%x
+0x0344C5	calcu header hmac Error, res is 0x%x
+0x0344EB	dji_generate_djicare_binding_mac_msg PRF_KDF res 0x%x
+0x034522	dji_device_bind_calcu_mac PRF_KDF res 0x%x
+0x03454E	[%s:%d] invalid param type.
+0x03456B	[%s:%d] invalid param.
+0x034583	[%s:%d] repeat request.
+0x03459C	[%s:%d] fail to get chip_sn. ret: %d, len %d
+0x0345CA	[%s:%d] fail to get product sn. ret: %d, len %d
+0x034600	SEC ROOT RPMB CLEAR KEY
+0x034618	[%s:%d] fail to derive rpmb clear sec root key.
+0x034649	RPMB CLEAR AUTH KEY
+0x03465D	[%s:%d] fail to derive rpmb clear auth key.
+0x03468A	[%s:%d] fail to generate rpmb clear msg cmac.
+0x0346B9	FH KEY
+0x0346C0	3PP KEY
+0x0346C8	[%s:%d] input param type is wrong
+0x0346EB	[%s:%d] nonce length is bigger than the limit
+0x03471A	[%s:%d] fail to read product sn
+0x034740	CLOUD KEY
+0x03474A	[%s:%d] fail to derive cloud auth key
+0x034771	fail to derive fc tee session key, res:0x%x
+0x03479E	FLYCTRL KEY V1
+0x0347AD	FC TEE SESSION KEY
+0x0347C0	invalid magic_num. 0x%x
+0x0347D9	invalid file content size.
+0x0347F5	invalid payload digest.
+0x03480E	fail to derive tfde key, res:0x%x
+0x034831	CALIBRATION ENC KEY
+0x034845	fail to derive cafe key, res:0x%x
+0x034868	CALIBRATION FILE ENC KEY
+0x034881	fail to derive calibration file key, ret:0x%x
+0x0348B0	fail to get dec_cal_key, res is 0x%x
+0x0348D6	fail to generate cmac, res is 0x%x
+0x0348FA	wrong header cmac
+0x03490D	[%s:%d]secondary_key_derive_with_cust_key failed !
+0x034941	[%s:%d]PRF_KeyDerivation with activate root key failed !
+0x03497B	[%s:%d]dji_derive_accessory_auth_activate_key Error 
+0x0349B1	[%s:%d] TEE_CipherDoFinal Error res 0x%x 
+0x0349DC	[%s:%d] compare key data failed !
+0x0349FF	[%s:%d] compare hash failed !
+0x034A1E	[%s:%d]dji_derive_accessory_auth_activate_key failed !
+0x034A56	[%s:%d]DjiEncryptCalculateMacInHost calculate mac failed !
+0x034A92	[%s:%d]mismatch param !
+0x034AAB	[%s:%d]mismatch msg len!
+0x034AC5	[%s:%d]mismatch sn len!
+0x034ADE	[%s:%d]compare mac failed !
+0x034AFB	aes_operation Error, res is 0x%x
+0x034B1D	decrypt_ssd_root_key Error, res is 0x%x
+0x034B46	ssd auth key derive Error, res is 0x%x
+0x034B6E	ssd key derive Error, res is 0x%x
+0x034B91	dji ssd RPF key derivation res 0x%x
+0x034BB6	verify: aes decryption failed 0x%x
+0x034BD9	ssd_verify ssd_info_verify failed 0x%x
+0x034C00	dji sn check failed
+0x034C14	dji ssd nonce check failed: [%d] %x != %x
+0x034C3E	dji ssd generate cmac failed res 0x%x
+0x034C65	dji ssd cmac verify failed
+0x034C80	ssd_bind_external param error
+0x034C9E	ssd_bind ssd_verify_onetime_msg failed 0x%x
+0x034CCA	compare ssd_sn failed %s != %s
+0x034CE9	encrypt_ssd_info failed 0x%x
+0x034D06	get_unbind_ssd_info_from_memory failed 0x%x
+0x034D32	TEE_UNRD_Get_Binary failed(0x%x)
+0x034D54	ssd_%d
+0x034D5B	save_ssd_info_to_rpmb dji_sec_unrd_set failed 0x%x
+0x034D8E	save_ssd_info_to_rpmb failed 0x%x
+0x034DB0	AGContractMsg
+0x034DBE	dji_fc_set_ag_contract_msg failed at get contract message!
+0x034DFA	dji_fc_set_ag_contract_msg failed at compare count value!
+0x034E35	dji_fc_set_ag_contract_msg failed at get session key!
+0x034E6C	dji_fc_set_ag_contract_msg failed at verify mac!
+0x034E9E	dji_fc_set_ag_contract_msg failed at set contract message!
+0x034EDA	get_ssd_info_from_rpmb dji_sec_unrd_get failed 0x%x
+0x034F0E	ssd info is not available
+0x034F28	djicare_verify_msg_len is error,len:%x
+0x034F4F	djicare_write_whitelist rc_chipid_len error,len:%x
+0x034F82	djicare_write_whitelist rc_chipid is error
+0x034FAD	djicare_verify_msg production_sn_len error,len:%x
+0x034FDF	djicare_verify_msg production_sn is error
+0x035009	djicare_verify_msg rc_sn_len error,len:%x
+0x035033	djicare_verify_msg rc_sn is error
+0x035055	djicare_verify_msg bind nonce is error
+0x03507C	djicare_verify_msg unbind nonce is error
+0x0350A5	djicare_verify_msg loss verify nonce is error
+0x0350D3	dji_verify_djicare_binding_mac_msg PRF_KDF res 0x%x
+0x035108	dji_verify_active_mac_msg  cmac verify failed res 0x%x
+0x035140	DJICARE
+0x035148	unrd set djicare state failed:%x
+0x035169	set djicare state success!
+0x035184	unmatch fly num:%x > TA_MAX_NUM
+0x0351A5	DJICARE_FLY_NUM
+0x0351B5	unrd set djicare unmatch fly num failed:%x
+0x0351E0	reset djicare unmatch fly number:%x success!
+0x03520D	clear djicare state success!
+0x03522A	CARE_WHITELIST
+0x035239	unrd get djicare whitelist failed:%x
+0x03525F	djicare_remove uav sn from whitelist unrd set failed, res 0x%x
+0x03529F	djicare_remove uav sn from whitelist unrd success!
+0x0352D2	Result or subcmd is:%x, %x
+0x0352ED	unrd get djicare state failed:%x
+0x03530E	rpmb djicare status is error:%x
+0x03532E	RC sn matching failed:%p
+0x035347	RC chipid matching failed:%p
+0x035364	djicare rpmb info is error:%x
+0x035382	djicare_write_whitelist msg_len is error,len:%x
+0x0353B2	djicare_write_whitelist rc_sn_len error,len:%x
+0x0353E1	djicare_write_whitelist rc_sn is error
+0x035408	djicare_write_whitelist PRF_KDF res 0x%x
+0x035432	djicare_write_whitelist generate cmac failed res 0x%x
+0x035469	djicare_write_whitelist cmac verify failed res 0x%x
+0x03549E	unrd get djicare whitelist failed:%x so create new whitelist
+0x0354DC	djicare_write_whitelist unrd set DJICARE res 0x%x
+0x03550F	djicare_write_whitelist unrd set DJICARE success
+0x035541	unrd get djicare whitelist failed:%x so get whitelist number is 0
+0x035584	unrd get whitelist number is %d
+0x0355A5	TEE_UNRD_Delete failed(0x%x)
+0x0355C3	get ssd info from rpmb failed 0x%x
+0x0355E6	del_ssd_info_from_rpmb dji_sec_unrd_del failed 0x%x
+0x03561A	[%s:%d] invalid parameter.
+0x035636	factory_switch_pro
+0x035649	[%s:%d] fail to get item_count, error: %d
+0x035674	[%s:%d] tag count in unrd is 0
+0x035693	[%s:%d] invalid tag count: %d.
+0x0356B3	[%s:%d] tag count is %d.
+0x0356CD	[%s:%d] fail to calloc memory.
+0x0356ED	[%s:%d] fail to get all unrd tags, error: %d.
+0x03571C	[%s:%d] in unrd tag: %s.
+0x03573B	[%s:%d] fail to delete tag: %s, error: %d.
+0x035767	[%s:%d] delete tag %s in unrd.
+0x035787	aftersale_clear_all
+0x03579B	[%s:%d] invalid rpmb clear state.
+0x0357BE	[%s:%d] invalid rpmb clear type.
+0x0357E0	[%s:%d] cmac value is not right.
+0x035802	[%s:%d] clear rpmb type %d %s failed with res = %#x
+0x035837	Fail to malloc for keyrepo, size:0x%x
+0x03585E	key_repo
+0x035867	Fail to keyrepo image verify, res 0x%x
+0x03588F	Fail to keyrepo update pack, res 0x%x
+0x0358B6	keyrepo read pack version failed: 0x%x
+0x0358DE	keyrepo get key length failed: 0x%x
+0x035903	Fail to malloc for keyrepo read key, size:0x%x
+0x035933	keyrepo read key failed: 0x%x
+0x035952	key attr is not export_allowed:%d
+0x035975	TEE_RPMB_KeyInject failed(0x%x)
+0x035996	dji_generate_onetime_active_mac_msg PRF_KDF res 0x%x
+0x0359CC	TEE_AllocateOperation failed, res = %x
+0x0359F4	TEE_SetOperationKey failed, res = %d
+0x035A1A	TEE_AsymmetricSignDigest failed, res = %d
+0x035A45	ssd_verify ssd info not available in rpmb 0x%x, save ssd info to memory and return 0x%x
+0x035A9D	ssd_get_info param error
+0x035AB6	ssd_get_info invalid param size; size = %d
+0x035AE1	dji_device_bind_get_security_sn generate cmac failed res 0x%x
+0x035B20	dji_device_bind_generate_verify_msg generate cmac failed res 0x%x
+0x035B63	dji_device_bind_verify_relationship_msg generate cmac failed res 0x%x
+0x035BAA	dji_device_bind_verify_relationship_msg compare cmac failed res 0x%x
+0x035BF0	[%s:%d] param types error
+0x035C0B	unrd get djicare unmatch fly num failed:%x
+0x035C36	unrd update djicare unmatch fly num failed:%x
+0x035C64	dji_generate_device_passwaord_flyctrl_mac_msg generate_cmac res 0x%x
+0x035CAA	rsassa_algo_mapping failed
+0x035CC6	BoardSN
+0x035CCE	ProductSN
+0x035CD8	ProductBindInfoLen
+0x035CEB	ClearLog
+0x035CF4	ProductBindInfo
+0x035D04	firmware.version
+0x035D15	firmware.antirollback_ext
+0x035D2F	firmware.enforce_ext
+0x035D44	firmware.enforce_time
+0x035D5A	pigeon_debug_key
+0x035D6B	fail to found %s:%d in keyrepo
+0x035D8B	fail to run PRF_KeyDerivation with error code (0x%x)
+0x035DC1	DMVERITYDIS
+0x035DCD	dji_sec_unrd_set[%s:%d]res 0x%x 
+0x035DEF	SecureDebug
+0x035DFB	[%s:%d] TEE_AllocateOperation ERROR res 0x%x 
+0x035E2A	[%s:%d]TEE_AllocateTransientObject res 0x%x 
+0x035E58	[%s:%d]TEE_MACComputeFinal Error res 0x%x 
+0x035E84	There is no emmc
+0x035E96	nonce error
+0x035EA3	cmac error
+0x035EAF	secure debug is enabled
+0x035EC8	dm-verity is disabled
+0x035EE3	%s, %s[%d], %s
+0x035EF9	pkcs12_key_gen_raw
+0x035F0C	ERR_R_MALLOC_FAILURE
+0x035F21	pbe_cipher_init
+0x035F31	PKCS8_R_UNKNOWN_CIPHER
+0x035F48	PKCS8_R_UNKNOWN_DIGEST
+0x035F5F	PKCS8_R_KEYGEN_FAILURE
+0x035F76	pbe_crypt
+0x035F80	PKCS8_R_TOO_LONG
+0x035F91	ERR_R_EVP_LIB
+0x035F9F	PKCS8_R_UNKNOWN_CIPHER_ALGORITHM
+0x035FC0	pkcs12_pbe_keyivgen
+0x035FD4	PKCS8_R_DECODE_ERROR
+0x035FE9	PKCS8_R_KEY_GEN_ERROR
+0x035FFF	pkcs12_item_decrypt_d2i
+0x036017	PKCS8_R_CRYPT_ERROR
+0x03602B	PKCS12_handle_content_infos
+0x036047	PKCS8_R_BAD_PKCS12_DATA
+0x03605F	PKCS12_handle_content_info
+0x03607A	PKCS8_R_PKCS12_TOO_DEEPLY_NESTED
+0x03609B	PKCS8_R_MULTIPLE_PRIVATE_KEYS_IN_PKCS12
+0x0360C3	PKCS12_get_key_and_certs
+0x0360DC	PKCS8_R_BAD_PKCS12_VERSION
+0x0360F7	PKCS8_R_MISSING_MAC
+0x03610B	PKCS8_R_PKCS12_PUBLIC_KEY_INTEGRITY_NOT_SUPPORTED
+0x03613D	PKCS8_R_UNKNOWN_HASH
+0x036152	PKCS8_R_INCORRECT_PASSWORD
+0x03616D	out_p12 == NULL
+0x03617D	pkcs8/pkcs8.c
+0x03618B	PKCS8_PRIV_KEY_INFO
+0x03619F	pkeyalg
+0x0361AC	PBEPARAM
+0x0361C4	c2i_ASN1_BIT_STRING
+0x0361D8	ASN1_R_STRING_TOO_SHORT
+0x0361F0	ASN1_R_INVALID_BIT_STRING_BITS_LEFT
+0x036214	ASN1_BIT_STRING_set_bit
+0x03622C	c2i_ASN1_INTEGER
+0x03623D	d2i_ASN1_UINTEGER
+0x03624F	ASN1_R_BAD_OBJECT_HEADER
+0x036268	ASN1_R_EXPECTING_AN_INTEGER
+0x036284	ASN1_INTEGER_set
+0x036295	ASN1_OBJECT_new
+0x0362A5	c2i_ASN1_OBJECT
+0x0362B5	ASN1_R_INVALID_OBJECT_ENCODING
+0x0362D4	d2i_ASN1_OBJECT
+0x0362E4	ASN1_R_EXPECTING_AN_OBJECT
+0x0362FF	ASN1_get_object
+0x03630F	ASN1_R_TOO_LONG
+0x03631F	ASN1_R_HEADER_TOO_LONG
+0x036336	ASN1_STRING_set
+0x036346	ASN1_STRING_type_new
+0x03635B	asn1_check_tlen
+0x03636B	ASN1_R_WRONG_TAG
+0x036380	buf_mem_grow
+0x03638D	asn1_collect
+0x03639A	ASN1_R_UNEXPECTED_EOC
+0x0363B0	ASN1_R_NESTED_ASN1_ERROR
+0x0363C9	ASN1_R_NESTED_ASN1_STRING
+0x0363E3	collect_data
+0x0363F0	ASN1_R_MISSING_EOC
+0x036403	asn1_ex_c2i
+0x03640F	ASN1_R_NULL_IS_WRONG_LENGTH
+0x03642B	ASN1_R_BOOLEAN_IS_WRONG_LENGTH
+0x03644A	ASN1_R_BMPSTRING_IS_WRONG_LENGTH
+0x03646B	ASN1_R_UNIVERSALSTRING_IS_WRONG_LENGTH
+0x036492	ASN1_item_ex_d2i
+0x0364A3	ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE
+0x0364CB	asn1_d2i_ex_primitive
+0x0364E1	ASN1_R_ILLEGAL_TAGGED_ANY
+0x0364FB	ASN1_R_ILLEGAL_OPTIONAL_ANY
+0x036517	ASN1_R_TYPE_NOT_CONSTRUCTED
+0x036533	asn1_find_end
+0x036541	ASN1_R_TYPE_NOT_PRIMITIVE
+0x03655B	DONOT_SUPPORT_TYPE
+0x03656E	ASN1_R_SEQUENCE_NOT_CONSTRUCTED
+0x03658E	ASN1_R_SEQUENCE_LENGTH_MISMATCH
+0x0365AE	ASN1_R_FIELD_MISSING
+0x0365C3	ASN1_R_AUX_ERROR
+0x0365D4	asn1_template_noexp_d2i
+0x0365EC	DONOT_SUPPORT_TFLG_SK_MASK
+0x036607	asn1_template_ex_d2i
+0x03661C	ASN1_R_EXPLICIT_TAG_NOT_CONSTRUCTED
+0x036640	ASN1_R_EXPLICIT_LENGTH_MISMATCH
+0x036660	asn1_item_combine_free
+0x036677	ASN1_template_free
+0x03668A	asn1_item_ex_combine_new
+0x0366A9	undefined
+0x0366B3	ASN1_SET_ANY
+0x0366C0	ASN1_SEQUENCE_ANY
+0x0366D2	ASN1_OCTET_STRING_NDEF
+0x0366E9	ASN1_FBOOLEAN
+0x0366F7	ASN1_TBOOLEAN
+0x036705	ASN1_BOOLEAN
+0x036712	DIRECTORYSTRING
+0x036722	DISPLAYTEXT
+0x03672E	ASN1_PRINTABLE
+0x03673D	ASN1_SEQUENCE
+0x03674B	ASN1_ANY
+0x036754	ASN1_NULL
+0x03675E	ASN1_BMPSTRING
+0x03676D	ASN1_UNIVERSALSTRING
+0x036782	ASN1_VISIBLESTRING
+0x036795	ASN1_GENERALIZEDTIME
+0x0367AA	ASN1_UTCTIME
+0x0367B7	ASN1_GENERALSTRING
+0x0367CA	ASN1_IA5STRING
+0x0367D9	ASN1_T61STRING
+0x0367E8	ASN1_PRINTABLESTRING
+0x0367FD	ASN1_UTF8STRING
+0x03680D	ASN1_ENUMERATED
+0x03681D	ASN1_OCTET_STRING
+0x03682F	doesn't support ASN1_TFLG_ADB_OID
+0x036851	asn1_do_adb
+0x03685D	ASN1_R_UNSUPPORTED_ANY_DEFINED_BY_TYPE
+0x036884	pkcs8/bytestring/cbs.c
+0x03689B	EVP_CIPHER_CTX_copy
+0x0368AF	CIPHER_R_INPUT_NOT_INITIALIZED
+0x0368CE	bl <= (int)sizeof(ctx->buf)
+0x0368EA	pkcs8/cipher/cipher.c
+0x036900	b <= sizeof(ctx->buf)
+0x036916	EVP_EncryptFinal_ex
+0x03692A	CIPHER_R_DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH
+0x036955	b <= sizeof(ctx->final)
+0x03696D	EVP_DecryptFinal_ex
+0x036981	CIPHER_R_WRONG_FINAL_BLOCK_LENGTH
+0x0369A3	CIPHER_R_BAD_DECRYPT
+0x0369B8	EVP_CIPHER_CTX_ctrl
+0x0369CC	CIPHER_R_NO_CIPHER_SET
+0x0369E3	CIPHER_R_CTRL_NOT_IMPLEMENTED
+0x036A01	CIPHER_R_CTRL_OPERATION_NOT_IMPLEMENTED
+0x036A29	EVP_CipherInit_ex
+0x036A3B	CIPHER_R_INITIALIZATION_ERROR
+0x036A59	ctx->cipher->block_size == 1 || ctx->cipher->block_size == 8 || ctx->cipher->block_size == 16
+0x036AB7	EVP_CIPHER_CTX_iv_length(ctx) <= sizeof(ctx->iv)
+0x036AE8	EVP_CIPHER_CTX_set_key_length
+0x036B06	CIPHER_R_INVALID_KEY_LENGTH
+0x036B22	des3: TEE_AllocateOperation error, 0x%x
+0x036B4B	des3: TEE_AllocateTransientObject error, 0x%x
+0x036B7A	des3: TEE_PopulateTransientObject error, 0x%x
+0x036BA9	X509_SIG
+0x036BB8	digest
+0x036BBF	X509_ALGOR
+0x036BCA	algorithm
+0x036BD4	parameter
+0x036BDE	gpd.ta.singleInstance
+0x036BF4	gpd.ta.multiSession
+0x036C08	gpd.ta.instanceKeepAlive
+0x036C21	gpd.ta.dataSize
+0x036C31	gpd.ta.stackSize
+0x036C42	gpd.ta.version
+0x036C51	Undefined version
+0x036C63	gpd.ta.description
+0x036C76	Undefined description
+0x036C8C	gp.ta.description
+0x036C9E	EKCST TA
+0x036CA7	gp.ta.version
+0x036CB5	KRKEkeyrepo_key_process
+0x036CCD	keyrepo_read_pack_version
+0x036CE7	keyrepo_read_pack_anti
+0x036CFE	keyrepo_read_pack_product
+0x036D18	get_key_latest_version
+0x036D2F	keyrepo_get_key_length
+0x036D46	keyrepo_read_key
+0x036D57	keyrepo_update_pack
+0x036D6B	keyrepo_clear_unrd
+0x036D7E	keyrepo_update_each_key
+0x036D96	keyrepo_check_each_key
+0x036DAD	ROOT KEY
+0x036DB6	TEE_CipherDoFinal Error, res is 0x%x
+0x036DDC	keyrepo_get_value failed(0x%x)
+0x036DFC	product
+0x036E04	TEE_UNRD_Get_Binary length failed(0x%x)
+0x036E2D	get_unrd_item_count failed
+0x036E49	calloc key_list_in_unrd failed
+0x036E69	get_all_unrd_tags failed
+0x036E83	get_key_latest_version of key %s failed(0x%x)
+0x036EB2	%s-V%02d
+0x036EBB	keyrepo_decry failed(0x%x)
+0x036ED7	keyrepo read key crc error
+0x036EF3	keyrepo_update_pack but image is NULL
+0x036F1A	name length out of size
+0x036F33	device name mismatch, pakage is %s, device is %s
+0x036F65	read keyrepo anti fail(0x%x)
+0x036F84	read anti version in unrd  %d
+0x036FA3	anti in pakage %d
+0x036FB6	anti roolback did not allow to update
+0x036FDD	keyrepo is not full update mode
+0x036FFE	del keyrepo unrd tag:%s
+0x037017	keyrepo_clear_unrd failed
+0x037032	current_offset out of size
+0x03704E	free all_key_data
+0x037061	malloc all_key_data failed
+0x03707D	keyrepo_encry failed(0x%x)
+0x037099	TEE_UNRD_Set_value failed(0x%x)
+0x0370BA	version set to %d
+0x0370CC	keyrepo_set_value failed(0x%x)
+0x0370EC	in check key name length %d out of size
+0x037115	in check key key version %d out of size
+0x03713E	get key %s-V%02d length failed(0x%x)
+0x037164	in check key malloc keyinfo_with_data failed
+0x037191	in check key %s-V%02d failed(0x%x)
+0x0371B5	check each key after flush failed(0x%x)
+0x0371DE	Abort!
+0x0371E5	assertion '%s' failed at %s:%d in %s()
+0x03720C	TEE_UNRD_Open
+0x03721A	TEE_UNRD_Close
+0x037229	TEE_UNRD_Alloc_Handle
+0x03723F	TEE_UNRD_Release_Handle
+0x037257	TEE_UNRD_Set_Binary
+0x03726B	TEE_UNRD_Get_Binary_Length
+0x037286	TEE_UNRD_Get_Binary
+0x03729A	TEE_UNRD_Get_All_Tag
+0x0372AF	TEE_UNRD_Get_Item_Count
+0x0372C7	TEE_UNRD_Flush
+0x0372D6	TEE_UNRD_Delete
+0x0372E6	Fail to call TEE_UNRD_Open, res 0x%x 
+0x03730C	Fail to call TEE_UNRD_Close, res 0x%x 
+0x037333	Fail to call TEE_UNRD_Alloc_Handle, res 0x%x 
+0x037361	Fail to call TEE_UNRD_Release_Handle, res 0x%x 
+0x037391	Fail to call TEE_UNRD_Set_Binary, res 0x%x 
+0x0373BD	Fail to call TEE_UNRD_Get_Binary, res 0x%x 
+0x0373E9	Fail to call TEE_UNRD_Get_All_Tag, res 0x%x 
+0x037416	Fail to call TEE_UNRD_Get_Item_Count, res 0x%x 
+0x037446	Fail to call TEE_UNRD_Flush, res 0x%x 
+0x03746D	Fail to call TEE_UNRD_Delete, res 0x%x 
+0x037495	TEE_RPMB_Get_EMMC_Size
+0x0374AC	TEE_RPMB_Read
+0x0374BA	TEE_RPMB_Write
+0x0374C9	!!!Fail to call TEE_RPMB_Get_EMMC_Size, res 0x%x 
+0x0374FB	!!!Fail to call TEE_RPMB_Read, res 0x%x 
+0x037524	Fail to call TEE_RPMB_WRITE, res 0x%x 
+0x03754B	TEE_PRAK_Get
+0x037558	Fail to call TEE_PRAK_Get, res 0x%x 
+0x03757D	TEE_Fw_Image_Verify
+0x037591	Fail to call image verify, res 0x%x 
+0x0375B6	PANIC: %s
+0x0375C1	Divisor is zero
+0x0375D1	Modulus is too short
+0x0375E6	too small modulus or trying to invert zero
+0x037611	Invalid hint %#x
+0x037622	create_free_block
+0x037650	bstats
+0x037657	raw_memalign
+0x037664	brel_before
+0x037670	brel_after
+0x03767B	malloc_add_pool
+0x03768B	bget_buf_size
+0x037699	bpool_foreach_pool
+0x0376AC	lib/libutils/isoc/bget_malloc.c
+0x0376CC	BH((char *)bf + size) == bn
+0x0376E8	bn->bsize < 0
+0x0376F6	bn->prevfree == 0
+0x037708	poolset->freelist.ql.blink->ql.flink == &poolset->freelist
+0x037743	poolset->freelist.ql.flink->ql.blink == &poolset->freelist
+0x03777E	lib/libutils/isoc/bget.c
+0x037797	bn->prevfree == b->bh.bsize
+0x0377B3	ba->prevfree == b->bh.bsize
+0x0377CF	b->ql.blink->ql.flink == b
+0x0377EA	b->ql.flink->ql.blink == b
+0x037805	rsize >= size
+0x037813	buf != NULL
+0x03781F	b->bh.bsize < 0
+0x03782F	BH((char *) b - b->bh.bsize)->prevfree == 0
+0x03785B	poolset->totalloc >= 0
+0x037872	BH((char *) b - b->bh.prevfree)->bsize == b->bh.prevfree
+0x0378AB	BH((char *) bn + bn->bh.bsize)->prevfree == bn->bh.bsize
+0x0378E4	bn->ql.blink->ql.flink == bn
+0x037901	bn->ql.flink->ql.blink == bn
+0x03791E	bn->bh.bsize < 0
+0x03792F	osize > 0
+0x037939	len - sizeof(struct bhead) <= -((bufsize) ESent + 1)
+0x03796E	b->bh.bsize > 0
+0x03797E	(p + hdr_size + ftr_size + size) <= (b + s)
+0x0379AA	orig_buf < new_buf
+0x0379BD	size >= (SizeQ + sizeof(struct bhead))
+0x0379E4	bfp->bh.bsize == bf->bh.prevfree
+0x037A05	new_size <= -b->bsize
+0x037A1B	bfn->bh.prevfree == 0
+0x037A31	bnn->prevfree == bfn->bh.bsize
+0x037A50	bfn->ql.blink->ql.flink == bfn
+0x037A6F	bfn->ql.flink->ql.blink == bfn
+0x037A8E	start < end
+0x037A9A	get_sn_from_rpmb
+0x037AAB	tee_utils_get_sn
+0x037ABC	get_unrd_item_count
+0x037AD0	get_all_unrd_tags
+0x037AE2	[%s] fail to get %s's binary length
+0x037B07	[%s] sn_len is too big
+0x037B1F	[%s] fail to get %s's binary with length = %d
+0x037B4E	[%s] there is not enough memory
+0x037B6F	[%s] sn_type(%d) doesn't support
+0x037B91	[%s] sn_info length is less than offset
+0x037BBA	[%s] sn is out of memory
+0x037BD4	[%s:%d] error: invalid parameter
+0x037BF6	[%s:%d] error: %d
+0x037C09	0123456789ABCDEF
+0x037C1A	0123456789abcdef
+0x037C2B	(null)
+0x037C32	%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x
+0x037C63	UEIDF%c/
+0x037C7B	%s:%d 
+0x037C82	mempool_alloc_pool
+0x037C95	lib/libutils/ext/mempool.c
+0x037CB0	!((vaddr_t)data & (POOL_ALIGN - 1))
+0x037CD4	mpa_set_str
+0x037CE0	mpa_get_str
+0x037CEC	data len (%d) > max size (%d)
+0x037D0A	binary buffer (%d) > alloced buffer (%d)
+0x037D33	lib/libmpa/mpa_io.c
+0x038C99	__stack_chk_guard
+0x038CAB	ta_heap_size
+0x038CB8	const_one
+0x038CC2	trace_level
+0x038CCE	utee_authenc_update_payload
+0x038CEA	trace_ext_prefix
+0x038CFB	ta_heap
+0x038D03	ta_param_types
+0x038D12	onetime_enable_flag
+0x038D26	utee_cipher_update
+0x038D39	Const_1_LShift_Base
+0x038D4D	ta_params
+0x038D57	ta_head
+0x038D5F	X509_ALGOR_it
+0x039D78	GCC: (GNU) 4.9.x 20150123 (prerelease)
+0x039D9F	GCC: (Linaro GCC 7.2-2017.11) 7.2.1 20171011
+0x039DCD	.shstrtab
+0x039DD7	.ta_head
+0x039DE6	.rodata
+0x039DEE	.dynsym
+0x039DF6	.rela.dyn
+0x039E00	.rela.got
+0x039E0A	.dynamic
+0x039E13	.dynstr
+0x039E2C	.comment
