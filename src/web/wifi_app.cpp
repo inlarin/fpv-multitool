@@ -9,6 +9,7 @@
 #include "web_state.h"
 #include "battery/dji_battery.h"
 #include "motor/dshot.h"
+#include "motor/motor_dispatch.h"
 #include "pin_config.h"
 #include "wdt.h"
 
@@ -180,56 +181,9 @@ void runWifiApp() {
             drawStatus();
         }
 
-        // Keep web server + motor commands alive
+        // Keep web server + motor/servo commands alive via shared pump.
         WebServer::loop();
-
-        bool armReq, disarmReq, beepReq, armed;
-        int dshotSpeed;
-        uint16_t throttle;
-        {
-            WebState::Lock lock;
-            armReq     = WebState::motor.armRequest;
-            disarmReq  = WebState::motor.disarmRequest;
-            beepReq    = WebState::motor.beepRequest;
-            armed      = WebState::motor.armed;
-            dshotSpeed = WebState::motor.dshotSpeed;
-            throttle   = WebState::motor.throttle;
-            WebState::motor.armRequest = false;
-            WebState::motor.disarmRequest = false;
-            WebState::motor.beepRequest = false;
-        }
-        if (armReq && !armed) {
-            DShotSpeed s = (dshotSpeed == 150) ? DSHOT150 :
-                           (dshotSpeed == 600) ? DSHOT600 : DSHOT300;
-            if (DShot::init(SIGNAL_OUT, s)) {
-                DShot::arm();
-                WebState::Lock lock;
-                WebState::motor.armed = true;
-            }
-        }
-        if (disarmReq) {
-            for (int i = 0; i < 50; i++) {
-                DShot::sendThrottle(0);
-                delayMicroseconds(2000);
-            }
-            DShot::stop();
-            WebState::Lock lock;
-            WebState::motor.throttle = 0;
-            WebState::motor.armed = false;
-        }
-        if (beepReq && armed) {
-            int cmd = WebState::motor.beepCmd;
-            if (cmd < 1 || cmd > 5) cmd = 1;
-            DShot::sendCommand((uint8_t)cmd);
-        }
-        if (armed) {
-            static uint32_t lastSend = 0;
-            if (micros() - lastSend > 2000) {
-                uint16_t dsVal = (throttle == 0) ? 0 : constrain(throttle + 47, 48, 2047);
-                DShot::sendThrottle(dsVal);
-                lastSend = micros();
-            }
-        }
+        MotorDispatch::pump();
 
         // Refresh status every 3s (keep QR rendered)
         if (millis() - lastRedraw > 3000) {

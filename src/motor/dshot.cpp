@@ -80,6 +80,7 @@ bool DShot::init(uint8_t pin, DShotSpeed speed) {
     if (err != ESP_OK) {
         Serial.printf("DShot: RMT channel init failed: %d\n", err);
         s_channel = nullptr;
+        PinPort::release(PinPort::PORT_B);
         return false;
     }
 
@@ -89,6 +90,7 @@ bool DShot::init(uint8_t pin, DShotSpeed speed) {
         Serial.printf("DShot: encoder init failed: %d\n", err);
         rmt_del_channel(s_channel);
         s_channel = nullptr;
+        PinPort::release(PinPort::PORT_B);
         return false;
     }
 
@@ -99,6 +101,7 @@ bool DShot::init(uint8_t pin, DShotSpeed speed) {
         rmt_del_channel(s_channel);
         s_channel = nullptr;
         s_copy_encoder = nullptr;
+        PinPort::release(PinPort::PORT_B);
         return false;
     }
 

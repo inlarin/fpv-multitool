@@ -60,6 +60,17 @@ static AsyncWebSocket *s_ws = nullptr;
 static bool s_running = false;
 static uint32_t s_lastBroadcast = 0;
 
+// Guards the shared `String` fields in the clone-research endpoints
+// (s_brute.hits, s_macResp.hits / baselineHex, s_logger.entries). The
+// Arduino String class is not thread-safe — a background FreeRTOS task
+// appends while the HTTP status handler reads .c_str(), so we need a lock
+// to avoid use-after-free if the producer reallocates mid-read.
+static SemaphoreHandle_t s_cloneLogMutex = nullptr;
+struct CloneLogGuard {
+    CloneLogGuard()  { if (s_cloneLogMutex) xSemaphoreTake(s_cloneLogMutex, portMAX_DELAY); }
+    ~CloneLogGuard() { if (s_cloneLogMutex) xSemaphoreGive(s_cloneLogMutex); }
+};
+
 static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len) {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, data, len);
@@ -68,84 +79,102 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
     const char* cmd = doc["cmd"];
     if (!cmd) return;
 
-    WebState::Lock lock;  // protect all writes to shared state
+    // State-only commands: update shared state under lock, nothing else.
+    // Hardware side-effects happen in later blocks AFTER the lock is dropped.
+    enum ServoHwAction { SH_NONE, SH_SET_PULSE, SH_SET_FREQ, SH_STOP, SH_START_SWEEP };
+    ServoHwAction servoHw = SH_NONE;
+    int servoHwArg = 0;
 
-    if (strcmp(cmd, "servo") == 0) {
-        WebState::servo.pulseUs = doc["us"] | 1500;
-        WebState::servo.active = true;
-        WebState::servo.sweep = false;  // manual move cancels sweep
-        ServoPWM::setPulse(WebState::servo.pulseUs);
-        int us = WebState::servo.pulseUs;
-        if (WebState::servo.observedMinUs == 0 || us < WebState::servo.observedMinUs)
-            WebState::servo.observedMinUs = us;
-        if (us > WebState::servo.observedMaxUs) WebState::servo.observedMaxUs = us;
-    } else if (strcmp(cmd, "servoFreq") == 0) {
-        int hz = doc["hz"] | 50;
-        if (hz != WebState::servo.freq) {
-            WebState::servo.freq = hz;
-            ServoPWM::setFrequency(hz);
-        }
-    } else if (strcmp(cmd, "servoStop") == 0) {
-        WebState::servo.active = false;
-        WebState::servo.sweep = false;
-        ServoPWM::stop();
-    } else if (strcmp(cmd, "servoSweep") == 0) {
-        WebState::servo.sweep = doc["on"] | false;
-        if (WebState::servo.sweep && !WebState::servo.active) {
-            ServoPWM::start(SIGNAL_OUT, WebState::servo.freq);
+    {
+        WebState::Lock lock;
+
+        if (strcmp(cmd, "servo") == 0) {
+            int us = constrain((int)(doc["us"] | 1500), 100, 20000);
+            WebState::servo.pulseUs = us;
             WebState::servo.active = true;
+            WebState::servo.sweep = false;  // manual move cancels sweep
+            if (WebState::servo.observedMinUs == 0 || us < WebState::servo.observedMinUs)
+                WebState::servo.observedMinUs = us;
+            if (us > WebState::servo.observedMaxUs) WebState::servo.observedMaxUs = us;
+            servoHw = SH_SET_PULSE; servoHwArg = us;
+        } else if (strcmp(cmd, "servoFreq") == 0) {
+            int hz = doc["hz"] | 50;
+            if (hz != WebState::servo.freq) {
+                WebState::servo.freq = hz;
+                servoHw = SH_SET_FREQ; servoHwArg = hz;
+            }
+        } else if (strcmp(cmd, "servoStop") == 0) {
+            WebState::servo.active = false;
+            WebState::servo.sweep = false;
+            servoHw = SH_STOP;
+        } else if (strcmp(cmd, "servoSweep") == 0) {
+            bool on = doc["on"] | false;
+            WebState::servo.sweep = on;
+            if (on && !WebState::servo.active) {
+                servoHw = SH_START_SWEEP; servoHwArg = WebState::servo.freq;
+                WebState::servo.active = true;
+            }
+        } else if (strcmp(cmd, "servoSweepCfg") == 0) {
+            int mn = doc["minUs"] | WebState::servo.sweepMinUs;
+            int mx = doc["maxUs"] | WebState::servo.sweepMaxUs;
+            int pr = doc["periodMs"] | WebState::servo.sweepPeriodMs;
+            WebState::servo.sweepMinUs = constrain(mn, 500, 2500);
+            WebState::servo.sweepMaxUs = constrain(mx, 500, 2500);
+            if (WebState::servo.sweepMaxUs <= WebState::servo.sweepMinUs)
+                WebState::servo.sweepMaxUs = WebState::servo.sweepMinUs + 100;
+            WebState::servo.sweepPeriodMs = constrain(pr, 200, 20000);
+        } else if (strcmp(cmd, "servoMarkMin") == 0) {
+            WebState::servo.markedMinUs = WebState::servo.pulseUs;
+        } else if (strcmp(cmd, "servoMarkMax") == 0) {
+            WebState::servo.markedMaxUs = WebState::servo.pulseUs;
+        } else if (strcmp(cmd, "servoResetMarks") == 0) {
+            WebState::servo.markedMinUs = 0;
+            WebState::servo.markedMaxUs = 0;
+            WebState::servo.observedMinUs = 0;
+            WebState::servo.observedMaxUs = 0;
+        } else if (strcmp(cmd, "servoApplyMarks") == 0) {
+            if (WebState::servo.markedMinUs > 0 && WebState::servo.markedMaxUs > WebState::servo.markedMinUs) {
+                WebState::servo.sweepMinUs = WebState::servo.markedMinUs;
+                WebState::servo.sweepMaxUs = WebState::servo.markedMaxUs;
+            }
+        } else if (strcmp(cmd, "motorArm") == 0) {
+            WebState::motor.armRequest = true;
+        } else if (strcmp(cmd, "motorDisarm") == 0) {
+            WebState::motor.disarmRequest = true;
+        } else if (strcmp(cmd, "throttle") == 0) {
+            int req = constrain((int)(doc["value"] | 0), 0, 2000);
+            if (req > WebState::motor.maxThrottle) req = WebState::motor.maxThrottle;
+            WebState::motor.throttle = req;
+        } else if (strcmp(cmd, "dshotSpeed") == 0) {
+            WebState::motor.dshotSpeed = doc["speed"] | 300;
+        } else if (strcmp(cmd, "motorBeep") == 0) {
+            int b = doc["n"] | 1;
+            if (b < 1 || b > 5) b = 1;
+            WebState::motor.beepCmd = b;
+            WebState::motor.beepRequest = true;
+        } else if (strcmp(cmd, "motorMaxThrottle") == 0) {
+            int v = constrain((int)(doc["value"] | 2000), 100, 2000);
+            WebState::motor.maxThrottle = v;
+            if (WebState::motor.throttle > v) WebState::motor.throttle = v;
+        } else if (strcmp(cmd, "motorDirCW") == 0) {
+            WebState::motor.dirCwRequest = true;
+        } else if (strcmp(cmd, "motorDirCCW") == 0) {
+            WebState::motor.dirCcwRequest = true;
+        } else if (strcmp(cmd, "motor3DOn") == 0) {
+            WebState::motor.mode3DOnRequest = true;
+        } else if (strcmp(cmd, "motor3DOff") == 0) {
+            WebState::motor.mode3DOffRequest = true;
         }
-    } else if (strcmp(cmd, "servoSweepCfg") == 0) {
-        int mn = doc["minUs"] | WebState::servo.sweepMinUs;
-        int mx = doc["maxUs"] | WebState::servo.sweepMaxUs;
-        int pr = doc["periodMs"] | WebState::servo.sweepPeriodMs;
-        WebState::servo.sweepMinUs = constrain(mn, 500, 2500);
-        WebState::servo.sweepMaxUs = constrain(mx, 500, 2500);
-        if (WebState::servo.sweepMaxUs <= WebState::servo.sweepMinUs)
-            WebState::servo.sweepMaxUs = WebState::servo.sweepMinUs + 100;
-        WebState::servo.sweepPeriodMs = constrain(pr, 200, 20000);
-    } else if (strcmp(cmd, "servoMarkMin") == 0) {
-        WebState::servo.markedMinUs = WebState::servo.pulseUs;
-    } else if (strcmp(cmd, "servoMarkMax") == 0) {
-        WebState::servo.markedMaxUs = WebState::servo.pulseUs;
-    } else if (strcmp(cmd, "servoResetMarks") == 0) {
-        WebState::servo.markedMinUs = 0;
-        WebState::servo.markedMaxUs = 0;
-        WebState::servo.observedMinUs = 0;
-        WebState::servo.observedMaxUs = 0;
-    } else if (strcmp(cmd, "servoApplyMarks") == 0) {
-        if (WebState::servo.markedMinUs > 0 && WebState::servo.markedMaxUs > WebState::servo.markedMinUs) {
-            WebState::servo.sweepMinUs = WebState::servo.markedMinUs;
-            WebState::servo.sweepMaxUs = WebState::servo.markedMaxUs;
-        }
-    } else if (strcmp(cmd, "motorArm") == 0) {
-        WebState::motor.armRequest = true;
-    } else if (strcmp(cmd, "motorDisarm") == 0) {
-        WebState::motor.disarmRequest = true;
-    } else if (strcmp(cmd, "throttle") == 0) {
-        // DShot range 48-2047; UI sends 0-2000 (we add 47 offset later)
-        int req = constrain((int)(doc["value"] | 0), 0, 2000);
-        if (req > WebState::motor.maxThrottle) req = WebState::motor.maxThrottle;
-        WebState::motor.throttle = req;
-    } else if (strcmp(cmd, "dshotSpeed") == 0) {
-        WebState::motor.dshotSpeed = doc["speed"] | 300;
-    } else if (strcmp(cmd, "motorBeep") == 0) {
-        int b = doc["n"] | 1;
-        if (b < 1 || b > 5) b = 1;
-        WebState::motor.beepCmd = b;
-        WebState::motor.beepRequest = true;
-    } else if (strcmp(cmd, "motorMaxThrottle") == 0) {
-        int v = constrain((int)(doc["value"] | 2000), 100, 2000);
-        WebState::motor.maxThrottle = v;
-        if (WebState::motor.throttle > v) WebState::motor.throttle = v;
-    } else if (strcmp(cmd, "motorDirCW") == 0) {
-        WebState::motor.dirCwRequest = true;
-    } else if (strcmp(cmd, "motorDirCCW") == 0) {
-        WebState::motor.dirCcwRequest = true;
-    } else if (strcmp(cmd, "motor3DOn") == 0) {
-        WebState::motor.mode3DOnRequest = true;
-    } else if (strcmp(cmd, "motor3DOff") == 0) {
-        WebState::motor.mode3DOffRequest = true;
+    }  // lock released
+
+    // Hardware side effects (lock released — these can block or call
+    // PinPort::acquire without deadlocking).
+    switch (servoHw) {
+        case SH_SET_PULSE:   ServoPWM::setPulse(servoHwArg); break;
+        case SH_SET_FREQ:    ServoPWM::setFrequency(servoHwArg); break;
+        case SH_STOP:        ServoPWM::stop(); break;
+        case SH_START_SWEEP: ServoPWM::start(SIGNAL_OUT, servoHwArg); break;
+        case SH_NONE:        break;
     }
 }
 
@@ -472,6 +501,8 @@ static void executeFlash() {
 
 void WebServer::start() {
     if (s_running) return;
+
+    if (!s_cloneLogMutex) s_cloneLogMutex = xSemaphoreCreateMutex();
 
     s_server = new AsyncWebServer(80);
     s_ws = new AsyncWebSocket("/ws");
@@ -1113,8 +1144,10 @@ void WebServer::start() {
                     if (n < 0) { s_brute.flappyCount++; continue; }
                     if (n != baselineLen[i] || memcmp(cur, baseline[i], n) != 0) {
                         char entry[128];
+                        size_t existingLen;
+                        { CloneLogGuard g; existingLen = s_brute.hits.length(); }
                         int ofs = snprintf(entry, sizeof(entry), "%s{\"mac\":\"0x%04X\",\"reg\":\"0x%02X\",\"before\":\"",
-                                           s_brute.hits.length() ? "," : "", v, s_brute.probes[i]);
+                                           existingLen ? "," : "", v, s_brute.probes[i]);
                         for (int j = 0; j < baselineLen[i] && j < 16 && ofs < (int)sizeof(entry)-3; j++) {
                             ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "%02X", baseline[i][j]);
                         }
@@ -1123,7 +1156,7 @@ void WebServer::start() {
                             ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "%02X", cur[j]);
                         }
                         snprintf(entry+ofs, sizeof(entry)-ofs, "\"}");
-                        s_brute.hits += entry;
+                        { CloneLogGuard g; s_brute.hits += entry; }
                         s_brute.hitCount++;
                         memcpy(baseline[i], cur, n);
                         baselineLen[i] = n;
@@ -1140,12 +1173,14 @@ void WebServer::start() {
     });
 
     s_server->on("/api/batt/clone/brute_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        String hitsCopy;
+        { CloneLogGuard g; hitsCopy = s_brute.hits; }
         AsyncResponseStream *r = req->beginResponseStream("application/json");
         r->printf("{\"running\":%s,\"pos\":\"0x%04X\",\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"hits\":%d,\"flapping\":%d,\"stable\":%d,\"entries\":[%s]}",
                   s_brute.running ? "true" : "false",
                   (unsigned)s_brute.pos, (unsigned)s_brute.from, (unsigned)s_brute.to,
                   s_brute.hitCount, s_brute.flappyCount, s_brute.stable,
-                  s_brute.hits.c_str());
+                  hitsCopy.c_str());
         req->send(r);
     });
 
@@ -1211,13 +1246,15 @@ void WebServer::start() {
 
                 if (isHit && s_macResp.hitCount < 500) {
                     char entry[128];
+                    size_t existingLen;
+                    { CloneLogGuard g; existingLen = s_macResp.hits.length(); }
                     int ofs = snprintf(entry, sizeof(entry), "%s{\"mac\":\"0x%04X\",\"len\":%d,\"hex\":\"",
-                                       s_macResp.hits.length() ? "," : "", (unsigned)v, n);
+                                       existingLen ? "," : "", (unsigned)v, n);
                     for (int j = 0; j < n && j < 16 && ofs < (int)sizeof(entry)-3; j++) {
                         ofs += snprintf(entry+ofs, sizeof(entry)-ofs, "%02X", cur[j]);
                     }
                     snprintf(entry+ofs, sizeof(entry)-ofs, "\"}");
-                    s_macResp.hits += entry;
+                    { CloneLogGuard g; s_macResp.hits += entry; }
                     s_macResp.hitCount++;
                 }
                 s_macResp.pos = v;
@@ -1231,11 +1268,15 @@ void WebServer::start() {
     });
 
     s_server->on("/api/batt/clone/macresp_status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        String hitsCopy, baselineCopy;
+        { CloneLogGuard g;
+          hitsCopy     = s_macResp.hits;
+          baselineCopy = s_macResp.baselineHex; }
         AsyncResponseStream *r = req->beginResponseStream("application/json");
         r->printf("{\"running\":%s,\"pos\":\"0x%04X\",\"from\":\"0x%04X\",\"to\":\"0x%04X\",\"hits\":%d,\"baseline\":\"%s\",\"entries\":[%s]}",
                   s_macResp.running ? "true" : "false",
                   (unsigned)s_macResp.pos, (unsigned)s_macResp.from, (unsigned)s_macResp.to,
-                  s_macResp.hitCount, s_macResp.baselineHex.c_str(), s_macResp.hits.c_str());
+                  s_macResp.hitCount, baselineCopy.c_str(), hitsCopy.c_str());
         req->send(r);
     });
 
@@ -1421,14 +1462,16 @@ void WebServer::start() {
                         }
                         if (start >= 0 && s_logger.count < 500) {
                             char entry[96];
+                            size_t existingLen;
+                            { CloneLogGuard g; existingLen = s_logger.entries.length(); }
                             int o = snprintf(entry, sizeof(entry), "%s{\"t\":%u,\"b\":\"0x%04X\",\"hex\":\"",
-                                             s_logger.entries.length() ? "," : "",
+                                             existingLen ? "," : "",
                                              (unsigned)((millis() - s_logger.startMs) / 1000), (unsigned)b);
                             for (int j = start; j < n && j - start < 26 && o < (int)sizeof(entry)-3; j++) {
                                 o += snprintf(entry+o, sizeof(entry)-o, "%02X", buf[j]);
                             }
                             snprintf(entry+o, sizeof(entry)-o, "\"}");
-                            s_logger.entries += entry;
+                            { CloneLogGuard g; s_logger.entries += entry; }
                             s_logger.count++;
                         }
                     }
@@ -1446,13 +1489,15 @@ void WebServer::start() {
     });
 
     s_server->on("/api/batt/clone/logger_dump", HTTP_GET, [](AsyncWebServerRequest *req) {
+        String entriesCopy;
+        { CloneLogGuard g; entriesCopy = s_logger.entries; }
         AsyncResponseStream *r = req->beginResponseStream("application/json");
         r->printf("{\"running\":%s,\"count\":%d,\"uptime_s\":%u,\"interval_s\":%u,\"entries\":[%s]}",
                   s_logger.running ? "true" : "false",
                   s_logger.count,
                   (unsigned)((millis() - s_logger.startMs) / 1000),
                   (unsigned)s_logger.intervalSec,
-                  s_logger.entries.c_str());
+                  entriesCopy.c_str());
         req->send(r);
     });
 
@@ -2557,6 +2602,26 @@ void WebServer::start() {
         delay(200);
         ESP.restart();
     });
+
+    // HTTP fallback for UI `send()` when the WebSocket is down. Accepts the
+    // same JSON body that would be sent through WS and dispatches to the
+    // shared handler. Prevents commands from silently 404-ing when the user
+    // momentarily lost WS (mobile suspend, AP hop).
+    s_server->on("/api/ws", HTTP_POST,
+        [](AsyncWebServerRequest *req) {
+            // Unused final handler — body is consumed in onBody below.
+        },
+        nullptr,
+        [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+            if (index == 0 && len == total) {
+                handleWsMsg(nullptr, data, len);
+                req->send(200, "text/plain", "OK");
+            } else if (total > 0 && index + len == total) {
+                // Multi-chunk body — unlikely for WS commands (<1KB), but accept anyway.
+                handleWsMsg(nullptr, data, len);
+                req->send(200, "text/plain", "OK");
+            }
+        });
 
     s_server->onNotFound([](AsyncWebServerRequest *req) {
         req->send(404, "text/plain", "Not found");

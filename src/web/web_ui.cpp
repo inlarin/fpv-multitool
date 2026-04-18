@@ -938,8 +938,12 @@ function connect() {
 }
 
 function send(obj) {
-  if (ws && wsOk) ws.send(JSON.stringify(obj));
-  else fetch('/api', {method:'POST', body:JSON.stringify(obj)});
+  if (ws && wsOk) { ws.send(JSON.stringify(obj)); return; }
+  // WS is down — POST to the HTTP fallback so commands aren't silently dropped.
+  fetch('/api/ws', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(obj)
+  }).catch(e => console.warn('send fallback failed:', e));
 }
 
 let _curWs = localStorage.getItem('ws') || 'batt';
