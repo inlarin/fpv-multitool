@@ -19,6 +19,7 @@
 #include "battery/smbus_bridge.h"
 #include "battery/smbus_bridge_ui.h"
 #include "core/usb_mode.h"
+#include "core/pin_port.h"
 #include "rc_sniffer/rc_sniffer.h"
 #include "usb_emu/cp2112_emu.h"
 #include "motor/dshot.h"
@@ -141,6 +142,12 @@ void setup() {
     Display::init();
     Button::init(BTN_BOOT);
     StatusLed::init();
+
+    // Restore user-preferred Port B mode from NVS (IDLE by default).
+    // Feature consumers (DJIBattery/SMBusBridge/CRSF/...) will acquire Port B
+    // when their mode matches; otherwise they stay inactive until user
+    // switches modes via Web UI.
+    PinPort::applyAtBoot();
 
     // Auto-start WiFi + web server in background
     autoStartWifi();

@@ -1,6 +1,7 @@
 #include "dji_battery.h"
 #include "smbus.h"
 #include "pin_config.h"
+#include "core/pin_port.h"
 #include <mbedtls/md.h>  // for HMAC-SHA1 auth unseal
 
 static const uint8_t BATT_ADDR = 0x0B;
@@ -98,6 +99,13 @@ static const int UNSEAL_KEYS_COUNT = sizeof(UNSEAL_KEYS) / sizeof(UNSEAL_KEYS[0]
 // Init / probing
 // =====================================================================
 void DJIBattery::init() {
+    // Try to acquire Port B in I2C mode. If busy with another mode
+    // (UART/PWM/GPIO), skip init — battery tab will show "not connected"
+    // until user switches to I2C via System → Port B Mode.
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "battery")) {
+        Serial.println("[DJIBattery] Port B busy, skipping I2C init");
+        return;
+    }
     SMBus::init(BATT_SDA, BATT_SCL);
 }
 

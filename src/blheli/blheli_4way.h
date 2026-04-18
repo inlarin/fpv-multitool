@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "pin_config.h"
 
 // BLHeli 4way-interface TCP server + OneWire bit-bang for ESC bootloader access.
 //
@@ -11,13 +12,13 @@
 // Connect BLHeliSuite32 → choose Interface: "4way" → TCP → host = board IP,
 // port 4321 → Connect. Then select ESC index 0 (we only support one ESC).
 //
-// Signal wire connects to SIGNAL_OUT (GPIO 2) with proper BEC power to ESC.
+// Signal wire connects to SIGNAL_OUT (Port B pin_a, GPIO 11) with proper BEC power to ESC.
 
 namespace BLHeli4Way {
 
 // Start TCP server on port 4321. Spawns task that accepts 4way commands and
 // talks to ESC via OneWire on signal pin.
-void start(int signalPin = 2);
+void start(int signalPin = PORT_B_PIN_A);
 void stop();
 bool isRunning();
 

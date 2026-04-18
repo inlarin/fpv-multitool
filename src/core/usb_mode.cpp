@@ -63,7 +63,7 @@ void UsbMode::applyAtBoot() {
 
 // ===== USB2TTL pump =====
 // Pumps bytes transparently between the USB CDC interface and UART1 on
-// ELRS_TX/ELRS_RX (GPIO 43/44). Called from main loop; no-op unless in
+// ELRS_TX/ELRS_RX (Port B, GPIO 11/10). Called from main loop; no-op unless in
 // USB2TTL mode. Serial1 is configured lazily on first call so we don't
 // collide with other features (ELRS flasher, CRSF) that also use it.
 void UsbMode::pumpLoop() {

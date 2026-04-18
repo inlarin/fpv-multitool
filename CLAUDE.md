@@ -32,16 +32,46 @@ Build an application on ESP32-S3-LCD-1.47B for testing FPV drone servos and moto
 | SD_D2 | 17 |
 | SD_D3 | 21 |
 
-### I2C — CONFIRMED (QMI8658 WHO_AM_I=0x05)
+### I2C Wire0 — onboard QMI8658 IMU (не выведен на pin headers)
 | Function | GPIO |
 |----------|-------|
 | I2C_SDA | 48 |
 | I2C_SCL | 47 |
 
+### I2C Wire1 — DJI Battery SMBus (на pin headers: GP10/GP11)
+| Function | GPIO |
+|----------|-------|
+| BATT_SDA | 11 |
+| BATT_SCL | 10 |
+
+### UART1 — ELRS/CRSF/RC sniffer (на pin headers)
+| Function | GPIO |
+|----------|-------|
+| ELRS_TX (ESP → приёмник) | 43 |
+| ELRS_RX (приёмник → ESP) | 44 |
+| ELRS_BOOT (DFU)          | 3 |
+
+### Signal output — Servo/Motor DShot/ESC (на pin headers)
+| Function | GPIO |
+|----------|-------|
+| SIGNAL_OUT | 2 |
+
 ### RGB LED
 | Function | GPIO |
 |----------|-------|
-| RGB_LED | 38 (WS2812) |
+| RGB_LED | 38 (WS2812, onboard) |
+
+### Battery voltage ADC
+| Function | GPIO |
+|----------|-------|
+| BAT_ADC_PIN | 1 (ADC1_CH0, voltage divider) |
+
+### BOOT button (навигация)
+| Function | GPIO |
+|----------|-------|
+| BTN_BOOT | 0 |
+
+**Источник истины для pins:** [include/pin_config.h](include/pin_config.h)
 
 ## Build System
 - **Framework:** PlatformIO + Arduino (espressif32, Arduino Core 3.x)

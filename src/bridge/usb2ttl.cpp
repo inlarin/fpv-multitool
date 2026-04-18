@@ -266,8 +266,10 @@ void runUSB2TTL() {
     s_monHead = 0;
     s_monLinePos = 0;
 
-    pinMode(ELRS_BOOT, OUTPUT);
-    digitalWrite(ELRS_BOOT, HIGH);
+    if (ELRS_BOOT >= 0) {
+        pinMode(ELRS_BOOT, OUTPUT);
+        digitalWrite(ELRS_BOOT, HIGH);
+    }
 
     redrawPage();
 
@@ -287,7 +289,7 @@ void runUSB2TTL() {
         if (!s_bridgeActive) {
             if (evt == BTN_DOUBLE_CLICK) {
                 uart.end();
-                pinMode(ELRS_BOOT, INPUT);
+                if (ELRS_BOOT >= 0) pinMode(ELRS_BOOT, INPUT);
                 return;
             }
             if (evt == BTN_LONG_PRESS) {
@@ -300,9 +302,12 @@ void runUSB2TTL() {
                 uart.begin(s_currentBaud, SERIAL_8N1, ELRS_RX, ELRS_TX);
                 uart.setRxBufferSize(4096);
 
-                // Enter flash mode: pull BOOT low
-                digitalWrite(ELRS_BOOT, LOW);
-                delay(50);
+                // Enter flash mode: pull BOOT low (skipped if no BOOT pin —
+                // user holds the receiver's own BOOT button while powering on).
+                if (ELRS_BOOT >= 0) {
+                    digitalWrite(ELRS_BOOT, LOW);
+                    delay(50);
+                }
 
                 redrawPage();
             }
@@ -348,7 +353,7 @@ void runUSB2TTL() {
             if (evt == BTN_LONG_PRESS) {
                 s_bridgeActive = false;
                 uart.end();
-                digitalWrite(ELRS_BOOT, HIGH);
+                if (ELRS_BOOT >= 0) digitalWrite(ELRS_BOOT, HIGH);
                 s_currentBaud = 0;
                 redrawPage();
             }
