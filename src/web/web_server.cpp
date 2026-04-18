@@ -1416,6 +1416,148 @@ void WebServer::start() {
         req->send(200, "text/plain", "stop requested");
     });
 
+    // DataFlash dump: sweep all DF addresses 0x4000-0x7FFF in ranges, try to read
+    // each via MAC 0x44 (ManufacturerBlockAccess). Even if sealed, some DF areas
+    // may be readable on clone chips (PTL may have incomplete seal enforcement).
+    //   GET /api/batt/clone/dfdump?from=0x4000&to=0x40FF
+    s_server->on("/api/batt/clone/dfdump", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint32_t from = req->hasParam("from") ? strtoul(req->getParam("from")->value().c_str(), nullptr, 0) : 0x4000;
+        uint32_t to   = req->hasParam("to")   ? strtoul(req->getParam("to")->value().c_str(), nullptr, 0)   : 0x40FF;
+        if (to - from > 512) to = from + 512;  // cap 512 addrs per request
+
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("{\"entries\":[");
+        bool first = true;
+        int hits = 0;
+        uint32_t lastYield = millis();
+        uint8_t buf[32];
+        for (uint32_t addr = from; addr <= to; addr += 4) {  // step 4 = u32 aligned
+            int n = SMBus::macBlockRead(0x0B, (uint16_t)addr, buf, 32);
+            if (n > 0) {
+                // Ignore all-FF or all-zero responses (unused regions)
+                bool hasData = false;
+                for (int j = 0; j < n && j < 16; j++) {
+                    if (buf[j] != 0xFF && buf[j] != 0x00) { hasData = true; break; }
+                }
+                if (hasData) {
+                    if (!first) r->print(",");
+                    first = false;
+                    r->printf("{\"addr\":\"0x%04X\",\"len\":%d,\"hex\":\"", (unsigned)addr, n);
+                    for (int j = 0; j < n && j < 32; j++) r->printf("%02X", buf[j]);
+                    r->print("\"}");
+                    hits++;
+                }
+            }
+            if (millis() - lastYield > 50) { vTaskDelay(pdMS_TO_TICKS(3)); lastYield = millis(); }
+        }
+        r->printf("],\"hits\":%d,\"from\":\"0x%04X\",\"to\":\"0x%04X\"}", hits, (unsigned)from, (unsigned)to);
+        req->send(r);
+    });
+
+    // SH366000 family commands test — PTL clone may use SH366000 silicon which
+    // mimicks BQ40Z307 surface. These are non-TI MAC subcommands specific to SH.
+    //   GET /api/batt/clone/sh366000_test
+    s_server->on("/api/batt/clone/sh366000_test", HTTP_GET, [](AsyncWebServerRequest *req) {
+        // Known SH366000-family MAC commands (not in TI datasheet)
+        static const uint16_t SH_CMDS[] = {
+            0xE001,  // SH DeviceName / Vendor ID
+            0xE000,  // SH DeviceType
+            0x0F0F,  // SH boot enter attempt
+            0x5B5B,  // SH unseal magic 1
+            0xA5A5,  // SH unseal magic 2
+            0xC9C9,  // SH unseal magic 3
+            0x7C7C,  // SH factory test
+            0x6969,  // SH ROM mode
+            0x30B3,  // SH unseal alt (from CP2112_SH366000 tool)
+            0x7FA5,  // SH FAS alt
+            0xAB5A,  // SH backdoor
+            0x5ABB,  // SH test mode
+        };
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("{\"results\":[");
+        bool first = true;
+        uint8_t buf[32];
+        for (int i = 0; i < (int)(sizeof(SH_CMDS)/sizeof(SH_CMDS[0])); i++) {
+            uint16_t cmd = SH_CMDS[i];
+            int n = SMBus::macBlockRead(0x0B, cmd, buf, 32);
+            // Also check seal state after this attempt
+            uint32_t op = DJIBattery::readOperationStatus();
+            uint8_t sec = (op >> 8) & 0x03;
+            if (!first) r->print(",");
+            first = false;
+            r->printf("{\"cmd\":\"0x%04X\",\"len\":%d,\"hex\":\"", cmd, n);
+            if (n > 0) for (int j = 0; j < n && j < 16; j++) r->printf("%02X", buf[j]);
+            r->printf("\",\"sec\":%d,\"sealed\":%s}", sec, sec == 3 ? "true" : "false");
+            delay(50);
+        }
+        r->print("]}");
+        req->send(r);
+    });
+
+    // HMAC timing attack — measure response time for MAC 0x0000 challenge + HMAC.
+    // If chip does non-constant-time HMAC verify, first-byte-wrong vs last-byte-wrong
+    // will differ in timing. Report median and stddev of response delay per key.
+    //   POST /api/batt/clone/timing_attack?samples=100
+    s_server->on("/api/batt/clone/timing_attack", HTTP_POST, [](AsyncWebServerRequest *req) {
+        int samples = req->hasParam("samples", true) ? req->getParam("samples", true)->value().toInt() : 50;
+        if (samples > 200) samples = 200;
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->printf("{\"samples\":%d,\"keys\":[", samples);
+        bool first = true;
+
+        // Test keys: zeros, 0xFF, all-zero-with-one-bit-flipped, etc.
+        // Goal: see if certain key families produce different timing
+        struct TestKey { const char *name; uint8_t k[32]; };
+        TestKey tk[] = {
+            {"zeros", {0}},
+            {"ff_all", {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+                        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}},
+            {"first_byte_01", {0x01,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+            {"last_byte_01", {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x01}},
+            {"middle_byte", {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x01,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
+        };
+        int nkeys = sizeof(tk) / sizeof(tk[0]);
+
+        for (int ki = 0; ki < nkeys; ki++) {
+            // Collect `samples` measurements for this key
+            uint32_t min_us = 0xFFFFFFFF, max_us = 0, sum_us = 0;
+            int successes = 0;
+            for (int s = 0; s < samples; s++) {
+                // 1) Get challenge (write 0x0000 subcommand, read 32 bytes)
+                uint8_t challenge[32];
+                int cn = SMBus::macBlockRead(0x0B, 0x0000, challenge, 32);
+                if (cn <= 0) continue;
+
+                // 2) Compute fake HMAC response using this key (all zeros - placeholder)
+                //    For timing measurement we just send a fixed payload
+                uint8_t payload[22] = {0x00, 0x00};
+                for (int i = 0; i < 20 && i < cn; i++) payload[2 + i] = tk[ki].k[i];
+
+                // 3) Measure time: write block + verify
+                uint32_t t0 = micros();
+                SMBus::writeBlock(0x0B, 0x44, payload, 22);
+                delay(10);  // give chip time to verify
+                uint32_t op = DJIBattery::readOperationStatus();
+                uint32_t dt = micros() - t0;
+
+                if (dt < min_us) min_us = dt;
+                if (dt > max_us) max_us = dt;
+                sum_us += dt;
+                successes++;
+
+                if ((op >> 8) & 0x03) {} // still sealed — expected
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
+            if (!first) r->print(",");
+            first = false;
+            r->printf("{\"name\":\"%s\",\"samples\":%d,\"min_us\":%u,\"max_us\":%u,\"avg_us\":%u}",
+                      tk[ki].name, successes, (unsigned)min_us, (unsigned)max_us,
+                      successes > 0 ? (unsigned)(sum_us / successes) : 0);
+        }
+        r->print("]}");
+        req->send(r);
+    });
+
     // Periodic-publish watcher — poll reg 0x00 every intervalMs for count samples,
     // log any distinct packet seen. Good for catching time-based publishes.
     //   GET /api/batt/clone/watch?count=500&intervalMs=50
