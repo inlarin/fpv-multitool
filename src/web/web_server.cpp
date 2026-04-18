@@ -15,9 +15,11 @@
 #include "crsf/crsf_service.h"
 #include "crsf/crsf_config.h"
 #include "core/usb_mode.h"
+#include "core/pin_port.h"
 #include "battery/battery_profiles.h"
 #include "battery/dataflash_map.h"
 #include "rc_sniffer/rc_sniffer.h"
+#include "fpv/esc_telem.h"
 
 extern "C" int cp2112_log_dump(char *out, int cap);
 extern "C" uint32_t cp2112_log_seq();
@@ -71,7 +73,12 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
     if (strcmp(cmd, "servo") == 0) {
         WebState::servo.pulseUs = doc["us"] | 1500;
         WebState::servo.active = true;
+        WebState::servo.sweep = false;  // manual move cancels sweep
         ServoPWM::setPulse(WebState::servo.pulseUs);
+        int us = WebState::servo.pulseUs;
+        if (WebState::servo.observedMinUs == 0 || us < WebState::servo.observedMinUs)
+            WebState::servo.observedMinUs = us;
+        if (us > WebState::servo.observedMaxUs) WebState::servo.observedMaxUs = us;
     } else if (strcmp(cmd, "servoFreq") == 0) {
         int hz = doc["hz"] | 50;
         if (hz != WebState::servo.freq) {
@@ -88,6 +95,29 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
             ServoPWM::start(SIGNAL_OUT, WebState::servo.freq);
             WebState::servo.active = true;
         }
+    } else if (strcmp(cmd, "servoSweepCfg") == 0) {
+        int mn = doc["minUs"] | WebState::servo.sweepMinUs;
+        int mx = doc["maxUs"] | WebState::servo.sweepMaxUs;
+        int pr = doc["periodMs"] | WebState::servo.sweepPeriodMs;
+        WebState::servo.sweepMinUs = constrain(mn, 500, 2500);
+        WebState::servo.sweepMaxUs = constrain(mx, 500, 2500);
+        if (WebState::servo.sweepMaxUs <= WebState::servo.sweepMinUs)
+            WebState::servo.sweepMaxUs = WebState::servo.sweepMinUs + 100;
+        WebState::servo.sweepPeriodMs = constrain(pr, 200, 20000);
+    } else if (strcmp(cmd, "servoMarkMin") == 0) {
+        WebState::servo.markedMinUs = WebState::servo.pulseUs;
+    } else if (strcmp(cmd, "servoMarkMax") == 0) {
+        WebState::servo.markedMaxUs = WebState::servo.pulseUs;
+    } else if (strcmp(cmd, "servoResetMarks") == 0) {
+        WebState::servo.markedMinUs = 0;
+        WebState::servo.markedMaxUs = 0;
+        WebState::servo.observedMinUs = 0;
+        WebState::servo.observedMaxUs = 0;
+    } else if (strcmp(cmd, "servoApplyMarks") == 0) {
+        if (WebState::servo.markedMinUs > 0 && WebState::servo.markedMaxUs > WebState::servo.markedMinUs) {
+            WebState::servo.sweepMinUs = WebState::servo.markedMinUs;
+            WebState::servo.sweepMaxUs = WebState::servo.markedMaxUs;
+        }
     } else if (strcmp(cmd, "motorArm") == 0) {
         WebState::motor.armRequest = true;
     } else if (strcmp(cmd, "motorDisarm") == 0) {
@@ -100,6 +130,9 @@ static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len)
     } else if (strcmp(cmd, "dshotSpeed") == 0) {
         WebState::motor.dshotSpeed = doc["speed"] | 300;
     } else if (strcmp(cmd, "motorBeep") == 0) {
+        int b = doc["n"] | 1;
+        if (b < 1 || b > 5) b = 1;
+        WebState::motor.beepCmd = b;
         WebState::motor.beepRequest = true;
     } else if (strcmp(cmd, "motorMaxThrottle") == 0) {
         int v = constrain((int)(doc["value"] | 2000), 100, 2000);
@@ -2238,6 +2271,57 @@ void WebServer::start() {
         req->send(200, "text/plain", "Saved. Reboot to apply.");
     });
 
+    // Port B mode selector ------------------------------------------------
+    s_server->on("/api/port/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument j;
+        auto d = PinPort::def(PinPort::PORT_B);
+        j["name"]       = d ? d->name : "B";
+        j["pin_a"]      = d ? d->pin_a : -1;
+        j["pin_b"]      = d ? d->pin_b : -1;
+        PortMode cur    = PinPort::currentMode(PinPort::PORT_B);
+        const char *ow  = PinPort::currentOwner(PinPort::PORT_B);
+        j["mode"]       = (int)cur;
+        j["mode_name"]  = PinPort::modeName(cur);
+        j["owner"]      = ow ? ow : "";
+        PortMode pref   = PinPort::preferredMode(PinPort::PORT_B);
+        j["preferred"]  = (int)pref;
+        j["preferred_name"] = PinPort::modeName(pref);
+        JsonArray arr   = j["modes"].to<JsonArray>();
+        for (int i = 0; i < (int)PORT_MODE_COUNT; i++) {
+            JsonObject o = arr.add<JsonObject>();
+            o["id"]   = i;
+            o["name"] = PinPort::modeName((PortMode)i);
+        }
+        String out; serializeJson(j, out);
+        req->send(200, "application/json", out);
+    });
+
+    s_server->on("/api/port/preferred", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("mode", true)) {
+            req->send(400, "text/plain", "Missing 'mode' form param");
+            return;
+        }
+        int v = req->getParam("mode", true)->value().toInt();
+        if (v < 0 || v >= (int)PORT_MODE_COUNT) {
+            req->send(400, "text/plain", "Invalid mode id");
+            return;
+        }
+        PinPort::setPreferredMode(PinPort::PORT_B, (PortMode)v);
+        // Also try to apply immediately: release current, re-acquire.
+        // If a feature is actively using the port in a different mode,
+        // release() will tear it down; the feature will notice on next loop.
+        PinPort::release(PinPort::PORT_B);
+        if ((PortMode)v != PORT_IDLE) {
+            PinPort::acquire(PinPort::PORT_B, (PortMode)v, "boot");
+        }
+        req->send(200, "text/plain", "Saved");
+    });
+
+    s_server->on("/api/port/release", HTTP_POST, [](AsyncWebServerRequest *req) {
+        PinPort::release(PinPort::PORT_B);
+        req->send(200, "text/plain", "Released");
+    });
+
     s_server->on("/api/cp2112/log", HTTP_GET, [](AsyncWebServerRequest *req) {
         static char buf[4096];
         int n = cp2112_log_dump(buf, sizeof(buf));
@@ -2330,6 +2414,65 @@ void WebServer::start() {
         d["firmwareName"] = info.firmwareName;
         d["ok"] = ok;
         d["note"] = "Full BLHeli 4way passthrough not yet implemented — probe only checks presence";
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // ===== Servo state + sweep recorder =====
+    s_server->on("/api/servo/state", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        WebState::Lock lock;
+        d["active"]        = WebState::servo.active;
+        d["sweep"]         = WebState::servo.sweep;
+        d["pulseUs"]       = WebState::servo.pulseUs;
+        d["freq"]          = WebState::servo.freq;
+        d["sweepMinUs"]    = WebState::servo.sweepMinUs;
+        d["sweepMaxUs"]    = WebState::servo.sweepMaxUs;
+        d["sweepPeriodMs"] = WebState::servo.sweepPeriodMs;
+        d["markedMinUs"]   = WebState::servo.markedMinUs;
+        d["markedMaxUs"]   = WebState::servo.markedMaxUs;
+        d["observedMinUs"] = WebState::servo.observedMinUs;
+        d["observedMaxUs"] = WebState::servo.observedMaxUs;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // ===== ESC Telemetry (KISS / BLHeli_32 10-byte frame on ELRS_RX UART) =====
+    s_server->on("/api/esc/telem/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        int poles = 14;
+        if (req->hasParam("poles", true)) poles = req->getParam("poles", true)->value().toInt();
+        if (poles < 2 || poles > 40) poles = 14;
+        ESCTelem::start((uint8_t)poles);
+        req->send(200, "text/plain", String("ESC telem started, polePairs=") + ESCTelem::polePairs());
+    });
+    s_server->on("/api/esc/telem/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
+        ESCTelem::stop();
+        req->send(200, "text/plain", "stopped");
+    });
+    s_server->on("/api/esc/telem/state", HTTP_GET, [](AsyncWebServerRequest *req) {
+        const auto &st = ESCTelem::state();
+        JsonDocument d;
+        d["running"]     = st.running;
+        d["connected"]   = st.connected;
+        d["frameCount"]  = st.frameCount;
+        d["crcErrors"]   = st.crcErrors;
+        d["frameRateHz"] = st.frameRateHz;
+        d["polePairs"]   = ESCTelem::polePairs();
+        if (st.frameCount > 0) {
+            d["temp_c"]          = st.last.temp_c;
+            d["voltage_V"]       = st.last.voltage_cV / 100.0f;
+            d["current_A"]       = st.last.current_cA / 100.0f;
+            d["consumption_mAh"] = st.last.consumption_mAh;
+            uint32_t erpm = (uint32_t)st.last.erpm * 100;
+            d["erpm"]            = erpm;
+            uint8_t pp = ESCTelem::polePairs();
+            d["rpm"]             = pp > 0 ? erpm / pp : 0;
+        }
+        d["maxTemp"]         = st.maxTemp;
+        d["maxCurrent_A"]    = st.maxCurrent_cA / 100.0f;
+        d["maxErpm"]         = (uint32_t)st.maxErpm * 100;
+        d["peakVoltage_V"]   = st.peakVoltage_cV / 100.0f;
+        d["minVoltage_V"]    = st.minVoltage_cV / 100.0f;
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });

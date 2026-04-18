@@ -24,6 +24,8 @@
 #include "usb_emu/cp2112_emu.h"
 #include "motor/dshot.h"
 #include "crsf/crsf_tester.h"
+#include "fpv/esc_telem.h"
+#include "servo/servo_pwm.h"
 
 static AppId currentApp = APP_NONE;
 
@@ -98,7 +100,11 @@ static void webBackgroundTask() {
         WebState::motor.throttle = 0;
         WebState::motor.armed = false;
     }
-    if (beepReq && armed) DShot::sendCommand(1);
+    if (beepReq && armed) {
+        int cmd = WebState::motor.beepCmd;
+        if (cmd < 1 || cmd > 5) cmd = 1;
+        DShot::sendCommand((uint8_t)cmd);
+    }
 
     // Direction & 3D mode require ESC armed. Send command >=6 times to latch.
     auto sendLatchCmd = [](uint8_t cmd) {
@@ -112,6 +118,34 @@ static void webBackgroundTask() {
         if (dirCcwReq)    sendLatchCmd(8);   // SPIN_DIR_2
         if (mode3DOnReq)  sendLatchCmd(10);  // 3D_MODE_ON
         if (mode3DOffReq) sendLatchCmd(9);   // 3D_MODE_OFF
+    }
+
+    // Servo sweep executor: triangular wave between sweepMinUs..sweepMaxUs
+    {
+        bool sw, act;
+        int mn, mx, pr;
+        {
+            WebState::Lock lock;
+            sw  = WebState::servo.sweep;
+            act = WebState::servo.active;
+            mn  = WebState::servo.sweepMinUs;
+            mx  = WebState::servo.sweepMaxUs;
+            pr  = WebState::servo.sweepPeriodMs;
+        }
+        if (sw && act && mx > mn && pr > 0) {
+            uint32_t phase = millis() % (uint32_t)pr;
+            uint32_t half  = (uint32_t)pr / 2;
+            int range = mx - mn;
+            int us = (phase < half)
+                ? mn + (int)((int64_t)phase * range / half)
+                : mx - (int)((int64_t)(phase - half) * range / half);
+            ServoPWM::setPulse(us);
+            WebState::Lock lock;
+            WebState::servo.pulseUs = us;
+            if (WebState::servo.observedMinUs == 0 || us < WebState::servo.observedMinUs)
+                WebState::servo.observedMinUs = us;
+            if (us > WebState::servo.observedMaxUs) WebState::servo.observedMaxUs = us;
+        }
     }
 
     // Continuous DShot frame when armed via web
@@ -165,6 +199,7 @@ void loop() {
     SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
     UsbMode::pumpLoop();    // USB2TTL transparent CDC↔UART1 bridge (no-op in other modes)
     RCSniffer::loop();      // SBUS/iBus/PPM frame parser (no-op when not running)
+    ESCTelem::loop();       // KISS/BLHeli_32 ESC telemetry (no-op when not running)
     ButtonEvent evt = Button::poll();
 
     if (currentApp == APP_NONE) {

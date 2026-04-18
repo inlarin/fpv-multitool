@@ -26,6 +26,14 @@ struct ServoState {
     int pulseUs = 1500;
     int freq = 50;
     bool sweep = false;
+    // Sweep config + range recorder
+    int sweepMinUs = 1000;
+    int sweepMaxUs = 2000;
+    int sweepPeriodMs = 2000;  // time for full min->max->min cycle
+    int markedMinUs = 0;       // user-captured endpoints (0 = not set)
+    int markedMaxUs = 0;
+    int observedMinUs = 0;     // commanded pulse extremes observed this session
+    int observedMaxUs = 0;
 };
 extern ServoState servo;
 
@@ -35,6 +43,7 @@ struct MotorState {
     bool armRequest = false;
     bool disarmRequest = false;
     bool beepRequest = false;
+    int  beepCmd = 1;  // DShot beep variant 1..5 (BEACON1..BEACON5)
     int throttle = 0;      // 0-2000
     int maxThrottle = 2000; // safety cap (0-2000)
     int dshotSpeed = 300;  // 150/300/600

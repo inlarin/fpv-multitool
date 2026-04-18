@@ -217,7 +217,11 @@ void runWifiApp() {
             WebState::motor.throttle = 0;
             WebState::motor.armed = false;
         }
-        if (beepReq && armed) DShot::sendCommand(1);
+        if (beepReq && armed) {
+            int cmd = WebState::motor.beepCmd;
+            if (cmd < 1 || cmd > 5) cmd = 1;
+            DShot::sendCommand((uint8_t)cmd);
+        }
         if (armed) {
             static uint32_t lastSend = 0;
             if (micros() - lastSend > 2000) {

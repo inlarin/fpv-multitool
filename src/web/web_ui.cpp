@@ -185,9 +185,38 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
         <button onclick="setServoFreq(330)">330 Hz</button>
       </span>
     </div>
-    <div class="row"><span class="label">Sweep mode:</span>
+    <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+    <div class="row"><span class="label">Range calibration:</span></div>
+    <div class="warning" style="font-size:11px">
+      Двигай ползунок, нажимай <b>Mark Min/Max</b> где сервомашинка упирается физически.
+      Потом <b>Apply to Sweep</b> — и Sweep будет ходить только в этих пределах.
+    </div>
+    <div class="grid">
+      <button onclick="servoMark('Min')">Mark Min @<span id="servoMarkMinVal">--</span></button>
+      <button onclick="servoMark('Max')">Mark Max @<span id="servoMarkMaxVal">--</span></button>
+    </div>
+    <div class="grid">
+      <button onclick="servoApplyMarks()">Apply to Sweep</button>
+      <button class="danger" onclick="servoResetMarks()">Reset Marks</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <span class="label">Sweep range:</span>
+      <span>
+        <input id="sweepMinUs" type="number" min="500" max="2500" step="10" value="1000" style="width:65px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+        ..
+        <input id="sweepMaxUs" type="number" min="500" max="2500" step="10" value="2000" style="width:65px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+        us
+      </span>
+    </div>
+    <div class="row">
+      <span class="label">Period (ms):</span>
+      <input id="sweepPeriodMs" type="number" min="200" max="20000" step="100" value="2000" style="width:75px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+      <button onclick="servoSweepCfgSave()">Apply Cfg</button>
+    </div>
+    <div class="row"><span class="label">Sweep:</span>
       <button onclick="toggleSweep()"><span id="sweepBtn">Start</span></button>
     </div>
+    <div class="row"><span class="label">Observed range:</span><span id="servoObserved" class="value">--</span></div>
   </div>
 </div>
 
@@ -211,10 +240,15 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       <button class="success" id="armBtn" onclick="motorArm()">ARM</button>
       <button class="danger" onclick="motorDisarm()">DISARM</button>
     </div>
-    <div class="grid">
-      <button onclick="motorBeep()">Beep ESC</button>
-      <button onclick="setThrottle(0)">Zero</button>
+    <div class="row"><span class="label">Beacon tones:</span></div>
+    <div class="grid" style="grid-template-columns:repeat(5,1fr);gap:4px">
+      <button onclick="motorBeep(1)">1</button>
+      <button onclick="motorBeep(2)">2</button>
+      <button onclick="motorBeep(3)">3</button>
+      <button onclick="motorBeep(4)">4</button>
+      <button onclick="motorBeep(5)">5</button>
     </div>
+    <div class="grid"><button onclick="setThrottle(0)">Zero</button></div>
     <div style="margin-top:14px;padding-top:10px;border-top:1px solid #333;">
       <div class="row">
         <span class="label">Max throttle:</span>
@@ -248,6 +282,29 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
         <button onclick="blh4wayStop()" class="danger">Stop 4way</button>
       </div>
       <div id="escResult" style="font-family:monospace;font-size:11px;margin-top:6px;color:var(--text-dim)"></div>
+      <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+      <div class="row"><span class="label">ESC Telemetry (KISS / BLHeli_32):</span></div>
+      <div class="warning" style="font-size:11px">
+        ESC telemetry wire (single byte UART @ 115200) подключи к <b>GPIO 44</b> (ELRS_RX),
+        GND общий. Работает при armed — ESC шлёт кадр ~каждые 20&nbsp;ms.
+      </div>
+      <div class="row"><span class="label">Motor pole count:</span>
+        <input id="escTelemPoles" type="number" min="2" max="40" value="14" style="width:70px;padding:4px;background:#0a0a14;color:#fff;border:1px solid #333">
+      </div>
+      <div class="grid">
+        <button onclick="escTelemStart()" class="success">Start Telem</button>
+        <button onclick="escTelemStop()" class="danger">Stop</button>
+      </div>
+      <div id="escTelemStatus" class="row" style="margin-top:6px">
+        <span class="label">Status:</span><span id="escTelemConn" class="status off">OFF</span>
+      </div>
+      <div class="row"><span class="label">Frame rate:</span><span id="escTelemRate" class="value">--</span></div>
+      <div class="row"><span class="label">Temp / Voltage:</span><span id="escTelemTV" class="value">--</span></div>
+      <div class="row"><span class="label">Current / mAh:</span><span id="escTelemCI" class="value">--</span></div>
+      <div class="row"><span class="label">eRPM / RPM:</span><span id="escTelemRPM" class="value">--</span></div>
+      <div class="row"><span class="label">Session max (T/I/V min/V peak/RPM):</span></div>
+      <div id="escTelemMax" style="font-family:monospace;font-size:11px;color:var(--text-dim)">--</div>
+      <div class="row" style="margin-top:4px"><span class="label">Frames / CRC errors:</span><span id="escTelemStats" class="value">--</span></div>
     </div>
   </div>
 </div>
@@ -576,9 +633,10 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <h2>ELRS Receiver Flasher</h2>
     <div class="warning">
       <b>Инструкция:</b><br>
-      1. Подключи приёмник: <b>RX→GPIO43, TX→GPIO44, GND, 5V</b><br>
+      1. Подключи приёмник: <b>RX приёмника → GPIO 11 (ESP TX), TX приёмника → GPIO 10 (ESP RX), GND, 5V</b><br>
       2. Переведи приёмник в <b>DFU режим</b> (зажми кнопку на нём и подай питание)<br>
-      3. Загрузи .bin файл ниже и нажми Flash
+      3. Убедись что <b>Port B</b> (System → Port B Mode) в режиме <code>UART</code><br>
+      4. Загрузи .bin файл ниже и нажми Flash
     </div>
     <div class="row"><span class="label">Firmware (.bin / .bin.gz / .elrs):</span></div>
     <input type="file" id="fwFile" accept=".bin,.gz,.elrs" onchange="onFwSelect()" style="margin:8px 0; width:100%;">
@@ -599,7 +657,8 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   <div class="card">
     <h2>CRSF / ELRS Telemetry</h2>
     <div class="warning">
-      Подключи RX/TX приёмника к GPIO44/43 (ESP UART), 5V, GND.<br>
+      Подключи RX приёмника → GPIO 11 (ESP TX), TX приёмника → GPIO 10 (ESP RX), 5V, GND.<br>
+      ⚠ <b>Port B</b> (System → Port B Mode) должен быть в режиме <code>UART</code>.<br>
       Для инвертированного CRSF (F3/F4 FC) поставь галку.
     </div>
     <div class="row">
@@ -685,8 +744,9 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   <div class="card">
     <h2>RC Protocol Sniffer</h2>
     <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px">
-      Подключи RX-приёмник на GPIO 44 (RX), GND, 5V. Плата автоматически
-      определит протокол (SBUS / iBus / PPM) или выбери вручную.
+      Подключи сигнал с приёмника на GPIO 10 (ESP RX), GND, 5V. Плата автоматически
+      определит протокол (SBUS / iBus / PPM) или выбери вручную.<br>
+      ⚠ Убедись что <b>Port B</b> (вкладка System → Port B Mode) в режиме <code>UART</code> или <code>GPIO</code>.
     </p>
     <div class="row"><span class="label">Status:</span>
       <span>
@@ -723,6 +783,40 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="row"><span class="label">Uptime:</span><span class="value" id="sysUptime">-</span></div>
     <div class="row"><span class="label">Free heap:</span><span class="value" id="sysHeap">-</span></div>
     <div class="row"><span class="label">WiFi clients:</span><span class="value" id="sysClients">-</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Port B Mode <span id="portBPins" style="color:var(--text-dim);font-size:11px;font-weight:normal"></span></h2>
+    <p style="color:#888;font-size:11px;margin:4px 0 8px">
+      Единственный сигнальный разъём платы (<code>GP10</code>/<code>GP11</code> + <code>5V</code>/<code>GND</code>)
+      используется для всех фич: батарея, приёмник, сервопривод/мотор. Одновременно работает только один режим.
+      Выбранный режим сохраняется между перезагрузками.
+    </p>
+    <div class="row">
+      <span class="label">Current:</span>
+      <span>
+        <span id="portBMode" class="status off">IDLE</span>
+        <span id="portBOwner" class="value" style="font-size:11px;color:var(--text-dim);margin-left:6px"></span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="label">Preferred (boot):</span>
+      <span class="value" id="portBPref">-</span>
+    </div>
+    <div class="row" style="margin-top:8px;flex-direction:column;align-items:flex-start;gap:4px">
+      <span class="label" style="margin-bottom:4px">Выбрать режим:</span>
+      <div id="portBModeBtns" style="display:flex;flex-wrap:wrap;gap:4px;width:100%"></div>
+    </div>
+    <button class="danger" onclick="portBRelease()" style="width:100%;margin-top:6px">Force Release</button>
+    <div id="portBMsg" style="margin-top:8px;color:var(--status-on);font-size:12px"></div>
+    <div style="margin-top:10px;padding:6px;background:var(--input-bg);border-radius:4px;font-size:11px;color:var(--text-dim)">
+      <b>Режимы:</b><br>
+      <code>IDLE</code> — пины отключены (ничего не работает)<br>
+      <code>I2C</code> — SDA=GPIO 11, SCL=GPIO 10 — DJI/SBS battery, CP2112 USB2I2C<br>
+      <code>UART</code> — TX=GPIO 11, RX=GPIO 10 — ELRS Flash, CRSF, USB2TTL<br>
+      <code>PWM</code> — signal=GPIO 11 — Servo, Motor DShot, ESC test<br>
+      <code>GPIO</code> — raw bit-bang — RC Sniffer (PPM), BLHeli passthrough
+    </div>
   </div>
   <div class="card">
     <h2>WiFi Config</h2>
@@ -882,6 +976,8 @@ function showTab(name) {
   }
   localStorage.setItem('tab_' + _curWs, name);
   if (name === 'ota') otaRefresh();
+  if (name === 'servo') servoStatePoll();
+  if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
 }
@@ -903,6 +999,35 @@ function toggleSweep() {
   sweeping = !sweeping;
   document.getElementById('sweepBtn').textContent = sweeping ? 'Stop' : 'Start';
   send({cmd:'servoSweep', on: sweeping});
+  if (sweeping && !_servoStateTimer) _servoStateTimer = setInterval(servoStatePoll, 500);
+}
+function servoMark(which) { send({cmd:'servoMark'+which}); setTimeout(servoStatePoll, 100); }
+function servoApplyMarks() { send({cmd:'servoApplyMarks'}); setTimeout(servoStatePoll, 100); }
+function servoResetMarks() { send({cmd:'servoResetMarks'}); setTimeout(servoStatePoll, 100); }
+function servoSweepCfgSave() {
+  const minUs = +document.getElementById('sweepMinUs').value;
+  const maxUs = +document.getElementById('sweepMaxUs').value;
+  const periodMs = +document.getElementById('sweepPeriodMs').value;
+  send({cmd:'servoSweepCfg', minUs, maxUs, periodMs});
+  setTimeout(servoStatePoll, 100);
+}
+let _servoStateTimer = null;
+function servoStatePoll() {
+  fetch('/api/servo/state').then(r=>r.json()).then(d=>{
+    document.getElementById('servoMarkMinVal').textContent = d.markedMinUs > 0 ? d.markedMinUs : '--';
+    document.getElementById('servoMarkMaxVal').textContent = d.markedMaxUs > 0 ? d.markedMaxUs : '--';
+    document.getElementById('sweepMinUs').value = d.sweepMinUs;
+    document.getElementById('sweepMaxUs').value = d.sweepMaxUs;
+    document.getElementById('sweepPeriodMs').value = d.sweepPeriodMs;
+    const obs = (d.observedMinUs > 0 || d.observedMaxUs > 0)
+      ? (d.observedMinUs + ' .. ' + d.observedMaxUs + ' us')
+      : '--';
+    document.getElementById('servoObserved').textContent = obs;
+    if (sweeping !== d.sweep) {
+      sweeping = d.sweep;
+      document.getElementById('sweepBtn').textContent = sweeping ? 'Stop' : 'Start';
+    }
+  }).catch(()=>{});
 }
 
 // === MOTOR ===
@@ -925,7 +1050,7 @@ function setThrottle(v) { document.getElementById('throttleSlider').value = v; o
 function setDshotSpeed() {
   send({cmd:'dshotSpeed', speed: +document.getElementById('dshotSpeed').value});
 }
-function motorBeep() { send({cmd:'motorBeep'}); }
+function motorBeep(n) { send({cmd:'motorBeep', n: n || 1}); }
 function onMaxThrottle() {
   const v = +document.getElementById('maxThrottleSlider').value;
   document.getElementById('maxThrottleVal').textContent = v;
@@ -938,6 +1063,47 @@ function motorDirCW()  { if (confirm('Set direction CW (normal)? ESC must be arm
 function motorDirCCW() { if (confirm('Set direction CCW (reverse)? ESC must be armed.')) send({cmd:'motorDirCCW'}); }
 function motor3DOn()   { if (confirm('Enable 3D mode? ESC must be armed.'))  send({cmd:'motor3DOn'}); }
 function motor3DOff()  { if (confirm('Disable 3D mode? ESC must be armed.')) send({cmd:'motor3DOff'}); }
+
+// === ESC telemetry ===
+let _escTelemTimer = null;
+function escTelemStart() {
+  const poles = +document.getElementById('escTelemPoles').value || 14;
+  const fd = new FormData(); fd.append('poles', poles);
+  fetch('/api/esc/telem/start', {method:'POST', body: fd}).then(r=>r.text()).then(t=>{
+    if (!_escTelemTimer) _escTelemTimer = setInterval(escTelemPoll, 500);
+    escTelemPoll();
+  });
+}
+function escTelemStop() {
+  fetch('/api/esc/telem/stop', {method:'POST'}).then(()=>{
+    if (_escTelemTimer) { clearInterval(_escTelemTimer); _escTelemTimer = null; }
+    escTelemPoll();
+  });
+}
+function escTelemPoll() {
+  fetch('/api/esc/telem/state').then(r=>r.json()).then(d=>{
+    const conn = document.getElementById('escTelemConn');
+    if (!d.running) { conn.textContent='OFF'; conn.className='status off'; }
+    else if (d.connected) { conn.textContent='CONNECTED'; conn.className='status on'; }
+    else { conn.textContent='NO DATA'; conn.className='status off'; }
+    document.getElementById('escTelemRate').textContent =
+      d.frameRateHz + ' Hz (pp=' + d.polePairs + ')';
+    if (d.frameCount > 0) {
+      document.getElementById('escTelemTV').textContent =
+        d.temp_c + '\u00B0C / ' + d.voltage_V.toFixed(2) + ' V';
+      document.getElementById('escTelemCI').textContent =
+        d.current_A.toFixed(2) + ' A / ' + d.consumption_mAh + ' mAh';
+      document.getElementById('escTelemRPM').textContent =
+        d.erpm + ' / ' + d.rpm;
+    }
+    document.getElementById('escTelemMax').textContent =
+      d.maxTemp + '\u00B0C | ' + d.maxCurrent_A.toFixed(2) + ' A | ' +
+      d.minVoltage_V.toFixed(2) + ' V | ' + d.peakVoltage_V.toFixed(2) + ' V | ' +
+      d.maxErpm + ' eRPM';
+    document.getElementById('escTelemStats').textContent =
+      d.frameCount + ' / ' + d.crcErrors;
+  }).catch(()=>{});
+}
 
 // === BATTERY ===
 function battAction(action) {
@@ -1988,6 +2154,50 @@ function usbApply(done) {
       if (done) done();
     });
 }
+// ---------- Port B Mode Selector ----------
+function portBRefresh() {
+  fetch('/api/port/status').then(r=>r.json()).then(j=>{
+    document.getElementById('portBPins').textContent =
+      '(pin_a=GPIO ' + j.pin_a + ', pin_b=GPIO ' + j.pin_b + ')';
+    const m = document.getElementById('portBMode');
+    m.textContent = j.mode_name;
+    m.className = 'status ' + (j.mode === 0 ? 'off' : 'on');
+    document.getElementById('portBOwner').textContent =
+      j.owner ? ('owner: ' + j.owner) : '';
+    document.getElementById('portBPref').textContent = j.preferred_name;
+    const c = document.getElementById('portBModeBtns');
+    c.innerHTML = '';
+    j.modes.forEach(m => {
+      const b = document.createElement('button');
+      b.textContent = m.name;
+      b.style.flex = '1 1 auto';
+      b.style.minWidth = '70px';
+      if (m.id === j.preferred) {
+        b.className = 'success';
+      }
+      b.onclick = () => portBSet(m.id);
+      c.appendChild(b);
+    });
+  }).catch(e => {
+    document.getElementById('portBMsg').textContent = 'Refresh failed';
+  });
+}
+function portBSet(modeId) {
+  const fd = new FormData(); fd.append('mode', modeId);
+  fetch('/api/port/preferred', {method:'POST', body:fd})
+    .then(r=>r.text()).then(t=>{
+      document.getElementById('portBMsg').textContent = t;
+      setTimeout(portBRefresh, 100);
+    });
+}
+function portBRelease() {
+  fetch('/api/port/release', {method:'POST'})
+    .then(r=>r.text()).then(t=>{
+      document.getElementById('portBMsg').textContent = t;
+      setTimeout(portBRefresh, 100);
+    });
+}
+
 let cpLogTimer = null;
 function cpLogRefresh() {
   fetch('/api/cp2112/log').then(r=>r.text()).then(t=>{
