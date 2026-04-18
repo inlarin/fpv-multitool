@@ -5,6 +5,7 @@
 #include "ui/button.h"
 #include "ui/status_led.h"
 #include "wdt.h"
+#include "core/pin_port.h"
 
 // USB CDC access for DTR/RTS signals
 #if ARDUINO_USB_CDC_ON_BOOT
@@ -257,6 +258,23 @@ static void redrawPage() {
 
 // === Main entry ===
 void runUSB2TTL() {
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "usb2ttl_app")) {
+        // Port busy — show brief message, then exit back to menu.
+        auto *g = Display::gfx();
+        g->fillScreen(RGB565_BLACK);
+        g->setTextSize(1);
+        g->setCursor(4, 40);
+        g->setTextColor(RGB565_RED);
+        g->println("Port B busy!");
+        g->setCursor(4, 60);
+        g->setTextColor(RGB565_WHITE);
+        g->println("Set mode = UART in");
+        g->setCursor(4, 74);
+        g->println("Web UI System tab");
+        delay(2500);
+        return;
+    }
+
     s_bridgeActive = false;
     s_txCount = 0;
     s_rxCount = 0;
@@ -290,6 +308,7 @@ void runUSB2TTL() {
             if (evt == BTN_DOUBLE_CLICK) {
                 uart.end();
                 if (ELRS_BOOT >= 0) pinMode(ELRS_BOOT, INPUT);
+                PinPort::release(PinPort::PORT_B);
                 return;
             }
             if (evt == BTN_LONG_PRESS) {

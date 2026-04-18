@@ -1,6 +1,7 @@
 #include "blheli_4way.h"
 #include <WiFi.h>
 #include <AsyncTCP.h>
+#include "core/pin_port.h"
 
 // BLHeli 4way-interface protocol constants
 static const uint8_t FRAME_START_HOST = 0x2F;  // PC → FC
@@ -270,6 +271,10 @@ static void onConnect(void *arg, AsyncClient *c) {
 
 void BLHeli4Way::start(int signalPin) {
     if (s_running) return;
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_GPIO, "blheli_4way")) {
+        Serial.println("[BLHeli4Way] Port B busy — switch to GPIO in System → Port B Mode");
+        return;
+    }
     s_signalPin = signalPin;
     s_server = new AsyncServer(4321);
     s_server->onClient([](void *, AsyncClient *c) { onConnect(nullptr, c); }, nullptr);
@@ -283,6 +288,7 @@ void BLHeli4Way::stop() {
     if (s_client) s_client->close(true);
     if (s_server) { s_server->end(); delete s_server; s_server = nullptr; }
     s_running = false;
+    PinPort::release(PinPort::PORT_B);
 }
 
 bool BLHeli4Way::isRunning() { return s_running; }

@@ -7,6 +7,7 @@
 #include "wdt.h"
 #include "crsf_service.h"
 #include "web/web_state.h"
+#include "core/pin_port.h"
 
 // Live CRSF telemetry viewer.
 // Pages: LINK  |  BATTERY  |  CHANNELS (AETR)
@@ -27,6 +28,10 @@ static bool s_startedHere = false;  // true if we started CRSFService in this se
 
 static void ensureRunning() {
     if (CRSFService::isRunning()) return;
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf")) {
+        Serial.println("[CRSF] Port B busy — switch to UART in System → Port B Mode");
+        return;
+    }
     bool inv = false;
     { WebState::Lock lock; inv = WebState::crsf.inverted; }
     CRSFService::begin(&Serial1, ELRS_RX, ELRS_TX, 420000, inv);
@@ -264,6 +269,7 @@ void runCRSFTester() {
             // Exit. Stop CRSF only if we started it in this session.
             if (s_startedHere) {
                 CRSFService::end();
+                PinPort::release(PinPort::PORT_B);
                 WebState::Lock lock;
                 WebState::crsf.enabled = false;
             }

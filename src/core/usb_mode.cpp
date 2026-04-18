@@ -1,6 +1,7 @@
 #include "usb_mode.h"
 #include "pin_config.h"
 #include <Preferences.h>
+#include "pin_port.h"
 #include <HardwareSerial.h>
 #include "USB.h"
 #include "USBCDC.h"
@@ -69,13 +70,24 @@ void UsbMode::applyAtBoot() {
 void UsbMode::pumpLoop() {
     static bool inited = false;
     static uint32_t cur_baud = 0;
-    if (load() != USB_MODE_USB2TTL) { inited = false; return; }
+    if (load() != USB_MODE_USB2TTL) {
+        if (inited) { PinPort::release(PinPort::PORT_B); }
+        inited = false;
+        return;
+    }
 
     // The host sets its desired baud through the CDC line-coding request;
     // USBCDC::baudRate() returns what was negotiated.
     uint32_t want = g_cdc.baudRate();
     if (want == 0) want = 115200;
     if (!inited || want != cur_baud) {
+        if (!inited) {
+            if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "usb2ttl")) {
+                // Port busy with another UART consumer or in different mode —
+                // cannot pump. Retry on next loop iteration.
+                return;
+            }
+        }
         Serial1.end();
         Serial1.begin(want, SERIAL_8N1, ELRS_RX, ELRS_TX);
         cur_baud = want;

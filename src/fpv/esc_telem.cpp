@@ -1,5 +1,6 @@
 #include "esc_telem.h"
 #include "pin_config.h"
+#include "core/pin_port.h"
 #include <HardwareSerial.h>
 
 namespace ESCTelem {
@@ -59,6 +60,10 @@ static bool parseFrame() {
 
 void start(uint8_t poleCount) {
     stop();
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "esc_telem")) {
+        Serial.println("[ESCTelem] Port B busy — switch to UART in System → Port B Mode");
+        return;
+    }
     s_pole_count = poleCount > 0 ? poleCount : 14;
     s_state = {};
     s_pos = 0;
@@ -77,6 +82,7 @@ void stop() {
     s_running = false;
     s_state.running = false;
     s_state.connected = false;
+    PinPort::release(PinPort::PORT_B);
 }
 
 bool isRunning()  { return s_running; }

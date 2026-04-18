@@ -29,6 +29,7 @@
  */
 
 #include "cp2112_emu.h"
+#include "core/pin_port.h"
 #include "pin_config.h"
 #include <Wire.h>
 #include "USB.h"
@@ -486,7 +487,13 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 // ============ Public API ============
 
 void CP2112_attach() {
-    // DJIBattery::init() has already brought Wire1 up on BATT_SDA/BATT_SCL
+    // Require Port B in I2C mode. If busy with UART/PWM/GPIO — cannot serve
+    // SMBus HID commands; user must switch mode via System → Port B Mode.
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "cp2112")) {
+        Serial.println("[CP2112] Port B busy (not I2C), HID attach skipped");
+        return;
+    }
+    // DJIBattery::init() may have already brought Wire1 up on BATT_SDA/BATT_SCL
     // with INPUT_PULLUP. Just update clock speed.
     Wire1.setClock(g_cfg.bitRate);
 

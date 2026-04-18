@@ -433,6 +433,13 @@ static void executeFlash() {
     Serial.printf("[Flash] Flashing %u bytes\n", fw_size);
     WebState::flashState.stage = "Starting";
 
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
+        WebState::flashState.in_progress = false;
+        WebState::flashState.lastResult = "Port B busy — switch to UART";
+        if (decompressed) free(decompressed);
+        return;
+    }
+
     ESPFlasher::Config cfg;
     cfg.uart = &Serial1;
     cfg.tx_pin = ELRS_TX;
@@ -442,6 +449,8 @@ static void executeFlash() {
     cfg.progress = flashProgress;
 
     ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size);
+
+    PinPort::release(PinPort::PORT_B);
 
     if (decompressed) free(decompressed);
 
@@ -1976,6 +1985,10 @@ void WebServer::start() {
 
     // ===== CRSF endpoints =====
     s_server->on("/api/crsf/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf")) {
+            req->send(409, "text/plain", "Port B busy — switch to UART in System → Port B Mode");
+            return;
+        }
         bool inv = req->hasParam("inverted") ? req->getParam("inverted")->value() == "1" : false;
         WebState::crsf.inverted = inv;
         CRSFService::begin(&Serial1, ELRS_RX, ELRS_TX, 420000, inv);
@@ -1987,6 +2000,7 @@ void WebServer::start() {
     s_server->on("/api/crsf/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
         CRSFService::end();
         WebState::crsf.enabled = false;
+        PinPort::release(PinPort::PORT_B);
         req->send(200, "text/plain", "CRSF stopped");
     });
 

@@ -1,6 +1,7 @@
 #include "dshot.h"
 #include "driver/rmt_tx.h"
 #include "driver/rmt_encoder.h"
+#include "core/pin_port.h"
 
 // DShot frame: 16 bits = 11 throttle + 1 telemetry + 4 CRC
 // Bit 1: ~75% high, ~25% low
@@ -59,6 +60,11 @@ bool DShot::init(uint8_t pin, DShotSpeed speed) {
     // Clean up previous if any
     if (s_initialized) stop();
 
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_PWM, "motor")) {
+        Serial.println("[DShot] Port B busy — switch to PWM in System → Port B Mode");
+        return false;
+    }
+
     s_pin = pin;
     s_speed = speed;
     calcTiming(speed);
@@ -103,6 +109,7 @@ bool DShot::init(uint8_t pin, DShotSpeed speed) {
 }
 
 void DShot::stop() {
+    bool wasInit = s_initialized;
     if (s_channel) {
         rmt_disable(s_channel);
         rmt_del_channel(s_channel);
@@ -113,6 +120,7 @@ void DShot::stop() {
         s_copy_encoder = nullptr;
     }
     s_initialized = false;
+    if (wasInit) PinPort::release(PinPort::PORT_B);
 }
 
 void DShot::sendThrottle(uint16_t throttle, bool telemetry) {

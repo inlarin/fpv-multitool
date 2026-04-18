@@ -1,4 +1,5 @@
 #include "servo_pwm.h"
+#include "core/pin_port.h"
 
 static const int PWM_RES = 16;
 static uint8_t s_pin = 0;
@@ -16,9 +17,15 @@ static void applyPulse() {
 
 bool ServoPWM::start(uint8_t pin, int freq) {
     if (s_active) stop();
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_PWM, "servo")) {
+        return false;
+    }
     s_pin = pin;
     s_freq = freq;
-    if (!ledcAttach(pin, freq, PWM_RES)) return false;
+    if (!ledcAttach(pin, freq, PWM_RES)) {
+        PinPort::release(PinPort::PORT_B);
+        return false;
+    }
     s_active = true;
     applyPulse();
     return true;
@@ -29,6 +36,7 @@ void ServoPWM::stop() {
     ledcWrite(s_pin, 0);
     ledcDetach(s_pin);
     s_active = false;
+    PinPort::release(PinPort::PORT_B);
 }
 
 void ServoPWM::setFrequency(int hz) {

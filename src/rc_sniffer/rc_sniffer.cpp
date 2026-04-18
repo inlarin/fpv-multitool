@@ -1,5 +1,6 @@
 #include "rc_sniffer.h"
 #include "pin_config.h"
+#include "core/pin_port.h"
 #include <HardwareSerial.h>
 #include <driver/gpio.h>
 
@@ -146,6 +147,13 @@ static void ppmPoll() {
 // ===== Lifecycle =====
 void start(RCProto proto) {
     stop();
+    // SBUS/iBus use UART, PPM uses raw GPIO interrupt.
+    PortMode needMode = (proto == RC_PROTO_PPM) ? PORT_GPIO : PORT_UART;
+    if (!PinPort::acquire(PinPort::PORT_B, needMode, "rc_sniff")) {
+        Serial.printf("[RCSniff] Port B busy — switch to %s in System → Port B Mode\n",
+                      PinPort::modeName(needMode));
+        return;
+    }
     s_state = {};
     s_state.proto = proto;
 
@@ -168,6 +176,7 @@ void start(RCProto proto) {
             s_ppmFrameReady = false;
             break;
         default:
+            PinPort::release(PinPort::PORT_B);
             return;
     }
     s_running = true;
@@ -191,6 +200,7 @@ void stop() {
     s_running = false;
     s_state.proto = RC_PROTO_NONE;
     s_state.connected = false;
+    PinPort::release(PinPort::PORT_B);
 }
 
 bool isRunning() { return s_running; }

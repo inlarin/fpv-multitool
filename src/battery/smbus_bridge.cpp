@@ -3,6 +3,7 @@
 #include "smbus.h"
 #include <Wire.h>
 #include "pin_config.h"
+#include "core/pin_port.h"
 
 namespace {
 
