@@ -19,6 +19,7 @@
 #include "battery/smbus_bridge.h"
 #include "battery/smbus_bridge_ui.h"
 #include "core/usb_mode.h"
+#include "rc_sniffer/rc_sniffer.h"
 #include "usb_emu/cp2112_emu.h"
 #include "motor/dshot.h"
 #include "crsf/crsf_tester.h"
@@ -156,6 +157,7 @@ void loop() {
     StatusLed::loop();
     SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
     UsbMode::pumpLoop();    // USB2TTL transparent CDC↔UART1 bridge (no-op in other modes)
+    RCSniffer::loop();      // SBUS/iBus/PPM frame parser (no-op when not running)
     ButtonEvent evt = Button::poll();
 
     if (currentApp == APP_NONE) {

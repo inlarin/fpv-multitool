@@ -7,6 +7,7 @@
 #include "battery/dji_battery.h"
 #include "battery/smbus.h"
 #include "motor/dshot.h"
+#include "motor/blheli_onewire.h"
 #include "servo/servo_pwm.h"
 #include "bridge/esp_rom_flasher.h"
 #include "bridge/firmware_unpack.h"
@@ -15,6 +16,7 @@
 #include "core/usb_mode.h"
 #include "battery/battery_profiles.h"
 #include "battery/dataflash_map.h"
+#include "rc_sniffer/rc_sniffer.h"
 
 extern "C" int cp2112_log_dump(char *out, int cap);
 extern "C" uint32_t cp2112_log_seq();
@@ -2291,6 +2293,57 @@ void WebServer::start() {
         JsonArray devs = d["devices"].to<JsonArray>();
         for (int i = 0; i < r.devCount && i < 8; i++)
             devs.add(String("0x") + String(r.devAddrs[i], HEX));
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // ===== BLHeli ESC probe (early / skeleton) =====
+    s_server->on("/api/esc/probe", HTTP_POST, [](AsyncWebServerRequest *req) {
+        BLHeliInfo info;
+        bool ok = BLHeli::probeInfo(SIGNAL_OUT, &info, 2000);
+        JsonDocument d;
+        d["detected"] = info.detected;
+        d["firmwareName"] = info.firmwareName;
+        d["ok"] = ok;
+        d["note"] = "Full BLHeli 4way passthrough not yet implemented — probe only checks presence";
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // ===== RC Protocol Sniffer (SBUS / iBus / PPM) =====
+    s_server->on("/api/rc/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("proto", true)) { req->send(400, "text/plain", "need proto"); return; }
+        String p = req->getParam("proto", true)->value();
+        RCProto proto = RC_PROTO_NONE;
+        if (p == "sbus") proto = RC_PROTO_SBUS;
+        else if (p == "ibus") proto = RC_PROTO_IBUS;
+        else if (p == "ppm")  proto = RC_PROTO_PPM;
+        else if (p == "auto") { RCSniffer::autoDetect(); req->send(200, "text/plain",
+            String("Auto-detected: ") + RCSniffer::protoName(RCSniffer::state().proto)); return; }
+        else { req->send(400, "text/plain", "proto must be sbus/ibus/ppm/auto"); return; }
+        RCSniffer::start(proto);
+        req->send(200, "text/plain", String("Started ") + RCSniffer::protoName(proto));
+    });
+
+    s_server->on("/api/rc/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
+        RCSniffer::stop();
+        req->send(200, "text/plain", "stopped");
+    });
+
+    s_server->on("/api/rc/state", HTTP_GET, [](AsyncWebServerRequest *req) {
+        const auto &st = RCSniffer::state();
+        JsonDocument d;
+        d["proto"]        = RCSniffer::protoName(st.proto);
+        d["running"]      = RCSniffer::isRunning();
+        d["connected"]    = st.connected;
+        d["channelCount"] = st.channelCount;
+        d["frameCount"]   = st.frameCount;
+        d["crcErrors"]    = st.crcErrors;
+        d["frameRateHz"]  = st.frameRateHz;
+        d["failsafe"]     = st.failsafe;
+        d["lostFrame"]    = st.lostFrame;
+        JsonArray ch = d["channels"].to<JsonArray>();
+        for (uint8_t i = 0; i < st.channelCount && i < 16; i++) ch.add(st.channels[i]);
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });

@@ -154,6 +154,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="tab" onclick="showTab('motor')">Motor</div>
     <div class="tab" onclick="showTab('elrs')">ELRS Flash</div>
     <div class="tab" onclick="showTab('crsf')">CRSF</div>
+    <div class="tab" onclick="showTab('rcsniff')">RC Sniff</div>
   </div>
 </div>
 <div id="ws-sys" style="display:none">
@@ -230,6 +231,11 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
         <button onclick="motor3DOn()">3D ON</button>
         <button onclick="motor3DOff()">3D OFF</button>
       </div>
+      <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+      <div class="row"><span class="label">ESC configurator:</span></div>
+      <div class="warning" style="font-size:11px">WIP — only detects ESC presence via signal wire for now. Full BLHeli 4way passthrough + BLHeliSuite32 integration coming later.</div>
+      <button onclick="escProbe()" style="width:100%">Probe connected ESC</button>
+      <div id="escResult" style="font-family:monospace;font-size:11px;margin-top:6px;color:var(--text-dim)"></div>
     </div>
   </div>
 </div>
@@ -662,6 +668,41 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   </div>
 </div>
 
+<!-- ===== RC SNIFFER ===== -->
+<div id="tab-rcsniff" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>RC Protocol Sniffer</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px">
+      Подключи RX-приёмник на GPIO 44 (RX), GND, 5V. Плата автоматически
+      определит протокол (SBUS / iBus / PPM) или выбери вручную.
+    </p>
+    <div class="row"><span class="label">Status:</span>
+      <span>
+        <span id="rcStatus" class="status off">STOPPED</span>
+        <span id="rcConn" class="status off">NO LINK</span>
+      </span>
+    </div>
+    <div class="row"><span class="label">Proto:</span><span class="value" id="rcProto">-</span></div>
+    <div class="row"><span class="label">Rate:</span><span class="value" id="rcRate">- Hz</span></div>
+    <div class="row"><span class="label">Frames / CRC errors:</span><span class="value" id="rcFrames">0 / 0</span></div>
+    <div class="row"><span class="label">Failsafe:</span><span class="value" id="rcFS">-</span></div>
+    <div class="grid">
+      <button class="success" onclick="rcStart('auto')">Auto-detect</button>
+      <button onclick="rcStart('sbus')">SBUS</button>
+    </div>
+    <div class="grid">
+      <button onclick="rcStart('ibus')">iBus</button>
+      <button onclick="rcStart('ppm')">PPM</button>
+    </div>
+    <button class="danger" onclick="rcStop()" style="width:100%">Stop</button>
+  </div>
+
+  <div class="card">
+    <h2>Channels (μs)</h2>
+    <div id="rcChannels" style="font-family:monospace;font-size:12px"></div>
+  </div>
+</div>
+
 <!-- ===== SYSTEM ===== -->
 <div id="tab-sys" class="tab-content" style="display:none">
   <div class="card">
@@ -795,7 +836,7 @@ function send(obj) {
 let _curWs = localStorage.getItem('ws') || 'batt';
 const _wsDefTab = {batt:'battery', fpv:'servo', sys:'sys'};
 const _wsValid = name => ['batt','fpv','sys'].includes(name);
-const _tabValid = name => ['servo','motor','battery','elrs','crsf','sys','usb','ota'].includes(name);
+const _tabValid = name => ['servo','motor','battery','elrs','crsf','rcsniff','sys','usb','ota'].includes(name);
 
 function showWorkspace(ws) {
   if (!_wsValid(ws)) ws = 'batt';
@@ -1657,6 +1698,61 @@ function battSnapshot() {
     a.href = URL.createObjectURL(blob);
     a.download = 'battery_snapshot_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.json';
     a.click();
+  });
+}
+
+// === ESC ===
+function escProbe() {
+  const el = document.getElementById('escResult');
+  el.textContent = 'Probing...';
+  fetch('/api/esc/probe', {method:'POST'}).then(r=>r.json()).then(j=>{
+    let txt = j.detected ? '[OK] ESC detected' : '[NO] No ESC on signal wire';
+    if (j.firmwareName && j.firmwareName !== 'unknown') txt += ' | FW: ' + j.firmwareName;
+    if (j.note) txt += '\n' + j.note;
+    el.textContent = txt;
+    el.style.color = j.detected ? 'var(--status-on)' : 'var(--warning-text)';
+  });
+}
+
+// === RC SNIFFER ===
+let _rcPollTimer = null;
+function rcStart(proto) {
+  const fd = new FormData(); fd.append('proto', proto);
+  fetch('/api/rc/start', {method:'POST', body:fd}).then(r=>r.text()).then(t=>{
+    if (_rcPollTimer) clearInterval(_rcPollTimer);
+    _rcPollTimer = setInterval(rcPoll, 250);
+    rcPoll();
+  });
+}
+function rcStop() {
+  fetch('/api/rc/stop', {method:'POST'}).then(()=>{
+    if (_rcPollTimer) { clearInterval(_rcPollTimer); _rcPollTimer = null; }
+    document.getElementById('rcStatus').className='status off';
+    document.getElementById('rcStatus').textContent='STOPPED';
+    document.getElementById('rcConn').className='status off';
+    document.getElementById('rcConn').textContent='NO LINK';
+  });
+}
+function rcPoll() {
+  fetch('/api/rc/state').then(r=>r.json()).then(s=>{
+    const st = document.getElementById('rcStatus');
+    st.className = 'status ' + (s.running ? 'on' : 'off');
+    st.textContent = s.running ? 'RUNNING' : 'STOPPED';
+    const co = document.getElementById('rcConn');
+    co.className = 'status ' + (s.connected ? 'on' : 'off');
+    co.textContent = s.connected ? 'LINK' : 'NO LINK';
+    document.getElementById('rcProto').textContent = s.proto;
+    document.getElementById('rcRate').textContent = s.frameRateHz + ' Hz';
+    document.getElementById('rcFrames').textContent = s.frameCount + ' / ' + s.crcErrors;
+    document.getElementById('rcFS').textContent = (s.failsafe ? 'FAILSAFE ' : '') + (s.lostFrame ? 'LOST' : s.failsafe ? '' : 'OK');
+    // Render channels as bars
+    let html = '';
+    (s.channels || []).forEach((v, i) => {
+      const pct = Math.max(0, Math.min(100, (v - 988) / (2012 - 988) * 100));
+      const col = v < 900 || v > 2100 ? '#f44' : (v < 1000 || v > 2000 ? '#fa0' : '#4f4');
+      html += `<div class="row" style="padding:2px 0"><span class="label" style="width:40px">Ch${i+1}</span><span class="value" style="width:60px;color:${col}">${v}μs</span><div class="bar" style="flex:1;margin-left:8px;height:10px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
+    });
+    document.getElementById('rcChannels').innerHTML = html || '<div style="color:var(--text-dim);padding:10px">No channel data yet</div>';
   });
 }
 
