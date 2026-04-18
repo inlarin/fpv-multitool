@@ -159,8 +159,8 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 </div>
 <div id="ws-sys" style="display:none">
   <div class="tabs">
-    <div class="tab active" onclick="showTab('sys')">System</div>
-    <div class="tab" onclick="showTab('usb')">USB</div>
+    <div class="tab active" onclick="showTab('setup')">Setup</div>
+    <div class="tab" onclick="showTab('sys')">System</div>
     <div class="tab" onclick="showTab('ota')">OTA</div>
   </div>
 </div>
@@ -776,6 +776,51 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 </div>
 
 <!-- ===== SYSTEM ===== -->
+<!-- ===== SETUP WIZARD (Host/Bridge + device) ===== -->
+<div id="tab-setup" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>Setup</h2>
+    <p style="color:#888;font-size:12px;margin:2px 0 10px">
+      Один вопрос за раз: <b>что подключаешь</b> к Port B (GP10/GP11) и
+      <b>кто с ним работает</b>. Всё остальное (USB дескриптор, Port B mode)
+      настраивается под капотом.
+    </p>
+
+    <div class="row"><span class="label">1. Что подключено к Port B:</span></div>
+    <div id="setupDevice" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;margin:6px 0 12px">
+      <button data-device="battery"  onclick="setupPickDevice('battery')">🔋 Battery<br><small style="color:#888">DJI / SBS SMBus</small></button>
+      <button data-device="receiver" onclick="setupPickDevice('receiver')">📡 Receiver<br><small style="color:#888">ELRS / CRSF UART</small></button>
+      <button data-device="motor"    onclick="setupPickDevice('motor')">⚡ Motor/Servo<br><small style="color:#888">ESC DShot / PWM</small></button>
+      <button data-device="advanced" onclick="setupPickDevice('advanced')">🔌 Advanced<br><small style="color:#888">PPM / 4way / raw</small></button>
+      <button data-device="idle"     onclick="setupPickDevice('idle')">💤 Idle<br><small style="color:#888">ничего не используется</small></button>
+    </div>
+
+    <div class="row"><span class="label">2. Кто с ним работает:</span></div>
+    <div id="setupRole" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 12px">
+      <button data-role="host"   onclick="setupPickRole('host')">🖥️ HOST<br><small style="color:#888">плата сама, Web UI показывает данные</small></button>
+      <button data-role="bridge" onclick="setupPickRole('bridge')">💻 BRIDGE to PC<br><small style="color:#888">прокидываю на комп (bqStudio/esptool/BK)</small></button>
+    </div>
+
+    <div id="setupBridgeHint" style="display:none;color:#f80;font-size:11px;margin:-6px 0 10px"></div>
+
+    <div style="margin-top:4px">
+      <button class="success" onclick="setupApply()" id="setupApplyBtn" disabled>Apply</button>
+      <span id="setupApplyMsg" style="margin-left:10px;color:#0f0"></span>
+    </div>
+    <hr style="margin:14px 0;border:none;border-top:1px solid var(--border)">
+    <div class="row"><span class="label">Активно сейчас:</span>
+      <span class="value" id="setupActive">-</span>
+    </div>
+    <div class="row"><span class="label">В NVS (на след. boot):</span>
+      <span><span class="value" id="setupPreferred">-</span>
+      <span id="setupPendingBadge" class="status off" style="display:none;margin-left:8px">REBOOT PENDING</span></span>
+    </div>
+    <div class="row"><span class="label">Детали:</span>
+      <span class="value" id="setupDetails" style="font-family:monospace;font-size:11px"></span>
+    </div>
+  </div>
+</div>
+
 <div id="tab-sys" class="tab-content" style="display:none">
   <div class="card">
     <h2>System Info</h2>
@@ -785,8 +830,16 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="row"><span class="label">WiFi clients:</span><span class="value" id="sysClients">-</span></div>
   </div>
 
-  <div class="card">
-    <h2>Port B Mode <span id="portBPins" style="color:var(--text-dim);font-size:11px;font-weight:normal"></span></h2>
+  <details class="card" style="padding:0">
+    <summary style="padding:14px 16px;cursor:pointer;font-weight:600;color:var(--accent)">⚙ Advanced — Port B / USB / WiFi (ручной режим)</summary>
+    <div style="padding:0 16px 16px">
+    <div class="warning" style="font-size:11px;margin-bottom:10px">
+      Обычно не нужно — выбирай «Setup» выше. Здесь — ручной контроль
+      электрической раскладки пинов и USB-дескриптора для прошаренного
+      использования.
+    </div>
+  <div class="card" style="background:var(--bg);border:1px dashed var(--border)">
+    <h2 style="font-size:15px">Port B Mode <span id="portBPins" style="color:var(--text-dim);font-size:11px;font-weight:normal"></span></h2>
     <p style="color:#888;font-size:11px;margin:4px 0 8px">
       Единственный сигнальный разъём платы (<code>GP10</code>/<code>GP11</code> + <code>5V</code>/<code>GND</code>)
       используется для всех фич: батарея, приёмник, сервопривод/мотор. Одновременно работает только один режим.
@@ -818,8 +871,8 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       <code>GPIO</code> — raw bit-bang — RC Sniffer (PPM), BLHeli passthrough
     </div>
   </div>
-  <div class="card">
-    <h2>WiFi Config</h2>
+  <div class="card" style="background:var(--bg);border:1px dashed var(--border)">
+    <h2 style="font-size:15px">WiFi Config</h2>
     <div style="margin-bottom:8px">
       <button onclick="scanWifi()" id="wifiScanBtn">Scan networks</button>
       <span id="wifiScanStatus" style="color:#888;margin-left:8px;font-size:12px"></span>
@@ -832,6 +885,8 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <button onclick="saveWifi()">Save & Connect STA</button>
     <button class="danger" onclick="clearWifi()">Clear (back to AP)</button>
   </div>
+    </div>
+  </details>
 </div>
 
 <div id="tab-usb" class="tab-content" style="display:none">
@@ -947,9 +1002,9 @@ function send(obj) {
 }
 
 let _curWs = localStorage.getItem('ws') || 'batt';
-const _wsDefTab = {batt:'battery', fpv:'servo', sys:'sys'};
+const _wsDefTab = {batt:'battery', fpv:'servo', sys:'setup'};
 const _wsValid = name => ['batt','fpv','sys'].includes(name);
-const _tabValid = name => ['servo','motor','battery','elrs','crsf','rcsniff','sys','usb','ota'].includes(name);
+const _tabValid = name => ['servo','motor','battery','elrs','crsf','rcsniff','setup','sys','usb','ota'].includes(name);
 
 function showWorkspace(ws) {
   if (!_wsValid(ws)) ws = 'batt';
@@ -984,6 +1039,7 @@ function showTab(name) {
   localStorage.setItem('tab_' + _curWs, name);
   if (name === 'ota') otaRefresh();
   if (name === 'servo') servoStatePoll();
+  if (name === 'setup') setupRefresh();
   if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
@@ -2127,6 +2183,102 @@ function saveWifi() {
 function clearWifi() {
   if (!confirm('Reset WiFi to AP mode?')) return;
   fetch('/api/wifi/clear').then(r=>r.text()).then(t=>alert(t));
+}
+
+// ===== Setup wizard (Host/Bridge + device preset) =====
+let _setupDevice = null;
+let _setupRole = null;
+
+function setupPickDevice(d) {
+  _setupDevice = d;
+  document.querySelectorAll('#setupDevice button').forEach(b => {
+    b.classList.toggle('success', b.dataset.device === d);
+  });
+  // motor has no bridge mode — hint user if they have bridge pre-selected.
+  const hint = document.getElementById('setupBridgeHint');
+  if (d === 'motor' && _setupRole === 'bridge') {
+    hint.style.display = '';
+    hint.textContent = '⚠ Motor/Servo не поддерживает BRIDGE (нет PC-тулов). Выбери HOST.';
+    _setupRole = null;
+    document.querySelectorAll('#setupRole button').forEach(b => b.classList.remove('success'));
+  } else {
+    hint.style.display = 'none';
+  }
+  setupUpdateApplyBtn();
+}
+function setupPickRole(r) {
+  if (_setupDevice === 'motor' && r === 'bridge') {
+    document.getElementById('setupBridgeHint').style.display = '';
+    document.getElementById('setupBridgeHint').textContent = '⚠ Motor/Servo BRIDGE не поддерживается.';
+    return;
+  }
+  _setupRole = r;
+  document.querySelectorAll('#setupRole button').forEach(b => {
+    b.classList.toggle('success', b.dataset.role === r);
+  });
+  setupUpdateApplyBtn();
+}
+function setupUpdateApplyBtn() {
+  const btn = document.getElementById('setupApplyBtn');
+  btn.disabled = !(_setupDevice && _setupRole);
+}
+function setupApply() {
+  if (!_setupDevice || !_setupRole) return;
+  const fd = new FormData();
+  fd.append('device', _setupDevice);
+  fd.append('role', _setupRole);
+  document.getElementById('setupApplyMsg').textContent = 'Применяю...';
+  fetch('/api/setup/apply', {method:'POST', body: fd})
+    .then(r => r.json())
+    .then(j => {
+      if (!j.ok) {
+        document.getElementById('setupApplyMsg').textContent = 'Ошибка: ' + JSON.stringify(j);
+        return;
+      }
+      let msg = 'OK: USB=' + j.usb + ', Port B=' + j.port;
+      if (j.reboot_needed) {
+        msg += '. Перезагрузка для смены USB дескриптора...';
+        document.getElementById('setupApplyMsg').textContent = msg;
+        setTimeout(() => {
+          fetch('/api/usb/reboot', {method:'POST'}).catch(()=>{});
+          document.getElementById('setupApplyMsg').textContent =
+            'Плата перезагружается. Refresh через 5-7с.';
+        }, 400);
+      } else {
+        document.getElementById('setupApplyMsg').textContent = msg;
+        setTimeout(setupRefresh, 500);
+      }
+    })
+    .catch(e => {
+      document.getElementById('setupApplyMsg').textContent = 'Ошибка: ' + e;
+    });
+}
+function setupRefresh() {
+  fetch('/api/setup/status').then(r => r.json()).then(j => {
+    const a = j.active, p = j.preferred;
+    const fmt = (x) => (x.role === 'bridge' ? '💻 ' : '🖥️ ') +
+                      (x.device === 'battery' ? '🔋 Battery' :
+                       x.device === 'receiver' ? '📡 Receiver' :
+                       x.device === 'motor' ? '⚡ Motor/Servo' :
+                       x.device === 'advanced' ? '🔌 Advanced' :
+                       x.device === 'idle' ? '💤 Idle' : x.device) +
+                      ' · ' + (x.role === 'bridge' ? 'BRIDGE' : 'HOST');
+    document.getElementById('setupActive').textContent = fmt(a);
+    document.getElementById('setupPreferred').textContent = fmt(p);
+    document.getElementById('setupPendingBadge').style.display =
+      j.reboot_pending ? 'inline-block' : 'none';
+    document.getElementById('setupDetails').textContent =
+      'USB=' + a.usb + ' · Port B=' + a.port + (a.owner ? ' (owner: ' + a.owner + ')' : '');
+    // Pre-select buttons from preferred mode
+    _setupDevice = p.device; _setupRole = p.role;
+    document.querySelectorAll('#setupDevice button').forEach(b => {
+      b.classList.toggle('success', b.dataset.device === p.device);
+    });
+    document.querySelectorAll('#setupRole button').forEach(b => {
+      b.classList.toggle('success', b.dataset.role === p.role);
+    });
+    setupUpdateApplyBtn();
+  }).catch(e => { document.getElementById('setupApplyMsg').textContent = 'Ошибка: ' + e; });
 }
 
 // ===== USB mode =====

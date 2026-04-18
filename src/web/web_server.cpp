@@ -2388,6 +2388,142 @@ void WebServer::start() {
         req->send(200, "text/plain", "Released");
     });
 
+    // ===== Setup wizard — HOST / BRIDGE + device preset =====
+    // One-shot configurator that derives both (USB descriptor) and
+    // (Port B electrical mode) from the user's intent:
+    //   device  ∈ {battery, receiver, motor, advanced}
+    //   role    ∈ {host, bridge}
+    // HOST   = the board itself talks to the device (CDC-only USB).
+    // BRIDGE = PC talks to the device via the board as transparent proxy.
+    //   - battery  → USB2I2C (CP2112 HID)
+    //   - receiver → USB2TTL (CDC + UART pump)
+    //   - advanced → USB2TTL
+    //   - motor    → not supported (no PC-side toolchain for servo/DShot);
+    //                UI doesn't expose this combo.
+
+    auto setupStringsToPreset = [](const String &device, const String &role,
+                                   UsbDescriptorMode &outUsb, PortMode &outPort,
+                                   String &outErr) -> bool {
+        bool bridge = (role == "bridge");
+        if (device == "battery") {
+            outUsb  = bridge ? USB_MODE_USB2I2C : USB_MODE_CDC;
+            outPort = PORT_I2C;
+        } else if (device == "receiver") {
+            outUsb  = bridge ? USB_MODE_USB2TTL : USB_MODE_CDC;
+            outPort = PORT_UART;
+        } else if (device == "motor") {
+            if (bridge) { outErr = "motor has no bridge mode"; return false; }
+            outUsb  = USB_MODE_CDC;
+            outPort = PORT_PWM;
+        } else if (device == "advanced") {
+            outUsb  = bridge ? USB_MODE_USB2TTL : USB_MODE_CDC;
+            outPort = bridge ? PORT_UART : PORT_GPIO;
+        } else if (device == "idle") {
+            outUsb  = USB_MODE_CDC;
+            outPort = PORT_IDLE;
+        } else {
+            outErr = "unknown device";
+            return false;
+        }
+        return true;
+    };
+
+    auto presetToStrings = [](UsbDescriptorMode usb, PortMode port,
+                              String &outDevice, String &outRole) {
+        // Infer (device, role) from the raw pair. USB being CDC implies HOST.
+        if (usb == USB_MODE_USB2I2C) {
+            outDevice = "battery";  outRole = "bridge"; return;
+        }
+        if (usb == USB_MODE_USB2TTL) {
+            // USB2TTL is shared by Receiver BRIDGE and Advanced BRIDGE; the
+            // distinction is only UX sugar — we surface Receiver by default.
+            outDevice = "receiver"; outRole = "bridge"; return;
+        }
+        // CDC — role is always HOST; device is derived from Port B.
+        outRole = "host";
+        switch (port) {
+            case PORT_I2C:  outDevice = "battery";  break;
+            case PORT_UART: outDevice = "receiver"; break;
+            case PORT_PWM:  outDevice = "motor";    break;
+            case PORT_GPIO: outDevice = "advanced"; break;
+            case PORT_IDLE: outDevice = "idle";     break;
+            default:        outDevice = "unknown";  break;
+        }
+    };
+
+    s_server->on("/api/setup/status", HTTP_GET,
+        [presetToStrings](AsyncWebServerRequest *req) {
+            UsbDescriptorMode activeUsb = UsbMode::active();
+            UsbDescriptorMode prefUsb   = UsbMode::load();
+            PortMode activePort = PinPort::currentMode(PinPort::PORT_B);
+            PortMode prefPort   = PinPort::preferredMode(PinPort::PORT_B);
+
+            String activeDev, activeRole, prefDev, prefRole;
+            presetToStrings(activeUsb, activePort, activeDev, activeRole);
+            presetToStrings(prefUsb, prefPort, prefDev, prefRole);
+
+            JsonDocument d;
+            JsonObject a = d["active"].to<JsonObject>();
+            a["device"]    = activeDev;
+            a["role"]      = activeRole;
+            a["usb"]       = UsbMode::name(activeUsb);
+            a["port"]      = PinPort::modeName(activePort);
+            a["owner"]     = PinPort::currentOwner(PinPort::PORT_B);
+
+            JsonObject p = d["preferred"].to<JsonObject>();
+            p["device"]    = prefDev;
+            p["role"]      = prefRole;
+            p["usb"]       = UsbMode::name(prefUsb);
+            p["port"]      = PinPort::modeName(prefPort);
+
+            d["reboot_pending"] = (activeUsb != prefUsb);
+
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
+        });
+
+    s_server->on("/api/setup/apply", HTTP_POST,
+        [setupStringsToPreset](AsyncWebServerRequest *req) {
+            if (!req->hasParam("device", true) || !req->hasParam("role", true)) {
+                req->send(400, "text/plain", "Need form params 'device' and 'role'");
+                return;
+            }
+            String device = req->getParam("device", true)->value();
+            String role   = req->getParam("role", true)->value();
+            UsbDescriptorMode usb;
+            PortMode port;
+            String err;
+            if (!setupStringsToPreset(device, role, usb, port, err)) {
+                req->send(400, "text/plain", err);
+                return;
+            }
+
+            UsbDescriptorMode prevUsb = UsbMode::load();
+            bool usbChanged = (usb != prevUsb);
+
+            UsbMode::save(usb);
+            PinPort::setPreferredMode(PinPort::PORT_B, port);
+
+            // Apply Port B immediately (no reboot needed for Port B changes).
+            PinPort::release(PinPort::PORT_B);
+            if (port != PORT_IDLE) {
+                PinPort::acquire(PinPort::PORT_B, port, "setup");
+            }
+
+            JsonDocument d;
+            d["ok"]             = true;
+            d["device"]         = device;
+            d["role"]           = role;
+            d["usb"]            = UsbMode::name(usb);
+            d["port"]           = PinPort::modeName(port);
+            d["reboot_needed"]  = usbChanged;
+            d["reboot_reason"]  = usbChanged
+                ? "USB descriptor fixed at boot — reboot to re-enumerate"
+                : "";
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
+        });
+
     s_server->on("/api/cp2112/log", HTTP_GET, [](AsyncWebServerRequest *req) {
         static char buf[4096];
         int n = cp2112_log_dump(buf, sizeof(buf));
