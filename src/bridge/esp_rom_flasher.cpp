@@ -30,7 +30,9 @@ static const uint8_t CMD_FLASH_DATA   = 0x03;
 static const uint8_t CMD_FLASH_END    = 0x04;
 static const uint8_t CMD_SYNC         = 0x08;
 static const uint8_t CMD_READ_REG     = 0x0A;
+static const uint8_t CMD_SPI_ATTACH   = 0x0D;
 static const uint8_t CMD_CHANGE_BAUD  = 0x0F;
+static const uint8_t CMD_READ_FLASH   = 0xD2;  // stream-read (ESP32-S2/S3/C3 ROM + stubs)
 
 // Parameters
 static const size_t FLASH_WRITE_BLOCK_SIZE = 1024;    // per FLASH_DATA packet
@@ -265,8 +267,104 @@ const char* errorString(Result r) {
         case FLASH_ERR_END_FAILED:   return "FLASH_END failed";
         case FLASH_ERR_TIMEOUT:      return "Timeout";
         case FLASH_ERR_INVALID_INPUT: return "Invalid input";
+        case FLASH_ERR_READ_FAILED:  return "READ_FLASH rejected or bad response";
         default: return "Unknown";
     }
+}
+
+// SPI_ATTACH prepares the ROM SPI flash driver so subsequent READ_FLASH works.
+// On ESP32-S2/S3/C3 the argument is [spi_config:4, zero:4] (default cfg=0).
+static bool spiAttach() {
+    uint8_t data[8] = {0};
+    return sendCmd(CMD_SPI_ATTACH, data, 8, cksum(data, 8), 3000);
+}
+
+// Read `size` bytes at `offset` into `out`. Protocol per esptool's
+// esp_loader_flash_read: send READ_FLASH request, then for each `block_size`
+// chunk the ROM pushes a raw SLIP frame of block_size bytes, after each we
+// send a 4-byte SLIP-framed ACK with total bytes received so far. Finally
+// the ROM sends a 16-byte MD5 digest we discard.
+Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) {
+    if (!cfg.uart || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
+
+    s_uart = cfg.uart;
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    s_uart->setRxBufferSize(8192);
+    delay(100);
+
+    if (cfg.progress) cfg.progress(0, "Connecting");
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    if (cfg.progress) cfg.progress(3, "Synced");
+
+    // SPI_ATTACH — optional on some ROMs, mandatory on ESP32-C3.
+    spiAttach();
+
+    const uint32_t BLOCK = 1024;
+    const uint32_t MAX_PENDING = 1;  // conservative — one outstanding packet
+
+    uint8_t req[16];
+    *(uint32_t*)(req + 0)  = offset;
+    *(uint32_t*)(req + 4)  = (uint32_t)size;
+    *(uint32_t*)(req + 8)  = BLOCK;
+    *(uint32_t*)(req + 12) = MAX_PENDING;
+
+    // Issue READ_FLASH — the ROM's *immediate* response is a plain status
+    // packet (0x01, 0xD2, ...). We don't use sendCmd() here because it
+    // consumes the buffered sync replies and we'd miss the data stream.
+    slipStart();
+    slipWriteByte(0x00);
+    slipWriteByte(CMD_READ_FLASH);
+    slipWriteByte(16 & 0xFF);
+    slipWriteByte((16 >> 8) & 0xFF);
+    uint32_t ck = cksum(req, 16);
+    slipWriteByte(ck & 0xFF);
+    slipWriteByte((ck >> 8) & 0xFF);
+    slipWriteByte((ck >> 16) & 0xFF);
+    slipWriteByte((ck >> 24) & 0xFF);
+    slipWrite(req, 16);
+    slipEnd();
+    s_uart->flush();
+
+    // Consume the acknowledgement response (variable length, ends with 0xC0)
+    static uint8_t tmp[256];
+    int ackLen = slipRead(tmp, sizeof(tmp), 5000);
+    if (ackLen < 8 || tmp[0] != 0x01 || tmp[1] != CMD_READ_FLASH) {
+        s_uart->end();
+        return FLASH_ERR_READ_FAILED;
+    }
+
+    // Receive data stream — one SLIP frame per block of BLOCK bytes,
+    // except the last which may be shorter when size isn't block-aligned.
+    size_t received = 0;
+    while (received < size) {
+        int n = slipRead(out + received,
+                         (size - received > BLOCK) ? BLOCK : (size - received),
+                         5000);
+        if (n <= 0) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
+        received += n;
+
+        // ACK: 4-byte little-endian count of bytes received so far.
+        uint32_t ackVal = (uint32_t)received;
+        slipStart();
+        slipWriteByte(ackVal & 0xFF);
+        slipWriteByte((ackVal >> 8) & 0xFF);
+        slipWriteByte((ackVal >> 16) & 0xFF);
+        slipWriteByte((ackVal >> 24) & 0xFF);
+        slipEnd();
+        s_uart->flush();
+
+        if (cfg.progress) {
+            int pct = 3 + (int)((int64_t)received * 92 / size);
+            cfg.progress(pct, "Reading");
+        }
+    }
+
+    // Trailer: MD5 digest (16 bytes in a SLIP frame). Discard.
+    slipRead(tmp, sizeof(tmp), 3000);
+
+    if (cfg.progress) cfg.progress(100, "Done");
+    s_uart->end();
+    return FLASH_OK;
 }
 
 } // namespace ESPFlasher

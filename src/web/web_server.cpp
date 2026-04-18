@@ -2028,6 +2028,118 @@ void WebServer::start() {
         req->send(200, "text/plain", "Flashing started");
     });
 
+    // ===== Receiver firmware DUMP (READ_FLASH via ROM bootloader) =====
+    // Reads the attached ESP32-C3 / S2 / S3 receiver's SPI flash over UART1
+    // through the same physical Port B pins that the upload flow uses.
+    // User must have the receiver in DFU/bootloader mode (hold BOOT + power
+    // cycle). Runs in a background task; poll status and then GET the
+    // binary.
+    static struct {
+        volatile bool     running;
+        volatile int      progress;   // 0..100
+        String            stage;
+        String            error;
+        uint8_t          *buf;        // PSRAM
+        size_t            size;
+        uint32_t          offset;
+    } s_dump = {false, 0, "", "", nullptr, 0, 0};
+
+    s_server->on("/api/flash/dump/start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (s_dump.running) { req->send(409, "text/plain", "already running"); return; }
+        uint32_t offset = req->hasParam("offset", true)
+            ? strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0) : 0;
+        size_t size = req->hasParam("size", true)
+            ? strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0) : 0x400000;
+        if (size == 0 || size > 0x800000) {
+            req->send(400, "text/plain", "size must be 1..8 MB");
+            return;
+        }
+
+        // Free previous dump buffer if any
+        if (s_dump.buf) { free(s_dump.buf); s_dump.buf = nullptr; }
+
+        // Allocate in PSRAM (huge-allocate, fallback to heap if PSRAM full)
+        s_dump.buf = (uint8_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+        if (!s_dump.buf) s_dump.buf = (uint8_t*)malloc(size);
+        if (!s_dump.buf) {
+            req->send(500, "text/plain", "alloc failed — no PSRAM/heap for dump");
+            return;
+        }
+        s_dump.size    = size;
+        s_dump.offset  = offset;
+        s_dump.progress = 0;
+        s_dump.stage   = "Queued";
+        s_dump.error   = "";
+        s_dump.running = true;
+
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_dump")) {
+            s_dump.running = false;
+            s_dump.error = "Port B busy — switch Setup to Receiver";
+            req->send(409, "text/plain", s_dump.error);
+            return;
+        }
+
+        xTaskCreate([](void *) {
+            ESPFlasher::Config cfg;
+            cfg.uart = &Serial1;
+            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+            cfg.baud_rate = 115200;
+            cfg.progress = [](int pct, const char *stage) {
+                s_dump.progress = pct;
+                s_dump.stage = stage;
+            };
+            ESPFlasher::Result r = ESPFlasher::readFlash(
+                cfg, s_dump.offset, s_dump.size, s_dump.buf);
+            if (r != ESPFlasher::FLASH_OK) {
+                s_dump.error = ESPFlasher::errorString(r);
+                s_dump.stage = "Failed";
+            } else {
+                s_dump.stage = "Done";
+                s_dump.progress = 100;
+            }
+            PinPort::release(PinPort::PORT_B);
+            s_dump.running = false;
+            vTaskDelete(nullptr);
+        }, "elrs_dump", 6144, nullptr, 1, nullptr);
+
+        req->send(202, "text/plain", "dump started — poll /api/flash/dump/status");
+    });
+
+    s_server->on("/api/flash/dump/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["running"]   = s_dump.running;
+        d["progress"]  = s_dump.progress;
+        d["stage"]     = s_dump.stage;
+        d["error"]     = s_dump.error;
+        d["size"]      = s_dump.size;
+        d["offset"]    = s_dump.offset;
+        d["ready"]     = (!s_dump.running && s_dump.buf != nullptr && s_dump.error.length() == 0);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    s_server->on("/api/flash/dump/download", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (s_dump.running || !s_dump.buf || s_dump.error.length() > 0) {
+            req->send(409, "text/plain", "no dump available");
+            return;
+        }
+        // Stream PSRAM buffer as attachment
+        AsyncWebServerResponse *r = req->beginResponse_P(
+            200, "application/octet-stream",
+            (const uint8_t*)s_dump.buf, s_dump.size);
+        r->addHeader("Content-Disposition", "attachment; filename=elrs_dump.bin");
+        r->addHeader("Cache-Control", "no-store");
+        req->send(r);
+    });
+
+    s_server->on("/api/flash/dump/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (s_dump.running) { req->send(409, "text/plain", "still running"); return; }
+        if (s_dump.buf) { free(s_dump.buf); s_dump.buf = nullptr; }
+        s_dump.size = 0; s_dump.progress = 0; s_dump.stage = ""; s_dump.error = "";
+        req->send(200, "text/plain", "cleared");
+    });
+
     // ===== CRSF endpoints =====
     s_server->on("/api/crsf/start", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf")) {

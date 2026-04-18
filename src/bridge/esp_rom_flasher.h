@@ -19,6 +19,7 @@ enum Result {
     FLASH_ERR_END_FAILED,    // FLASH_END rejected
     FLASH_ERR_TIMEOUT,
     FLASH_ERR_INVALID_INPUT,
+    FLASH_ERR_READ_FAILED,   // READ_FLASH rejected or malformed response
 };
 
 struct Config {
@@ -32,6 +33,13 @@ struct Config {
 };
 
 Result flash(const Config &cfg, const uint8_t *data, size_t size);
+
+// Read `size` bytes from flash at `offset` on an attached ESP32-C3 / S2 / S3
+// receiver that's already in ROM bootloader mode. Destination buffer must
+// be at least `size` bytes (typically in PSRAM for multi-MB dumps).
+// Uses CMD_READ_FLASH (0xD2) — streams block_size packets with flow-control
+// acks, terminated by a 16-byte MD5 trailer (ignored here).
+Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out);
 
 const char* errorString(Result r);
 

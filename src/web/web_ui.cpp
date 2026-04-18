@@ -650,6 +650,41 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <button class="danger" onclick="clearFw()" style="width:100%;margin-top:4px;">Clear</button>
     <div id="flashResult" style="margin-top:10px; color:#0f0;"></div>
   </div>
+
+  <div class="card">
+    <h2>Dump Receiver Firmware</h2>
+    <div class="warning">
+      Читает flash приёмника через ROM bootloader на плату (в PSRAM), затем
+      скачать как <code>elrs_dump.bin</code>. Запусти в
+      <code>hardware/bayckrc_c3_dual/parse.py</code> — вытащит версию, WiFi
+      credentials (если приёмник когда-то бинился к WiFi) и target-токены.
+    </div>
+    <div class="row"><span class="label">Offset:</span>
+      <input id="dumpOffset" type="text" value="0x0" style="width:90px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+    </div>
+    <div class="row"><span class="label">Size:</span>
+      <select id="dumpSize" style="padding:4px;background:#0a0a14;color:#fff;border:1px solid #333">
+        <option value="0x100000">1 MB</option>
+        <option value="0x200000">2 MB</option>
+        <option value="0x400000" selected>4 MB (обычный ESP32-C3)</option>
+        <option value="0x800000">8 MB</option>
+      </select>
+    </div>
+    <div class="row"><span class="label">Статус:</span>
+      <span><span class="value" id="dumpStage">idle</span>
+      <span id="dumpError" style="color:#f44;margin-left:8px"></span></span>
+    </div>
+    <div class="bar"><div class="bar-fill" id="dumpBar" style="width:0%;background:#0af"></div></div>
+    <div class="grid">
+      <button class="success" onclick="dumpStart()" id="dumpStartBtn">Dump firmware</button>
+      <button onclick="dumpDownload()" id="dumpDownloadBtn" disabled>⬇ Download bin</button>
+    </div>
+    <button class="danger" onclick="dumpClear()" style="width:100%;margin-top:4px">Clear dump (free PSRAM)</button>
+    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
+      Для ESP32-C3 должен быть в DFU (кнопка BOOT во время подачи питания).
+      Скорость ~12–25 KB/s, 4 MB ≈ 3–5 минут.
+    </div>
+  </div>
 </div>
 
 <!-- ===== CRSF ===== -->
@@ -2185,6 +2220,52 @@ function clearFw() {
     document.getElementById('uploadBtn').disabled = true;
     document.getElementById('flashBtn').disabled = true;
     selectedFile = null;
+  });
+}
+
+// === Receiver firmware DUMP ===
+let _dumpPoll = null;
+function dumpStart() {
+  const offset = document.getElementById('dumpOffset').value;
+  const size   = document.getElementById('dumpSize').value;
+  const fd = new FormData();
+  fd.append('offset', offset);
+  fd.append('size', size);
+  document.getElementById('dumpError').textContent = '';
+  document.getElementById('dumpStage').textContent = 'starting...';
+  document.getElementById('dumpStartBtn').disabled = true;
+  document.getElementById('dumpDownloadBtn').disabled = true;
+  fetch('/api/flash/dump/start', {method:'POST', body: fd})
+    .then(r => r.text()).then(t => {
+      document.getElementById('dumpStage').textContent = t;
+      if (!_dumpPoll) _dumpPoll = setInterval(dumpPoll, 1000);
+    })
+    .catch(e => {
+      document.getElementById('dumpError').textContent = 'start failed: ' + e;
+      document.getElementById('dumpStartBtn').disabled = false;
+    });
+}
+function dumpPoll() {
+  fetch('/api/flash/dump/status').then(r=>r.json()).then(j=>{
+    document.getElementById('dumpStage').textContent = j.stage || (j.running ? 'reading' : 'idle');
+    document.getElementById('dumpBar').style.width = (j.progress || 0) + '%';
+    document.getElementById('dumpError').textContent = j.error || '';
+    if (!j.running) {
+      if (_dumpPoll) { clearInterval(_dumpPoll); _dumpPoll = null; }
+      document.getElementById('dumpStartBtn').disabled = false;
+      document.getElementById('dumpDownloadBtn').disabled = !j.ready;
+    }
+  }).catch(()=>{});
+}
+function dumpDownload() {
+  window.location.href = '/api/flash/dump/download';
+}
+function dumpClear() {
+  fetch('/api/flash/dump/clear', {method:'POST'}).then(()=>{
+    document.getElementById('dumpStage').textContent = 'cleared';
+    document.getElementById('dumpBar').style.width = '0%';
+    document.getElementById('dumpError').textContent = '';
+    document.getElementById('dumpDownloadBtn').disabled = true;
   });
 }
 
