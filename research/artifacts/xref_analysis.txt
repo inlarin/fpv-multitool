@@ -1,0 +1,85 @@
+======================================================================
+libdji_secure.so  397824 bytes
+.text   @ 0x0000DBD0  size=225236
+.rodata @ 0x00044BB0  size=42244
+.data   @ 0x00070000  size=296
+
+----------------------------------------------------------------------
+Function a100x_decompressCert @ file offset 0x03D650 size=224
+  disassembled 56 instructions, first VA = 0x0003E650
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function a100x_generateChallenge @ file offset 0x03D730 size=544
+  disassembled 136 instructions, first VA = 0x0003E730
+  3 data refs, 3 into .rodata
+    0x0004DAE0: 010000000000000000000000000000000000000000000000179d26fb783da27b  [..........................&.x=.{]
+    0x0004EB00: f12473790c5c1cb145d5cda24f09a0716cbc1fd500000000363e34e8374699d4  [.$sy.\..E...O..ql.......6>4.7F..] !KEY?
+    0x0004EB18: 363e34e8374699d4681199a07ed5a28662a1ebf003000000a54df36939c089da  [6>4.7F..h...~...b........M.i9...] !KEY?
+----------------------------------------------------------------------
+Function a100x_verifyResponse @ file offset 0x03D950 size=484
+  disassembled 121 instructions, first VA = 0x0003E950
+  3 data refs, 1 into .rodata
+    0x0004EB30: a54df36939c089da66c3213d592789dfba855bc2020000000000000001000000  [.M.i9...f.!=Y'....[.............] !KEY?
+----------------------------------------------------------------------
+Function a100x_v1_challenge @ file offset 0x03E068 size=384
+  disassembled 96 instructions, first VA = 0x0003F068
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function a100x_v1_verify_response @ file offset 0x03E1E8 size=176
+  disassembled 44 instructions, first VA = 0x0003F1E8
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function a100x_verifyDERSig @ file offset 0x03E298 size=1244
+  disassembled 311 instructions, first VA = 0x0003F298
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function bECC_precomputeResponse @ file offset 0x03F410 size=48
+  disassembled 12 instructions, first VA = 0x00040410
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function bECC_verifyResponse @ file offset 0x03F440 size=132
+  disassembled 33 instructions, first VA = 0x00040440
+  1 data refs, 1 into .rodata
+    0x0004817A: 5b53454320617574685d206131303036207772697465206369706865725f3120  [[SEC auth] a1006 write cipher_1 ] !KEY?
+----------------------------------------------------------------------
+Function a1006_verify_device @ file offset 0x03F940 size=180
+  disassembled 45 instructions, first VA = 0x00040940
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function a1006_oneway_authentication @ file offset 0x03F9F8 size=436
+  disassembled 109 instructions, first VA = 0x000409F8
+  1 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function a1006_auth_challenge @ file offset 0x03FE40 size=904
+  disassembled 226 instructions, first VA = 0x00040E40
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function a1006_auth_verify @ file offset 0x040348 size=256
+  disassembled 64 instructions, first VA = 0x00041348
+  0 data refs, 0 into .rodata
+----------------------------------------------------------------------
+Function auth_chip_init @ file offset 0x043840 size=400
+  disassembled 100 instructions, first VA = 0x00044840
+  1 data refs, 1 into .rodata
+    0x00048647: 6465766963655f6e616d6500696e69745f6932635f636f6e6e5f64617461005b  [device_name.init_i2c_conn_data.[] !KEY?
+----------------------------------------------------------------------
+Function init_auth_chip_from_json @ file offset 0x044588 size=428
+  disassembled 0 instructions, first VA = 0x00045588
+  0 data refs, 0 into .rodata
+
+======================================================================
+Cross-reference summary: addresses referenced by MULTIPLE auth functions
+(likely shared root key / curve params / cert structures)
+
+
+======================================================================
+Addresses referenced ONLY by a1006_auth_verify / a100x_verifyDERSig
+(candidates for hardcoded root public key for DJI battery cert verification)
+
+  0x0004817A [.rodata] refs=['bECC_verifyResponse']
+                  5b53454320617574685d206131303036207772697465206369706865725f31206661696c6564207769746820307825780a005b53454320617574685d20613130
+                  ascii: [SEC auth] a1006 write cipher_1 failed with 0x%x..[SEC auth] a10
+
+  0x0006F018 [?] refs=['a1006_oneway_authentication']
+                  070000001c000000e0000000010000000000000000000000ffffffffffffffffffffffffffffffff3d2a5c5c4529dd133ef0b8e0a216ffffffffffffffffffff
+                  ascii: ........................................=*\\E)..>...............
