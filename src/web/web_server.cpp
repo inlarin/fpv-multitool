@@ -1243,6 +1243,221 @@ void WebServer::start() {
 
     // Read reg 0x00 rapidly N times onboard, return only unique non-echo responses.
     //   GET /api/batt/clone/async_catch?count=1000&intervalUs=0
+    // Broader transition brute — sweep both macA AND macB, catch all publish packets.
+    // macA varies in small range while macB does full sweep. Logs every
+    // distinct publish packet (by first 4 bytes after 81 F0 marker).
+    //   GET /api/batt/clone/broad_brute?macA_from=0x0000&macA_to=0x0100&macA_step=0x10&macB_to=0x03FF
+    s_server->on("/api/batt/clone/broad_brute", HTTP_GET, [](AsyncWebServerRequest *req) {
+        uint32_t aFrom = req->hasParam("macA_from") ? strtoul(req->getParam("macA_from")->value().c_str(), nullptr, 0) : 0x0000;
+        uint32_t aTo   = req->hasParam("macA_to")   ? strtoul(req->getParam("macA_to")->value().c_str(), nullptr, 0)   : 0x0100;
+        uint32_t aStep = req->hasParam("macA_step") ? strtoul(req->getParam("macA_step")->value().c_str(), nullptr, 0) : 0x20;
+        uint32_t bTo   = req->hasParam("macB_to")   ? strtoul(req->getParam("macB_to")->value().c_str(), nullptr, 0)   : 0x01FF;
+
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->print("{\"unique_packets\":[");
+        bool first = true;
+        int totalPkts = 0;
+        String seenSigs;  // signatures of already-reported packets
+        uint8_t buf[32];
+        uint32_t lastYield = millis();
+
+        for (uint32_t a = aFrom; a <= aTo; a += aStep) {
+            for (uint32_t b = 0x0000; b <= bTo; b++) {
+                SMBus::writeWord(0x0B, 0x00, (uint16_t)a);
+                delay(1);
+                SMBus::writeWord(0x0B, 0x00, (uint16_t)b);
+                int n = SMBus::readBlock(0x0B, 0x00, buf, 32);
+                if (n >= 18) {
+                    // Find 81 F0 start
+                    int start = -1;
+                    for (int j = 0; j <= n - 14; j++) {
+                        if (buf[j] == 0x81 && buf[j+1] == 0xF0) { start = j; break; }
+                    }
+                    if (start >= 0) {
+                        // Signature: 81F0 + counter + type (4 bytes). Skip duplicates.
+                        char sig[16];
+                        snprintf(sig, sizeof(sig), "%02X%02X%02X%02X",
+                                 buf[start], buf[start+1], buf[start+2], buf[start+3]);
+                        if (seenSigs.indexOf(sig) < 0) {
+                            seenSigs += sig; seenSigs += ",";
+                            if (!first) r->print(",");
+                            first = false;
+                            r->printf("{\"macA\":\"0x%04X\",\"macB\":\"0x%04X\",\"hex\":\"", (unsigned)a, (unsigned)b);
+                            for (int j = start; j < n; j++) r->printf("%02X", buf[j]);
+                            r->print("\"}");
+                            totalPkts++;
+                            if (totalPkts >= 200) goto done;
+                        }
+                    }
+                }
+                if (millis() - lastYield > 50) { vTaskDelay(pdMS_TO_TICKS(2)); lastYield = millis(); }
+            }
+        }
+        done:
+        r->printf("],\"scanned_a\":%u,\"scanned_b\":%u,\"unique\":%d}",
+                  (unsigned)((aTo - aFrom) / aStep + 1), (unsigned)bTo + 1, totalPkts);
+        req->send(r);
+    });
+
+    // Inject frame test — write a 81F0-formatted frame to reg 0x44 (ManufacturerBlockAccess)
+    // or arbitrary reg, then read back from 0x44 and 0x00 to see if the chip
+    // interpreted it as a valid command.
+    //   POST reg=0x44&frame=81F00001000012345678AABB
+    s_server->on("/api/batt/clone/inject", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("reg", true) || !req->hasParam("frame", true)) {
+            req->send(400, "text/plain", "need reg, frame"); return;
+        }
+        uint8_t reg = (uint8_t)strtoul(req->getParam("reg", true)->value().c_str(), nullptr, 0);
+        String hex = req->getParam("frame", true)->value();
+        hex.replace(" ", "");
+        uint8_t buf[32]; int n = 0;
+        for (size_t i = 0; i < hex.length() && n < 32; i += 2) {
+            char p[3] = {hex[i], hex[i+1], 0};
+            buf[n++] = (uint8_t)strtol(p, nullptr, 16);
+        }
+        bool w_ok = SMBus::writeBlock(0x0B, reg, buf, n);
+        delay(5);
+        uint8_t rbuf[32]; int rlen = SMBus::readBlock(0x0B, reg, rbuf, 32);
+        uint8_t mac0_buf[32]; int mac0_len = SMBus::readBlock(0x0B, 0x00, mac0_buf, 32);
+
+        JsonDocument d;
+        d["reg"] = String("0x") + String(reg, HEX);
+        d["injected_len"] = n;
+        d["write_ok"] = w_ok;
+        d["read_len"] = rlen;
+        String rhex;
+        for (int i = 0; i < rlen; i++) { char b[3]; snprintf(b,3,"%02X", rbuf[i]); rhex += b; }
+        d["read_hex"] = rhex;
+        String mhex;
+        for (int i = 0; i < mac0_len; i++) { char b[3]; snprintf(b,3,"%02X", mac0_buf[i]); mhex += b; }
+        d["mac0_len"] = mac0_len;
+        d["mac0_hex"] = mhex;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Persistent background publish logger — runs a low-priority task that
+    // does a small transition-brute every pollSec seconds, captures any new
+    // publish packet, logs to circular buffer for later download.
+    //   POST /api/batt/clone/logger_start?pollSec=30
+    //   GET  /api/batt/clone/logger_dump
+    //   POST /api/batt/clone/logger_stop
+    static struct {
+        volatile bool running;
+        uint32_t      intervalSec;
+        String        entries;    // JSON-encoded log entries
+        int           count;
+        uint32_t      startMs;
+    } s_logger = {false, 30, "", 0, 0};
+
+    s_server->on("/api/batt/clone/logger_start", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (s_logger.running) { req->send(409, "text/plain", "already running"); return; }
+        s_logger.intervalSec = req->hasParam("pollSec", true) ?
+            (uint32_t)req->getParam("pollSec", true)->value().toInt() : 30;
+        if (s_logger.intervalSec < 5) s_logger.intervalSec = 5;
+        s_logger.entries = "";
+        s_logger.count = 0;
+        s_logger.startMs = millis();
+        s_logger.running = true;
+
+        xTaskCreate([](void *) {
+            uint8_t buf[32];
+            while (s_logger.running) {
+                // Dense transition sweep: known hot-spot range
+                for (uint32_t b = 0x0080; b <= 0x01FF && s_logger.running; b++) {
+                    SMBus::writeWord(0x0B, 0x00, 0x0000);
+                    vTaskDelay(pdMS_TO_TICKS(1));
+                    SMBus::writeWord(0x0B, 0x00, (uint16_t)b);
+                    int n = SMBus::readBlock(0x0B, 0x00, buf, 32);
+                    if (n >= 18) {
+                        int start = -1;
+                        for (int j = 0; j <= n - 14; j++) {
+                            if (buf[j] == 0x81 && buf[j+1] == 0xF0) { start = j; break; }
+                        }
+                        if (start >= 0 && s_logger.count < 500) {
+                            char entry[96];
+                            int o = snprintf(entry, sizeof(entry), "%s{\"t\":%u,\"b\":\"0x%04X\",\"hex\":\"",
+                                             s_logger.entries.length() ? "," : "",
+                                             (unsigned)((millis() - s_logger.startMs) / 1000), (unsigned)b);
+                            for (int j = start; j < n && j - start < 26 && o < (int)sizeof(entry)-3; j++) {
+                                o += snprintf(entry+o, sizeof(entry)-o, "%02X", buf[j]);
+                            }
+                            snprintf(entry+o, sizeof(entry)-o, "\"}");
+                            s_logger.entries += entry;
+                            s_logger.count++;
+                        }
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                }
+                // Wait intervalSec before next sweep
+                for (uint32_t w = 0; w < s_logger.intervalSec && s_logger.running; w++) {
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                }
+            }
+            vTaskDelete(nullptr);
+        }, "pubLog", 6144, nullptr, 1, nullptr);
+
+        req->send(202, "text/plain", "logger started");
+    });
+
+    s_server->on("/api/batt/clone/logger_dump", HTTP_GET, [](AsyncWebServerRequest *req) {
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->printf("{\"running\":%s,\"count\":%d,\"uptime_s\":%u,\"interval_s\":%u,\"entries\":[%s]}",
+                  s_logger.running ? "true" : "false",
+                  s_logger.count,
+                  (unsigned)((millis() - s_logger.startMs) / 1000),
+                  (unsigned)s_logger.intervalSec,
+                  s_logger.entries.c_str());
+        req->send(r);
+    });
+
+    s_server->on("/api/batt/clone/logger_stop", HTTP_POST, [](AsyncWebServerRequest *req) {
+        s_logger.running = false;
+        req->send(200, "text/plain", "stop requested");
+    });
+
+    // Periodic-publish watcher — poll reg 0x00 every intervalMs for count samples,
+    // log any distinct packet seen. Good for catching time-based publishes.
+    //   GET /api/batt/clone/watch?count=500&intervalMs=50
+    s_server->on("/api/batt/clone/watch", HTTP_GET, [](AsyncWebServerRequest *req) {
+        int count = req->hasParam("count") ? req->getParam("count")->value().toInt() : 500;
+        int interval = req->hasParam("intervalMs") ? req->getParam("intervalMs")->value().toInt() : 50;
+        if (count > 3000) count = 3000;
+        if (interval < 10) interval = 10;
+
+        AsyncResponseStream *r = req->beginResponseStream("application/json");
+        r->printf("{\"count\":%d,\"intervalMs\":%d,\"events\":[", count, interval);
+        bool first = true;
+        int eventCount = 0;
+        String seenSigs;
+        uint8_t buf[32];
+        uint32_t t0 = millis();
+        for (int i = 0; i < count; i++) {
+            int n = SMBus::readBlock(0x0B, 0x00, buf, 32);
+            if (n >= 3) {
+                bool hasData = false;
+                for (int j = 2; j < n && j < 16; j++) if (buf[j] != 0xFF) { hasData = true; break; }
+                if (hasData) {
+                    char sig[16];
+                    snprintf(sig, sizeof(sig), "%02X%02X%02X%02X",
+                             buf[0], buf[1], buf[2], buf[3]);
+                    if (seenSigs.indexOf(sig) < 0) {
+                        seenSigs += sig; seenSigs += ",";
+                        if (!first) r->print(",");
+                        first = false;
+                        r->printf("{\"t_ms\":%u,\"i\":%d,\"hex\":\"", (unsigned)(millis()-t0), i);
+                        for (int j = 0; j < n; j++) r->printf("%02X", buf[j]);
+                        r->print("\"}");
+                        eventCount++;
+                    }
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(interval));
+        }
+        r->printf("],\"unique\":%d,\"duration_ms\":%u}", eventCount, (unsigned)(millis() - t0));
+        req->send(r);
+    });
+
     s_server->on("/api/batt/clone/async_catch", HTTP_GET, [](AsyncWebServerRequest *req) {
         int count = req->hasParam("count") ? req->getParam("count")->value().toInt() : 1000;
         if (count > 5000) count = 5000;
