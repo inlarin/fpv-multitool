@@ -629,6 +629,19 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 
 <!-- ===== ELRS FLASH ===== -->
 <div id="tab-elrs" class="tab-content" style="display:none">
+  <!-- ===== RX flip 5-step wizard ===== -->
+  <div class="card">
+    <h2>RX vanilla-flip wizard (5 steps)</h2>
+    <div class="warning">
+      Последовательный процесс замены MILELRS → vanilla ELRS на приёмнике.
+      Каждый шаг активируется только после успеха предыдущего.
+      При ошибке — статус краснеет, кнопка Retry доступна.
+    </div>
+    <div id="rxWiz" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
+    <button onclick="rxWizReset()" style="margin-top:8px;width:100%">Reset wizard</button>
+    <div id="rxWizLog" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap;max-height:120px;overflow:auto"></div>
+  </div>
+
   <div class="card">
     <h2>ELRS Receiver Flasher</h2>
     <div class="warning">
@@ -649,6 +662,99 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     </div>
     <button class="danger" onclick="clearFw()" style="width:100%;margin-top:4px;">Clear</button>
     <div id="flashResult" style="margin-top:10px; color:#0f0;"></div>
+  </div>
+
+  <!-- ===== Slot-targeted flash ===== -->
+  <div class="card">
+    <h2>Slot-targeted flash (app0 / app1 / custom)</h2>
+    <div class="warning">
+      ⚠ RX должен быть в <b>DFU</b> (зажми BOOT и подай питание).<br>
+      Пишет firmware.bin по произвольному offset, минуя otadata. Используй
+      чтобы залить vanilla ELRS поверх app0 (0x10000) или app1 (0x1F0000).
+    </div>
+    <div class="row"><span class="label">Firmware (.bin):</span></div>
+    <input type="file" id="slotFwFile" accept=".bin,.gz,.elrs" onchange="slotOnFwSelect()" style="margin:8px 0; width:100%;">
+    <div class="row"><span class="label">Размер:</span><span class="value" id="slotFwSize">-</span></div>
+
+    <div class="row"><span class="label">Slot:</span></div>
+    <div style="display:flex;flex-direction:column;gap:4px;margin:4px 0 8px 0">
+      <label><input type="radio" name="slotSel" value="app0" checked onchange="slotOnSlotChange()"> <b>app0</b> @ 0x10000 (1.88 MB) — vanilla slot</label>
+      <label><input type="radio" name="slotSel" value="app1" onchange="slotOnSlotChange()"> <b>app1</b> @ 0x1F0000 (1.88 MB) — MILELRS slot</label>
+      <label><input type="radio" name="slotSel" value="custom" onchange="slotOnSlotChange()"> <b>custom</b> offset</label>
+    </div>
+    <div class="row"><span class="label">Custom offset:</span>
+      <input id="slotCustomOffset" type="text" value="0x10000" disabled style="width:110px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+    </div>
+    <div class="row"><span class="label">Erase partition first:</span>
+      <span><input type="checkbox" id="slotEraseFirst" checked> <small style="color:var(--text-dim)">стирает 1.88 MB перед записью (~5 s)</small></span>
+    </div>
+
+    <div class="row"><span class="label">Статус:</span><span class="value" id="slotStage">idle</span></div>
+    <div class="bar"><div class="bar-fill" id="slotBar" style="width:0%;background:#fa0"></div></div>
+    <div class="grid">
+      <button class="success" id="slotUploadBtn" onclick="slotUpload()" disabled>Upload</button>
+      <button id="slotFlashBtn" onclick="slotFlash()" disabled>Erase + Flash @ slot</button>
+    </div>
+    <div id="slotResult" style="margin-top:10px;color:#0f0;white-space:pre-wrap;font-family:monospace;font-size:11px"></div>
+  </div>
+
+  <!-- ===== OTADATA / active slot ===== -->
+  <div class="card">
+    <h2>OTADATA / Active slot</h2>
+    <div class="warning">
+      <b>OTADATA</b> (8 KB @ 0xe000) говорит bootloader'у какой app слот грузить.
+      Кнопки ниже переписывают её, не трогая app-partition'ы.<br>
+      ⚠ MILELRS-прошивки могут <b>пересоздавать</b> OTADATA при каждом старте —
+      чтобы залочить vanilla ELRS нужно не только переписать OTADATA, но и
+      полностью стереть app1 слот.
+    </div>
+    <div class="row"><span class="label">Active slot:</span><span class="value" id="otaActiveSlot">-</span></div>
+    <div class="row"><span class="label">Max ota_seq:</span><span class="value" id="otaMaxSeq">-</span></div>
+    <div class="row"><span class="label">Sector 0 (@0xe000):</span><span class="value" id="otaSec0" style="font-family:monospace;font-size:11px">-</span></div>
+    <div class="row"><span class="label">Sector 1 (@0xf000):</span><span class="value" id="otaSec1" style="font-family:monospace;font-size:11px">-</span></div>
+    <div class="grid">
+      <button onclick="otadataRefresh()">Refresh</button>
+      <button class="success" onclick="otadataSelect(0)">Boot app0</button>
+    </div>
+    <div class="grid">
+      <button class="success" onclick="otadataSelect(1)">Boot app1</button>
+      <button class="danger" onclick="otadataEraseRegion()">Erase OTADATA</button>
+    </div>
+    <div style="margin-top:8px;padding:6px;background:#2a1414;border:1px solid #633;border-radius:4px">
+      <b style="color:#f66">DANGER ZONE:</b>
+      <button class="danger" onclick="otadataEraseApp1()" style="margin-top:4px;width:100%">Erase app1 entirely (1.88 MB @ 0x1F0000)</button>
+      <div style="color:var(--text-dim);font-size:11px;margin-top:4px">
+        Единственный способ навсегда убить MILELRS — стереть его app слот.
+        Требует typed confirmation.
+      </div>
+    </div>
+    <div id="otadataResult" style="margin-top:10px;color:#0f0;white-space:pre-wrap;font-family:monospace;font-size:11px"></div>
+    <div style="margin-top:6px;color:var(--text-dim);font-size:11px">
+      После записи OTADATA — сними питание с RX, подай заново, смотри какой SSID появляется.
+    </div>
+  </div>
+
+  <!-- ===== hardware.json helper ===== -->
+  <div class="card">
+    <h2>hardware.json — upload to vanilla ELRS</h2>
+    <div class="warning">
+      После успешной прошивки vanilla ELRS приёмник грузится в "голом" режиме
+      и ждёт hardware.json с pin map. JSON ниже извлечён из дампа
+      <code>bayckrc_c3_dual/dump_2026-04-19_1528.bin</code>.
+    </div>
+    <ol style="margin:6px 0 8px 18px;padding:0;font-size:12px;line-height:1.5">
+      <li>Скачай <code>hardware.json</code> кнопкой ниже.</li>
+      <li>Подключи телефон/ПК к WiFi <code>ExpressLRS RX</code>
+          (пароль <code>expresslrs</code>).</li>
+      <li>Открой <code>http://10.0.0.1</code>.</li>
+      <li>Загрузи hardware.json через кнопку "Hardware" в ELRS Web UI.</li>
+      <li>Жми "Update" — приёмник перезагрузится с правильными pin'ами.</li>
+    </ol>
+    <button class="success" onclick="hwJsonDownload()" style="width:100%">⬇ Download extracted hardware.json</button>
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer;color:var(--text-dim);font-size:11px">Preview JSON</summary>
+      <pre id="hwJsonPreview" style="font-family:monospace;font-size:10px;background:#0a0a14;padding:6px;overflow:auto;max-height:180px"></pre>
+    </details>
   </div>
 
   <div class="card">
@@ -1026,6 +1132,36 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 <script>
 let ws = null, wsOk = false;
 
+// ELRS RX (ESP32-C3) partition layout — used by the slot-flash / OTADATA /
+// wizard cards. Matches the Bayck RC C3 Dual dump analysed at
+// hardware/bayckrc_c3_dual/.
+const RX_PARTITIONS = {
+  app0:    { offset: 0x10000,  size: 0x1e0000 },
+  app1:    { offset: 0x1f0000, size: 0x1e0000 },
+  otadata: { offset: 0xe000,   size: 0x2000   },
+};
+
+// Hardware.json blob extracted from app0 of the above dump — lets the user
+// re-upload it to the ExpressLRS Configurator after a vanilla flash. No
+// backend endpoint yet — served as a client-side download.
+const RX_HARDWARE_JSON = {
+  "serial_rx": 20, "serial_tx": 21,
+  "radio_miso": 5, "radio_mosi": 4, "radio_sck": 6,
+  "radio_busy": 3, "radio_dio1": 1,
+  "radio_nss": 0, "radio_rst": 2,
+  "radio_busy_2": 8, "radio_dio1_2": 18,
+  "radio_nss_2": 7, "radio_rst_2": 10,
+  "power_min": 0, "power_high": 3,
+  "power_max": 3, "power_default": 0,
+  "power_control": 0,
+  "power_values": [12, 16, 19, 22],
+  "power_values_dual": [-12, -9, -6, -2],
+  "led_rgb": 19, "led_rgb_isgrb": true,
+  "radio_dcdc": true,
+  "button": 9,
+  "radio_rfsw_ctrl": [31, 0, 4, 8, 8, 18, 0, 17]
+};
+
 function connStatus(ok) {
   wsOk = ok;
   const el = document.getElementById('connStatus');
@@ -1079,7 +1215,8 @@ function showWorkspace(ws) {
 // accumulate fetches forever (one per visited tab).
 const _tabTimers = ['_escTelemTimer', '_smbLogTimer', '_vrvTimer',
                     'cpLogTimer', '_rcPollTimer', '_servoStateTimer',
-                    '_dumpPoll', '_otaPullPollTimer'];
+                    '_dumpPoll', '_otaPullPollTimer',
+                    '_slotFlashPoll', '_otadataPoll'];
 function _clearTabTimers() {
   _tabTimers.forEach(name => {
     try {
@@ -1108,6 +1245,7 @@ function showTab(name) {
   if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
+  if (name === 'elrs') { rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); }
 }
 
 // === SERVO ===
@@ -2280,7 +2418,360 @@ function dumpClear() {
     document.getElementById('dumpBar').style.width = '0%';
     document.getElementById('dumpError').textContent = '';
     document.getElementById('dumpDownloadBtn').disabled = true;
+  }).catch(e => console.warn('dumpClear failed:', e));
+}
+
+// ===================================================================
+// Slot-targeted flash (app0 / app1 / custom)
+// ===================================================================
+let _slotFile = null;
+let _slotFlashPoll = null;
+
+function slotOnFwSelect() {
+  const f = document.getElementById('slotFwFile').files[0];
+  if (!f) { _slotFile = null; return; }
+  _slotFile = f;
+  document.getElementById('slotFwSize').textContent = (f.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('slotUploadBtn').disabled = false;
+  document.getElementById('slotFlashBtn').disabled = true;
+}
+
+function slotOnSlotChange() {
+  const sel = document.querySelector('input[name="slotSel"]:checked').value;
+  const customInp = document.getElementById('slotCustomOffset');
+  if (sel === 'app0')   { customInp.disabled = true;  customInp.value = '0x10000';  }
+  else if (sel === 'app1') { customInp.disabled = true;  customInp.value = '0x1F0000'; }
+  else                   { customInp.disabled = false; }
+}
+
+function slotSelectedOffset() {
+  const sel = document.querySelector('input[name="slotSel"]:checked').value;
+  if (sel === 'app0') return RX_PARTITIONS.app0.offset;
+  if (sel === 'app1') return RX_PARTITIONS.app1.offset;
+  const raw = document.getElementById('slotCustomOffset').value.trim();
+  return parseInt(raw, raw.toLowerCase().startsWith('0x') ? 16 : 10);
+}
+
+function slotPartitionSize() {
+  const sel = document.querySelector('input[name="slotSel"]:checked').value;
+  if (sel === 'app0' || sel === 'app1') return RX_PARTITIONS[sel].size;
+  return RX_PARTITIONS.app0.size;  // default for custom
+}
+
+function slotLog(msg, isError) {
+  const el = document.getElementById('slotResult');
+  el.style.color = isError ? '#f66' : '#0f0';
+  el.textContent = (new Date().toLocaleTimeString()) + '  ' + msg + '\n' + el.textContent;
+}
+
+function slotUpload() {
+  if (!_slotFile) return;
+  const fd = new FormData();
+  fd.append('firmware', _slotFile);
+  document.getElementById('slotStage').textContent = 'Uploading...';
+  document.getElementById('slotUploadBtn').disabled = true;
+  fetch('/api/flash/upload', {method:'POST', body: fd})
+    .then(r => r.text()).then(t => {
+      document.getElementById('slotStage').textContent = 'Uploaded';
+      document.getElementById('slotFlashBtn').disabled = false;
+      slotLog('upload OK: ' + t);
+    })
+    .catch(e => {
+      document.getElementById('slotStage').textContent = 'Upload error';
+      document.getElementById('slotUploadBtn').disabled = false;
+      slotLog('upload FAIL: ' + e, true);
+    });
+}
+
+async function slotFlash() {
+  const off = slotSelectedOffset();
+  if (isNaN(off) || off < 0 || off >= 0x400000) {
+    alert('Invalid offset'); return;
+  }
+  const eraseFirst = document.getElementById('slotEraseFirst').checked;
+  const partSize = slotPartitionSize();
+  const hexOff = '0x' + off.toString(16);
+  if (!confirm('Прошить по offset ' + hexOff + (eraseFirst ? ' (с erase ' + (partSize/1024/1024).toFixed(2) + ' MB)' : '') + '?\nRX должен быть в DFU!')) return;
+
+  document.getElementById('slotFlashBtn').disabled = true;
+  document.getElementById('slotBar').style.width = '0%';
+
+  try {
+    if (eraseFirst) {
+      document.getElementById('slotStage').textContent = 'Erasing partition...';
+      slotLog('erase_region offset=' + hexOff + ' size=0x' + partSize.toString(16));
+      const fdE = new FormData();
+      fdE.append('offset', hexOff);
+      fdE.append('size', '0x' + partSize.toString(16));
+      const r = await fetch('/api/flash/erase_region', {method:'POST', body: fdE}).catch(e => { throw e; });
+      const t = await r.text();
+      if (!r.ok) throw new Error('erase failed: ' + t);
+      slotLog('erase OK: ' + t);
+    }
+
+    document.getElementById('slotStage').textContent = 'Flashing @ ' + hexOff + '...';
+    const fdF = new FormData();
+    fdF.append('offset', hexOff);
+    const rF = await fetch('/api/flash/start', {method:'POST', body: fdF}).catch(e => { throw e; });
+    const tF = await rF.text();
+    if (!rF.ok) throw new Error('flash start failed: ' + tF);
+    slotLog('flash started: ' + tF);
+    if (!_slotFlashPoll) _slotFlashPoll = setInterval(slotFlashPollFn, 1000);
+  } catch (e) {
+    document.getElementById('slotStage').textContent = 'ERROR';
+    slotLog('FAIL: ' + e.message, true);
+    document.getElementById('slotFlashBtn').disabled = false;
+  }
+}
+
+function slotFlashPollFn() {
+  fetch('/api/flash/status').then(r => r.json()).then(j => {
+    const stage = j.stage || (j.in_progress ? 'flashing' : 'idle');
+    document.getElementById('slotStage').textContent = stage + ' (' + (j.progress_pct || 0) + '%)';
+    document.getElementById('slotBar').style.width = (j.progress_pct || 0) + '%';
+    if (!j.in_progress) {
+      if (_slotFlashPoll) { clearInterval(_slotFlashPoll); _slotFlashPoll = null; }
+      document.getElementById('slotFlashBtn').disabled = false;
+      if (j.lastResult) slotLog('done: ' + j.lastResult);
+      if (j.lastResult && /ok|success|done/i.test(j.lastResult)) {
+        slotLog('→ Теперь используй OTADATA card ниже чтобы пометить этот слот активным.');
+        rxWizMark('flash', 'ok');
+      }
+    }
+  }).catch(e => {
+    slotLog('poll FAIL: ' + e, true);
+    if (_slotFlashPoll) { clearInterval(_slotFlashPoll); _slotFlashPoll = null; }
+    document.getElementById('slotFlashBtn').disabled = false;
   });
+}
+
+// ===================================================================
+// OTADATA / active-slot controls
+// ===================================================================
+function otadataLog(msg, isError) {
+  const el = document.getElementById('otadataResult');
+  el.style.color = isError ? '#f66' : '#0f0';
+  el.textContent = (new Date().toLocaleTimeString()) + '  ' + msg + '\n' + el.textContent;
+}
+
+function otadataRefresh() {
+  fetch('/api/otadata/status').then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(j => {
+    document.getElementById('otaActiveSlot').textContent =
+      (j.active_slot === 0 || j.active_slot === 1) ? ('app' + j.active_slot) : (j.active_slot ?? '-');
+    document.getElementById('otaMaxSeq').textContent = (j.max_seq !== undefined) ? j.max_seq : '-';
+    const secs = j.sectors || [];
+    document.getElementById('otaSec0').textContent = secs[0] ? JSON.stringify(secs[0]) : '-';
+    document.getElementById('otaSec1').textContent = secs[1] ? JSON.stringify(secs[1]) : '-';
+    rxWizMark('otadata', 'ok');
+  }).catch(e => {
+    document.getElementById('otaActiveSlot').textContent = '(RX не в DFU?)';
+    otadataLog('status FAIL: ' + e, true);
+  });
+}
+
+function otadataSelect(slot) {
+  if (!confirm('Пометить app' + slot + ' как активный? RX должен быть в DFU.')) return;
+  fetch('/api/otadata/select?slot=' + slot, {method:'POST'})
+    .then(r => r.text().then(t => ({ok: r.ok, t})))
+    .then(({ok, t}) => {
+      otadataLog((ok ? 'select app' + slot + ' OK: ' : 'select FAIL: ') + t, !ok);
+      if (ok) {
+        otadataRefresh();
+        rxWizMark('otadata_write', 'ok');
+      }
+    })
+    .catch(e => otadataLog('select FAIL: ' + e, true));
+}
+
+function otadataEraseRegion() {
+  if (!confirm('Стереть OTADATA (@0xe000, 8 KB)?\nBootloader упадёт на app0 по умолчанию (если MILELRS не перезапишет).')) return;
+  const fd = new FormData();
+  fd.append('offset', '0xe000');
+  fd.append('size', '0x2000');
+  fetch('/api/flash/erase_region', {method:'POST', body: fd})
+    .then(r => r.text().then(t => ({ok: r.ok, t})))
+    .then(({ok, t}) => {
+      otadataLog((ok ? 'erase OTADATA OK: ' : 'erase FAIL: ') + t, !ok);
+      if (ok) otadataRefresh();
+    })
+    .catch(e => otadataLog('erase FAIL: ' + e, true));
+}
+
+function otadataEraseApp1() {
+  const typed = prompt('Стереть app1 полностью (1.88 MB @ 0x1F0000)?\nЭто необратимо удалит MILELRS.\nВведи ERASE APP1 чтобы подтвердить:');
+  if (typed !== 'ERASE APP1') { otadataLog('erase app1 cancelled', false); return; }
+  const fd = new FormData();
+  fd.append('offset', '0x' + RX_PARTITIONS.app1.offset.toString(16));
+  fd.append('size',   '0x' + RX_PARTITIONS.app1.size.toString(16));
+  otadataLog('erasing app1 (1.88 MB) — ~5 s...');
+  fetch('/api/flash/erase_region', {method:'POST', body: fd})
+    .then(r => r.text().then(t => ({ok: r.ok, t})))
+    .then(({ok, t}) => {
+      otadataLog((ok ? 'erase app1 OK: ' : 'erase app1 FAIL: ') + t, !ok);
+    })
+    .catch(e => otadataLog('erase app1 FAIL: ' + e, true));
+}
+
+// ===================================================================
+// hardware.json helper — client-side download
+// ===================================================================
+function hwJsonPreviewRender() {
+  const el = document.getElementById('hwJsonPreview');
+  if (el && !el.textContent) el.textContent = JSON.stringify(RX_HARDWARE_JSON, null, 2);
+}
+
+function hwJsonDownload() {
+  const blob = new Blob([JSON.stringify(RX_HARDWARE_JSON, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'hardware.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ===================================================================
+// RX vanilla-flip 5-step wizard
+// ===================================================================
+const RX_WIZ_STEPS = [
+  { id: 'dfu',          label: 'Put RX in DFU (BOOT + power-cycle)',       action: rxWizStepDfu },
+  { id: 'otadata',      label: 'Read OTADATA — confirm RX responds',       action: rxWizStepOtadata },
+  { id: 'erase',        label: 'Erase app0 (1.88 MB @ 0x10000, ~5 s)',     action: rxWizStepErase },
+  { id: 'flash',        label: 'Upload + flash vanilla ELRS @ 0x10000',    action: rxWizStepFlash },
+  { id: 'otadata_write',label: 'Write OTADATA → boot app0, power-cycle',   action: rxWizStepOtadataWrite },
+];
+let _rxWizState = {};  // {stepId: 'pending'|'ok'|'fail'|'running'}
+
+function rxWizMark(stepId, state) {
+  _rxWizState[stepId] = state;
+  rxWizRender();
+}
+
+function rxWizLog(msg, isError) {
+  const el = document.getElementById('rxWizLog');
+  if (!el) return;
+  const line = (new Date().toLocaleTimeString()) + '  ' + msg;
+  el.textContent = line + '\n' + el.textContent;
+  if (isError) el.style.color = '#f66';
+  else el.style.color = 'var(--text-dim)';
+}
+
+function rxWizRender() {
+  const host = document.getElementById('rxWiz');
+  if (!host) return;
+  host.innerHTML = '';
+  let prevOk = true;
+  RX_WIZ_STEPS.forEach((step, i) => {
+    const state = _rxWizState[step.id] || 'pending';
+    const canRun = prevOk || state === 'fail';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px';
+    let icon = '⚪';
+    let color = 'var(--text-dim)';
+    if (state === 'ok')      { icon = '✅'; color = '#0f0'; }
+    else if (state === 'fail') { icon = '❌'; color = '#f66'; }
+    else if (state === 'running') { icon = '⏳'; color = '#fa0'; }
+    row.innerHTML = '<span style="font-size:14px">' + icon + '</span>' +
+      '<span style="flex:1;color:' + color + '">[' + (i+1) + '/5] ' + step.label + '</span>';
+    const btn = document.createElement('button');
+    btn.textContent = state === 'ok' ? 'Redo' : (state === 'fail' ? 'Retry' : 'Run');
+    btn.disabled = !canRun;
+    if (state === 'ok') btn.classList.add('success');
+    if (state === 'fail') btn.classList.add('danger');
+    btn.onclick = () => { rxWizMark(step.id, 'running'); step.action(); };
+    row.appendChild(btn);
+    host.appendChild(row);
+    if (state !== 'ok') prevOk = false;
+  });
+}
+
+function rxWizReset() {
+  _rxWizState = {};
+  document.getElementById('rxWizLog').textContent = '';
+  rxWizRender();
+}
+
+function rxWizStepDfu() {
+  alert('1. Удержи кнопку BOOT на приёмнике.\n2. Подай питание (или переткни).\n3. Отпусти BOOT.\n\nКликни OK когда готово.');
+  rxWizMark('dfu', 'ok');
+  rxWizLog('DFU acknowledged by user');
+}
+
+function rxWizStepOtadata() {
+  fetch('/api/otadata/status').then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(j => {
+    rxWizLog('OTADATA responded: active_slot=' + j.active_slot + ' max_seq=' + j.max_seq);
+    rxWizMark('otadata', 'ok');
+    otadataRefresh();
+  }).catch(e => {
+    rxWizLog('OTADATA read FAIL: ' + e + ' — RX в DFU?', true);
+    rxWizMark('otadata', 'fail');
+  });
+}
+
+function rxWizStepErase() {
+  const fd = new FormData();
+  fd.append('offset', '0x' + RX_PARTITIONS.app0.offset.toString(16));
+  fd.append('size',   '0x' + RX_PARTITIONS.app0.size.toString(16));
+  rxWizLog('erasing app0 (1.88 MB) — ждать ~5 s...');
+  fetch('/api/flash/erase_region', {method:'POST', body: fd})
+    .then(r => r.text().then(t => ({ok: r.ok, t})))
+    .then(({ok, t}) => {
+      if (!ok) throw new Error(t);
+      rxWizLog('erase app0 OK: ' + t);
+      rxWizMark('erase', 'ok');
+    })
+    .catch(e => {
+      rxWizLog('erase FAIL: ' + e, true);
+      rxWizMark('erase', 'fail');
+    });
+}
+
+function rxWizStepFlash() {
+  // This step expects the user to have selected + uploaded the firmware via
+  // the Slot-flash card. We just check buffer and trigger the flash.
+  const sel = document.querySelector('input[name="slotSel"]:checked');
+  if (!sel || sel.value !== 'app0') {
+    alert('Выбери slot = app0 в карточке "Slot-targeted flash" и сделай Upload.');
+    rxWizMark('flash', 'fail');
+    return;
+  }
+  if (!_slotFile) {
+    alert('Сначала выбери firmware.bin и нажми Upload в карточке Slot-targeted flash.');
+    rxWizMark('flash', 'fail');
+    return;
+  }
+  // Uncheck erase-first since we already erased in step 3
+  document.getElementById('slotEraseFirst').checked = false;
+  rxWizLog('delegating to slot-flash card: flashing @ 0x10000');
+  slotFlash();  // slotFlashPollFn will call rxWizMark('flash', 'ok') on success
+}
+
+function rxWizStepOtadataWrite() {
+  if (!confirm('Записать OTADATA → app0 (POST /api/otadata/select?slot=0)?')) {
+    rxWizMark('otadata_write', 'fail');
+    return;
+  }
+  fetch('/api/otadata/select?slot=0', {method:'POST'})
+    .then(r => r.text().then(t => ({ok: r.ok, t})))
+    .then(({ok, t}) => {
+      if (!ok) throw new Error(t);
+      rxWizLog('OTADATA → app0 OK: ' + t);
+      rxWizLog('СНИМИ ПИТАНИЕ С RX, ПОДАЙ ЗАНОВО, ПРОВЕРЬ WiFi SSID.');
+      rxWizMark('otadata_write', 'ok');
+      otadataRefresh();
+    })
+    .catch(e => {
+      rxWizLog('OTADATA write FAIL: ' + e, true);
+      rxWizMark('otadata_write', 'fail');
+    });
 }
 
 // === WiFi ===
