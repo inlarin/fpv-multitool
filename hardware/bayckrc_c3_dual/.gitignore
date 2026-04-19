@@ -7,3 +7,11 @@ parsed_*.json
 dump_*.parsed.md
 dump_*.parsed.txt
 dump_*.parsed.json
+
+# deep_scan.py reports (same privacy caveat as .parsed.md)
+dump_*.deepscan.md
+dump_*.deepscan.json
+
+# Full checkout of ExpressLRS source tree (multi-MB; rebuildable from
+# the tag recorded in vanilla_elrs_3.6.3/BUILD.md)
+elrs_3_6_3_src/

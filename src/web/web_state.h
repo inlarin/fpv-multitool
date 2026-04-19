@@ -82,6 +82,7 @@ struct FlashState {
     int progress_pct = 0;
     String stage;                   // "Connecting", "Erasing", "Writing", "Done"
     String lastResult;              // final status message
+    uint32_t flash_offset = 0;      // target offset (0 for full image, 0x10000 for app0)
 };
 extern FlashState flashState;
 

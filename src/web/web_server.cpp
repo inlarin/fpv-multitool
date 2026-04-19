@@ -479,7 +479,7 @@ static void executeFlash() {
     cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
     cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
     cfg.baud_rate = 115200;
-    cfg.flash_offset = 0;
+    cfg.flash_offset = WebState::flashState.flash_offset;
     cfg.progress = flashProgress;
 
     ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size);
@@ -2034,8 +2034,26 @@ void WebServer::start() {
             req->send(409, "text/plain", "Already in progress");
             return;
         }
+        // Target offset — default 0 (full image with bootloader).
+        // For writing into a specific partition (e.g. app0 at 0x10000
+        // of an ESP32 layout) pass ?offset=0x10000 (form field "offset").
+        uint32_t offset = 0;
+        if (req->hasParam("offset", true)) {
+            offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
+        } else if (req->hasParam("offset")) {
+            offset = strtoul(req->getParam("offset")->value().c_str(), nullptr, 0);
+        }
+        // Guardrail: don't allow offsets that would obviously brick a 4 MB
+        // receiver layout (write past end). 8 MB max is generous.
+        if (offset > 0x800000) {
+            req->send(400, "text/plain", "offset too large (>8 MB)");
+            return;
+        }
+        WebState::flashState.flash_offset = offset;
         WebState::flashState.flash_request = true;
-        req->send(200, "text/plain", "Flashing started");
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Flashing started at offset 0x%x", (unsigned)offset);
+        req->send(200, "text/plain", msg);
     });
 
     // ===== Receiver firmware DUMP (READ_FLASH via ROM bootloader) =====
@@ -2186,6 +2204,165 @@ void WebServer::start() {
         if (s_dump.buf) { free(s_dump.buf); s_dump.buf = nullptr; }
         s_dump.size = 0; s_dump.progress = 0; s_dump.stage = ""; s_dump.error = "";
         req->send(200, "text/plain", "cleared");
+    });
+
+    // ===== OTADATA atomic select =====
+    // ESP-IDF OTADATA record format (32 bytes):
+    //   0..3  ota_seq      u32  (highest wins)
+    //   4..23 seq_label    char[20]
+    //   24..27 ota_state   u32  (0xFFFFFFFF = undefined = valid-on-next-boot)
+    //   28..31 crc         u32  (crc32_le over ota_seq, init 0xFFFFFFFF)
+    //
+    // Active slot = (max_seq - 1) & 1. So:
+    //   slot 0 requires max_seq ∈ {1, 3, 5, ...} (odd)
+    //   slot 1 requires max_seq ∈ {2, 4, 6, ...} (even)
+    //
+    // Safe update algorithm: pick new_seq = max(seq0, seq1) + 1, bump parity
+    // if needed, write the record to the sector that currently holds the
+    // LOWER seq (alternating-sector write). RX must be in DFU mode.
+    s_server->on("/api/otadata/select", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("slot", true)) {
+            req->send(400, "text/plain", "need form param 'slot' = 0 or 1");
+            return;
+        }
+        int slot = req->getParam("slot", true)->value().toInt();
+        if (slot != 0 && slot != 1) {
+            req->send(400, "text/plain", "slot must be 0 or 1");
+            return;
+        }
+
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "otadata_select")) {
+            req->send(409, "text/plain", "Port B busy — switch Setup to Receiver");
+            return;
+        }
+
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        // 1) Read both OTADATA sectors (32 B records at 0xe000 and 0xf000)
+        uint8_t sec[2][32];
+        bool read_ok[2] = {false, false};
+        for (int i = 0; i < 2; i++) {
+            ESPFlasher::Result r = ESPFlasher::readFlash(cfg, 0xe000 + i * 0x1000, 32, sec[i]);
+            read_ok[i] = (r == ESPFlasher::FLASH_OK);
+        }
+        if (!read_ok[0] && !read_ok[1]) {
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain",
+                "readFlash failed both sectors — is RX in DFU? (hold BOOT, power-cycle)");
+            return;
+        }
+
+        // Parse seq from each sector (0xFFFFFFFF if blank/unreadable)
+        uint32_t seq0 = read_ok[0] ? *(uint32_t*)&sec[0][0] : 0xFFFFFFFF;
+        uint32_t seq1 = read_ok[1] ? *(uint32_t*)&sec[1][0] : 0xFFFFFFFF;
+        uint32_t max_seq = 0;
+        if (seq0 != 0xFFFFFFFF) max_seq = seq0;
+        if (seq1 != 0xFFFFFFFF && seq1 > max_seq) max_seq = seq1;
+
+        // Choose new_seq to select target slot. If desired parity already
+        // matches current max, bump by 1; otherwise bump by 2.
+        uint32_t new_seq = max_seq + 1;
+        int current_selected_slot = ((new_seq - 1) & 1);
+        if (current_selected_slot != slot) new_seq++;
+        // Safety: never allow wrap-around (near UINT32_MAX = probably corrupt)
+        if (new_seq == 0 || new_seq > 0x7fffffff) {
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain", "OTADATA seq out of range");
+            return;
+        }
+
+        // Build new record: seq (4), label (20 zeros), state=0xFFFFFFFF (4),
+        // crc (4) = crc32_le init 0xFFFFFFFF over 4-byte seq.
+        uint8_t rec[32];
+        memset(rec, 0, 32);
+        *(uint32_t*)&rec[0] = new_seq;
+        *(uint32_t*)&rec[24] = 0xFFFFFFFF;
+        // CRC32-LE with init 0xFFFFFFFF — standard ethernet/zlib polynomial.
+        uint32_t crc = 0xFFFFFFFF;
+        for (int j = 0; j < 4; j++) {
+            crc ^= rec[j];
+            for (int k = 0; k < 8; k++) {
+                crc = (crc >> 1) ^ (0xEDB88320u & (-(int32_t)(crc & 1)));
+            }
+        }
+        crc ^= 0xFFFFFFFF;
+        *(uint32_t*)&rec[28] = crc;
+
+        // Write to sector that currently holds the LOWER seq (alternating
+        // writes = standard ESP-IDF OTA behaviour, preserves rollback).
+        uint32_t target_offset = (seq0 <= seq1) ? 0xe000 : 0xf000;
+        ESPFlasher::Result wr = ESPFlasher::flash(cfg, rec, 32);
+        // ^ This writes with flash_offset from cfg.flash_offset default (0).
+        // We need targeted write — reuse cfg with flash_offset set.
+        cfg.flash_offset = target_offset;
+        wr = ESPFlasher::flash(cfg, rec, 32);
+
+        PinPort::release(PinPort::PORT_B);
+
+        if (wr != ESPFlasher::FLASH_OK) {
+            req->send(500, "text/plain",
+                String("OTADATA write failed: ") + ESPFlasher::errorString(wr));
+            return;
+        }
+
+        char msg[160];
+        snprintf(msg, sizeof(msg),
+            "OTADATA updated: seq=%u written to sector @0x%x -> boots app%d on next power-cycle",
+            (unsigned)new_seq, (unsigned)target_offset, slot);
+        req->send(200, "text/plain", msg);
+    });
+
+    // Read current OTADATA state (RX must be in DFU).
+    s_server->on("/api/otadata/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "otadata_status")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        uint8_t sec[2][32];
+        bool ok[2] = {false, false};
+        for (int i = 0; i < 2; i++) {
+            ok[i] = (ESPFlasher::readFlash(cfg, 0xe000 + i * 0x1000, 32, sec[i])
+                     == ESPFlasher::FLASH_OK);
+        }
+        PinPort::release(PinPort::PORT_B);
+        if (!ok[0] && !ok[1]) {
+            req->send(500, "text/plain",
+                "readFlash failed — RX must be in DFU (hold BOOT, power-cycle)");
+            return;
+        }
+
+        JsonDocument d;
+        uint32_t max_seq = 0; int slot = -1;
+        for (int i = 0; i < 2; i++) {
+            JsonObject s = d["sectors"][i].to<JsonObject>();
+            s["sector"] = i;
+            s["offset"] = 0xe000 + i * 0x1000;
+            s["read_ok"] = ok[i];
+            if (ok[i]) {
+                uint32_t seq = *(uint32_t*)&sec[i][0];
+                uint32_t state = *(uint32_t*)&sec[i][24];
+                uint32_t crc = *(uint32_t*)&sec[i][28];
+                s["seq"] = seq;
+                s["state"] = state;
+                s["crc"] = crc;
+                s["blank"] = (seq == 0xFFFFFFFF);
+                if (seq != 0xFFFFFFFF && seq > max_seq) { max_seq = seq; }
+            }
+        }
+        d["max_seq"] = max_seq;
+        d["active_slot"] = (max_seq == 0) ? 0 : ((max_seq - 1) & 1);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     // ===== CRSF endpoints =====
