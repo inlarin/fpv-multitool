@@ -49,6 +49,11 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out);
 // into the secondary app.
 Result eraseRegion(const Config &cfg, uint32_t offset, size_t size);
 
+// Tell the stub/ROM to exit and run user code (boots the OTADATA-selected
+// app partition). Opcode CMD_RUN_USER_CODE (0xD3). Works on both the ELRS
+// in-app stub and ROM bootloader.
+Result runUserCode(const Config &cfg);
+
 const char* errorString(Result r);
 
 } // namespace ESPFlasher

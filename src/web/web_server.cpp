@@ -2234,6 +2234,29 @@ void WebServer::start() {
         req->send(200, "text/plain", "cleared");
     });
 
+    // Exit stub / ROM cleanly — sends CMD_RUN_USER_CODE (0xD3).
+    // Use this when RX is stuck in the in-app stub (from a prior CRSF-bl
+    // trigger) or in ROM DFU and we want it to jump to the OTADATA-selected
+    // app without requiring a physical power-cycle.
+    s_server->on("/api/flash/exit_dfu", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "exit_dfu")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+        ESPFlasher::Result r = ESPFlasher::runUserCode(cfg);
+        PinPort::release(PinPort::PORT_B);
+        if (r == ESPFlasher::FLASH_OK) {
+            req->send(200, "text/plain", "RUN_USER_CODE sent — RX jumping to app");
+        } else {
+            req->send(500, "text/plain", ESPFlasher::errorString(r));
+        }
+    });
+
     // Send the CRSF "reboot to bootloader" command (the 5-byte "bl" frame
     // `EC 04 32 62 6C <crc>`). ELRS 3.x firmware on ESP32 handles this by
     // NOT rebooting to ROM — it enters an in-app esptool stub that speaks

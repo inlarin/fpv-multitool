@@ -35,6 +35,7 @@ static const uint8_t CMD_SPI_ATTACH   = 0x0D;
 static const uint8_t CMD_READ_FLASH_SLOW = 0x0E;  // ROM native, 64 B/request
 static const uint8_t CMD_CHANGE_BAUD  = 0x0F;
 static const uint8_t CMD_READ_FLASH   = 0xD2;  // stub-only stream-read
+static const uint8_t CMD_RUN_USER_CODE = 0xD3; // exit stub/ROM -> boot selected app
 
 // Parameters
 static const size_t FLASH_WRITE_BLOCK_SIZE = 1024;    // per FLASH_DATA packet
@@ -160,20 +161,26 @@ static bool sync() {
     return false;
 }
 
-// Erase region and prepare for writing
+// Erase region and prepare for writing.
+// ESP32-S2/S3/C3/C6 ROMs expect a 20-byte payload (extra 4 bytes =
+// encryption_flag). Older ESP8266 / original ESP32 ROM used 16 bytes.
+// Sending 16 to a C3 ROM silently misparses the offset — flash "succeeds"
+// but nothing lands. We always send 20 bytes with encryption=0 — works on
+// all modern ROMs and is ignored by older ones.
 static bool flashBegin(uint32_t size, uint32_t offset) {
     uint32_t block_size = FLASH_WRITE_BLOCK_SIZE;
     uint32_t num_blocks = (size + block_size - 1) / block_size;
     uint32_t erase_size = num_blocks * block_size;
 
-    uint8_t data[16];
-    *(uint32_t*)(data + 0) = erase_size;
-    *(uint32_t*)(data + 4) = num_blocks;
-    *(uint32_t*)(data + 8) = block_size;
+    uint8_t data[20];
+    *(uint32_t*)(data + 0)  = erase_size;
+    *(uint32_t*)(data + 4)  = num_blocks;
+    *(uint32_t*)(data + 8)  = block_size;
     *(uint32_t*)(data + 12) = offset;
+    *(uint32_t*)(data + 16) = 0;   // encrypted = 0 (plaintext flash)
 
-    uint32_t ck = cksum(data, 16);
-    return sendCmd(CMD_FLASH_BEGIN, data, 16, ck, 10000); // erase may take long
+    uint32_t ck = cksum(data, 20);
+    return sendCmd(CMD_FLASH_BEGIN, data, 20, ck, 10000); // erase may take long
 }
 
 // Write one block of flash data (block_size must match flashBegin)
@@ -410,6 +417,33 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) 
     }
 
     if (cfg.progress) cfg.progress(100, "Done");
+    s_uart->end();
+    return FLASH_OK;
+}
+
+// Exit stub/ROM, jump to user code (i.e. OTADATA-selected app).
+// Stub implementation in ELRS calls ESP.restart(); ROM bootloader jumps to
+// app directly. Opcode: 0xD3, no args, no response (stub may or may not
+// reply — we don't wait).
+Result runUserCode(const Config &cfg) {
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    s_uart->setRxBufferSize(1024);
+    delay(50);
+    // Sync first to make sure we're talking to the stub/ROM (some ROMs
+    // won't accept commands until they've seen at least one valid frame).
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    // RUN_USER_CODE payload is 0 bytes.
+    slipStart();
+    slipWriteByte(0x00);              // dir = request
+    slipWriteByte(CMD_RUN_USER_CODE); // 0xD3
+    slipWriteByte(0x00); slipWriteByte(0x00);  // size = 0
+    slipWriteByte(0); slipWriteByte(0); slipWriteByte(0); slipWriteByte(0);  // cksum = 0
+    slipEnd();
+    s_uart->flush();
+    // The stub runs ESP.restart() — UART silent after. Don't wait.
+    delay(200);
     s_uart->end();
     return FLASH_OK;
 }
