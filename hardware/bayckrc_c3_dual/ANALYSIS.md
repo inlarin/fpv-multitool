@@ -99,13 +99,73 @@ The MILELRS fork contains fields suggesting a security-oriented design
 live in the `eeprom` namespace blobs — currently not decoded by parse.py
 (needs an ELRS-eeprom-specific parser).
 
-## Reflash plan
+## Reflash attempt log
 
-1. **Backup complete** (this dump, 4 MB, md5 above) — `.gitignored` locally.
-2. Erase otadata → boot app0 (vanilla ELRS 3.5.3) — **reversible**: flash the
-   backup dump to offset 0x0e000–0x10000 to restore original otadata.
-3. If the user wants **latest ELRS 3.x** (3.5.3 is the already-embedded
-   copy; there may be a newer release at
-   https://github.com/ExpressLRS/ExpressLRS/releases) — flash a full
-   firmware.bin via `/api/flash/upload` + `/api/flash/start` after first
-   successfully flipping to app0 and confirming link works.
+### Attempt 1 — OTADATA erase (2026-04-19) — **FAILED to flip**
+
+Theory: wipe the 8 KB `otadata` partition (0x0e000–0x10000). ESP-IDF
+bootloader should fall back to `app0` when otadata is blank, which would
+activate the vanilla ExpressLRS 3.5.3 copy already present.
+
+Execution:
+1. Put RX in DFU (hold BOOT during power-up).
+2. `POST /api/flash/erase_region?offset=0xe000&size=0x2000` → succeeded:
+   `Erased 0x2000 bytes @ 0xe000`.
+3. Power-cycled RX (no BOOT hold).
+4. Started CRSF service on plate, pinged RX — device info returned
+   `name="BK DB 100 GRX"` (same as before erase — inconclusive, since
+   both apps share the same `lua_name`/`product_name` from
+   hardware.json).
+5. Waited 65 s for RX to enable its auto-WiFi AP (`wifi-on-interval: 60`
+   from hardware.json).
+6. Scanned WiFi from the plate:
+   **SSID = "MILELRS v3.48 RX 1016"** — MILELRS still active.
+
+Conclusion: **MILELRS fork has a custom bootloader that ignores / overrides
+the standard ESP-IDF otadata fallback.** Erasing otadata was insufficient.
+Possible mechanisms:
+- Custom 2nd-stage bootloader that hard-codes app1 preference
+- Modified partition table loader that flips ota_0 ↔ ota_1 subtypes
+- Anti-downgrade / anti-revert protection baked into bootloader
+
+### Next session — attempt 2 plan
+
+**Path A — full reflash of app partition with vanilla ELRS 3.x:**
+1. Download the latest ExpressLRS 3.x `UNIFIED_ESP32C3_LR1121_RX`
+   firmware.bin from https://github.com/ExpressLRS/ExpressLRS/releases
+   (current latest as of April 2026 is likely v3.5.x — check releases).
+2. Put RX in DFU.
+3. `POST /api/flash/upload` with the firmware.bin, then
+   `POST /api/flash/start` with `offset=0x10000` (overwrites app0).
+   (Our `/api/flash/upload` currently sends with offset=0 by default;
+   may need to extend `executeFlash` / `ESPFlasher::Config.flash_offset`.)
+4. Erase otadata again so app0 is selected.
+5. Power-cycle — this time vanilla ELRS 3.x should boot because app0
+   bytes are different and a custom bootloader can't map "app1's UID"
+   onto them.
+
+Risk: if the MILELRS bootloader itself is at offset 0x0000 (replaces
+standard ESP-IDF bootloader), it may hard-block vanilla ELRS booting.
+In that case need to erase + reflash **bootloader too** (offset 0x0000,
+0x1000 bytes) with a stock ESP32-C3 bootloader — binary available in
+ESP-IDF releases.
+
+**Path B — reflash everything back to MILELRS backup then start over:**
+We have the full 4 MB dump. Writing the whole image back via chunked
+FLASH_BEGIN/DATA from offset 0 restores the original state. Useful as
+a "known-good" safety net if Path A bricks the RX.
+
+**Path C — glitch / electrical reset approach:**
+Outside scope of this multitool; requires ChipWhisperer / dedicated
+tooling. Not planned.
+
+### Hardware target identification for vanilla
+
+From app0's rodata: target token `UNIFIED_ESP32C3_LR1121_RX` with the
+hardware.json blob already captured above. When downloading vanilla
+ELRS 3.x:
+- Choose **"UNIFIED"** target (ESP32-C3 + LR1121 generic)
+- At first boot, RX will enter Bluetooth LE / WiFi AP config mode and
+  expect hardware.json upload via the ELRS Configurator — **we have
+  that JSON in the dump**, can replay it.
+
