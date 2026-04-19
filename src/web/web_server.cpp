@@ -2523,6 +2523,64 @@ void WebServer::start() {
         req->send(200, "text/plain", "Released");
     });
 
+    // Passive listener diagnostic — open UART at a requested baud, count
+    // every byte that arrives in N ms, return a hex preview. Doesn't send
+    // anything — just confirms whether the wire carries a signal at all.
+    // Useful when autodetect says "no signal" and we want to distinguish
+    // "nothing ever arrived" (wiring/power issue) from "arrived but didn't
+    // look like what we expected".
+    s_server->on("/api/port/probe_rx", HTTP_POST, [](AsyncWebServerRequest *req) {
+        uint32_t baud = req->hasParam("baud", true)
+            ? strtoul(req->getParam("baud", true)->value().c_str(), nullptr, 0) : 115200;
+        uint32_t ms = req->hasParam("ms", true)
+            ? strtoul(req->getParam("ms", true)->value().c_str(), nullptr, 0) : 1000;
+        if (ms > 5000) ms = 5000;
+        bool swap = req->hasParam("swap", true)
+            ? req->getParam("swap", true)->value() == "1"
+            : PinPort::swapped(PinPort::PORT_B);
+
+        PinPort::setSwapped(PinPort::PORT_B, swap);
+        PinPort::release(PinPort::PORT_B);
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "probe_rx")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        int rxPin = PinPort::rx_pin(PinPort::PORT_B);
+        int txPin = PinPort::tx_pin(PinPort::PORT_B);
+        Serial1.end();
+        Serial1.begin(baud, SERIAL_8N1, rxPin, txPin);
+
+        static uint8_t buf[512];
+        size_t got = 0;
+        uint32_t start = millis();
+        while (millis() - start < ms && got < sizeof(buf)) {
+            if (Serial1.available()) buf[got++] = (uint8_t)Serial1.read();
+            else delay(1);
+        }
+
+        JsonDocument d;
+        d["baud"]   = baud;
+        d["ms"]     = ms;
+        d["swap"]   = swap;
+        d["rx_pin"] = rxPin;
+        d["tx_pin"] = txPin;
+        d["bytes"]  = got;
+        // Preview first 64 bytes as hex
+        String hex; hex.reserve(132);
+        for (size_t i = 0; i < got && i < 64; i++) {
+            char b[4]; snprintf(b, sizeof(b), "%02x", buf[i]); hex += b;
+        }
+        d["hex_preview"] = hex;
+        // Count non-idle bytes (anything other than 0x00 or 0xFF)
+        int interesting = 0;
+        for (size_t i = 0; i < got; i++) if (buf[i] != 0x00 && buf[i] != 0xFF) interesting++;
+        d["non_idle_count"] = interesting;
+
+        PinPort::release(PinPort::PORT_B);
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     // Manual swap override (advanced) — toggles PinPort pin_a/pin_b
     // assignment for I2C/UART and re-acquires if port is live.
     s_server->on("/api/port/swap", HTTP_POST, [](AsyncWebServerRequest *req) {
