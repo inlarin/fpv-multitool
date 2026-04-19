@@ -41,6 +41,14 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size);
 // acks, terminated by a 16-byte MD5 trailer (ignored here).
 Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out);
 
+// Erase `size` bytes starting at `offset` on the attached ROM bootloader.
+// Size is rounded up to the nearest 4 KB sector internally by the ROM.
+// Uses the standard CMD_FLASH_BEGIN path with a zero-body CMD_FLASH_END
+// afterwards so the ROM commits the erase and returns control. Useful
+// for surgical operations like wiping an OTA-select sector to force boot
+// into the secondary app.
+Result eraseRegion(const Config &cfg, uint32_t offset, size_t size);
+
 const char* errorString(Result r);
 
 } // namespace ESPFlasher

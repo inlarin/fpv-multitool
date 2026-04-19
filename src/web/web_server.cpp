@@ -2143,6 +2143,44 @@ void WebServer::start() {
         req->send(r);
     });
 
+    // Erase a flash region on the attached RX (RX must be in ROM bootloader).
+    // Intended use: wipe OTA-select sector to force boot into secondary app,
+    // wipe NVS to factory-reset, etc. Caller MUST power-cycle the RX afterwards
+    // (we leave the ROM in a "ready to reboot" state but don't send the reboot).
+    s_server->on("/api/flash/erase_region", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
+            req->send(400, "text/plain", "need offset + size (both hex or dec)");
+            return;
+        }
+        uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
+        uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
+        // Safety cap — don't let a typo brick the whole flash.
+        if (size > 0x10000) { req->send(400, "text/plain", "size capped at 0x10000 (64 KB)"); return; }
+        if (offset > 0x400000 || offset + size > 0x400000) {
+            req->send(400, "text/plain", "range outside 4 MB flash");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "erase_region")) {
+            req->send(409, "text/plain", "Port B busy — switch Setup to Receiver");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+        ESPFlasher::Result r = ESPFlasher::eraseRegion(cfg, offset, size);
+        PinPort::release(PinPort::PORT_B);
+        if (r == ESPFlasher::FLASH_OK) {
+            req->send(200, "text/plain",
+                String("Erased 0x") + String(size, HEX) +
+                " bytes @ 0x" + String(offset, HEX) +
+                " — power-cycle the RX to boot.");
+        } else {
+            req->send(500, "text/plain", ESPFlasher::errorString(r));
+        }
+    });
+
     s_server->on("/api/flash/dump/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (s_dump.running) { req->send(409, "text/plain", "still running"); return; }
         if (s_dump.buf) { free(s_dump.buf); s_dump.buf = nullptr; }

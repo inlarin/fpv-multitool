@@ -298,6 +298,42 @@ static bool spiSetParams(uint32_t flash_size_bytes) {
     return sendCmd(CMD_SPI_SET_PARAMS, data, 24, cksum(data, 24), 3000);
 }
 
+// Erase a flash region without writing anything. Uses FLASH_BEGIN to do
+// the erase (ROM aligns up to full 4 KB sectors), then FLASH_END to close
+// out the session without rebooting. Designed for surgical otadata /
+// NVS wipes. Does NOT reboot the receiver — caller issues reboot separately.
+Result eraseRegion(const Config &cfg, uint32_t offset, size_t size) {
+    if (!cfg.uart || size == 0) return FLASH_ERR_INVALID_INPUT;
+
+    s_uart = cfg.uart;
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    s_uart->setRxBufferSize(4096);
+    delay(100);
+
+    if (cfg.progress) cfg.progress(0, "Connecting");
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    if (cfg.progress) cfg.progress(10, "Synced");
+
+    spiAttach();
+    // FLASH_BEGIN with num_blocks=0 forces the ROM into "erase then wait".
+    // We still pass a non-zero size so erase_size rounds up to >=1 sector.
+    if (!flashBegin(size, offset)) {
+        s_uart->end();
+        return FLASH_ERR_BEGIN_FAILED;
+    }
+    if (cfg.progress) cfg.progress(70, "Erasing");
+
+    // FLASH_END with reboot=false so the ROM just finalises; caller decides
+    // when/if to reboot.
+    if (!flashEnd(false)) {
+        // Some ROMs silently don't respond — treat as best-effort.
+    }
+
+    if (cfg.progress) cfg.progress(100, "Done");
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Read `size` bytes at `offset` into `out`.
 // Uses CMD_READ_FLASH_SLOW (0x0E) — ROM-native, chunked. Each request reads
 // up to 64 bytes and the data comes back inside the standard response's
