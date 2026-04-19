@@ -190,3 +190,74 @@ Full 4 MB backup at `hardware/bayckrc_c3_dual/dump_2026-04-19_1528.bin`
 4. Power-cycle.
 Original MILELRS + vanilla-ELRS-3.5.3 dual-firmware layout is restored
 byte-for-byte.
+
+---
+
+## P1 — ELRS Flash tab UX audit (2026-04-19)
+
+**Current state (after UI agent's commit `dcceebf`)**: the tab now holds
+5+ cards — some of them do overlapping things and the separation is
+tech-axis (slot-flash vs OTADATA vs dump) rather than user-goal-axis.
+
+### Tasks
+
+1. **Deduplicate.** Find overlap between:
+   - original "ELRS Receiver Flasher" card (legacy, offset=0 full-image flash)
+   - new "Slot-targeted flash" card (offset=0x10000 app0, etc.)
+   - new 5-step wizard banner
+   - "Dump Receiver Firmware"
+   - "OTADATA / Active slot"
+   Unify into the **RX Flash Station** layout described in
+   `rx_protocol_roadmap.md` → "Unified RX Flash Station UI". Single
+   per-slot row gives the user every action in one place; legacy
+   full-image flash moves to `<details>` Advanced.
+
+2. **Control-logic review.** For every button, check:
+   - Enabled only when prerequisites are satisfied (e.g. "Activate slot"
+     needs a valid image there; "Flash" needs RX in DFU which is
+     probe-detected).
+   - Confirmation dialog is triggered for:
+     - flashing/erasing the currently-active slot
+     - erasing OTADATA
+     - reflashing bootloader or partition table
+   - Status indicator per button (grey/spinner/green/red).
+
+3. **Display sufficiency check.** Each slot should show:
+   - offset + size
+   - image magic (0xE9 = valid, others = corrupted/empty)
+   - approximate content fingerprint ("ExpressLRS 3.6.3", "MILELRS v3.48",
+     "empty / erased", or "unknown — could be firmware X")
+   - whether slot is selected by OTADATA
+   - partition size utilisation (1.24 of 1.88 MB used)
+
+4. **Function sufficiency check.** User should be able to do all of:
+   - Detect what RX is attached (chip, flash, slot layout)
+   - Full backup → download
+   - Dump a single slot
+   - Flash a single slot (keep other slot intact)
+   - Switch active slot (OTADATA flip)
+   - Restore from backup
+   - Erase a slot / OTADATA / whole flash
+   all without typing hex addresses by hand.
+
+5. **Remove or rename:**
+   - Legacy "ELRS Receiver Flasher" overlaps with slot-flash →
+     move behind "Expert: full-image flash from offset 0" button.
+   - 5-step wizard is helpful for a first-time user but may block
+     expert actions; hide it behind "Show wizard" toggle, on by
+     default on first visit.
+
+### Acceptance criteria (DoD)
+
+- [ ] A user who has never seen this tab before can, with only the
+      visible cards and no manual in hand, dump → verify → flash a
+      new firmware into one slot → activate it → power-cycle and see
+      the new AP.
+- [ ] No button triggers an action that isn't obvious from its label.
+- [ ] Every long-running op shows progress and can be aborted.
+- [ ] All cross-card state is consistent (e.g. active slot highlighted
+      the same way everywhere).
+
+### Timeline estimate
+
+~2 hrs of UI + 0.5 hr backend (`slot_info` endpoint).

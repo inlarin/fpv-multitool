@@ -1974,6 +1974,26 @@ void WebServer::start() {
     // Max accepted firmware size (ELRS is ~400KB, headroom for big builds)
     static const size_t MAX_FW_SIZE = 2 * 1024 * 1024;
 
+    // Diagnostic: heap + PSRAM + flash state. Helps isolate upload failures.
+    s_server->on("/api/sys/mem", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["heap_free"]     = ESP.getFreeHeap();
+        d["heap_min"]      = ESP.getMinFreeHeap();
+        d["heap_total"]    = ESP.getHeapSize();
+        d["psram_free"]    = ESP.getFreePsram();
+        d["psram_total"]   = ESP.getPsramSize();
+        d["psram_min"]     = ESP.getMinFreePsram();
+        d["largest_block"] = ESP.getMaxAllocHeap();
+        d["largest_psram"] = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        d["flash_fw_size"] = WebState::flashState.fw_size;
+        d["flash_fw_recv"] = WebState::flashState.fw_received;
+        d["flash_fw_buf"]  = WebState::flashState.fw_data ? "allocated" : "null";
+        d["flash_stage"]   = WebState::flashState.stage;
+        d["flash_offset"]  = WebState::flashState.flash_offset;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     s_server->on("/api/flash/upload", HTTP_POST,
         [](AsyncWebServerRequest *req) {
             if (WebState::flashState.fw_size > 0) {
@@ -2007,12 +2027,20 @@ void WebServer::start() {
                     }
                 }
 
-                WebState::flashState.fw_data = (uint8_t*)ps_malloc(alloc_size);
+                // Try PSRAM first via heap_caps (ps_malloc sometimes reports
+                // unavailable even though MALLOC_CAP_SPIRAM has plenty).
+                // Fall back to regular heap if PSRAM path fails.
+                WebState::flashState.fw_data =
+                    (uint8_t*)heap_caps_malloc(alloc_size, MALLOC_CAP_SPIRAM);
                 if (!WebState::flashState.fw_data) {
-                    Serial.printf("[Flash] ps_malloc(%u) failed\n", alloc_size);
-                    WebState::flashState.lastResult = "Out of PSRAM";
+                    WebState::flashState.fw_data = (uint8_t*)malloc(alloc_size);
+                }
+                if (!WebState::flashState.fw_data) {
+                    Serial.printf("[Flash] alloc(%u) failed — no PSRAM or heap\n", (unsigned)alloc_size);
+                    WebState::flashState.lastResult = "Out of memory";
                     return;
                 }
+                Serial.printf("[Flash] allocated %u bytes for upload\n", (unsigned)alloc_size);
             }
             if (!WebState::flashState.fw_data) return;
             if (index + len > MAX_FW_SIZE) return;  // overflow guard
@@ -2206,6 +2234,62 @@ void WebServer::start() {
         req->send(200, "text/plain", "cleared");
     });
 
+    // Send the CRSF "reboot to bootloader" command (the 5-byte "bl" frame
+    // `EC 04 32 62 6C <crc>`). ELRS 3.x firmware on ESP32 handles this by
+    // NOT rebooting to ROM — it enters an in-app esptool stub that speaks
+    // the SYNC/FLASH_BEGIN/DATA/END/READ_FLASH/SPI_FLASH_MD5 protocol on
+    // the SAME UART at the SAME baud. No hardware DFU, no power-cycle.
+    //
+    // After calling this: the plate must switch into ESPFlasher mode on
+    // Port B UART without renegotiating baud. Then every existing flash /
+    // dump / otadata endpoint just works.
+    //
+    // Works on vanilla ELRS 3.x AND MILELRS (MILELRS inherits the handler).
+    s_server->on("/api/crsf/reboot_to_bl", HTTP_POST, [](AsyncWebServerRequest *req) {
+        uint32_t baud = req->hasParam("baud", true)
+            ? strtoul(req->getParam("baud", true)->value().c_str(), nullptr, 0)
+            : 420000;  // vanilla ELRS default; MILELRS may use 115200 — caller picks
+
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf_bl")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        Serial1.end();
+        Serial1.begin(baud, SERIAL_8N1,
+                      PinPort::rx_pin(PinPort::PORT_B),
+                      PinPort::tx_pin(PinPort::PORT_B));
+        delay(50);
+        // Frame: 0xEC (addr) 0x04 (len) 0x32 (type=COMMAND) 'b' 'l' CRC8(D5 over type..)
+        const uint8_t frame_core[3] = { 0x32, 0x62, 0x6C };
+        // CRC8 DVB-S2 poly 0xD5 over type + 2 payload bytes
+        uint8_t crc = 0;
+        for (int i = 0; i < 3; i++) {
+            crc ^= frame_core[i];
+            for (int b = 0; b < 8; b++) crc = (crc & 0x80) ? (crc << 1) ^ 0xD5 : (crc << 1);
+        }
+        uint8_t packet[6] = { 0xEC, 0x04, 0x32, 0x62, 0x6C, crc };
+        Serial1.write(packet, 6);
+        Serial1.flush();
+
+        // Give ELRS time to process the frame + switch into serialUpdate state.
+        // Telemetry task fires about every 10 ms; 150 ms is plenty. Per the
+        // research doc, the in-app stub spins at `devSerialUpdate.cpp:52`
+        // immediately after.
+        delay(200);
+
+        // Keep Serial1 open — caller should now POST /api/flash/* commands.
+        // We don't release Port B here; the next acquire() call with same
+        // mode will be a transfer, not a busy.
+        JsonDocument d;
+        d["sent_packet_hex"]  = "EC 04 32 62 6C";
+        d["sent_crc_hex"]     = String("0x") + String(crc, HEX);
+        d["baud"]             = baud;
+        d["note"]             = "RX should now be in in-app esptool stub. "
+                                "Try /api/otadata/status to verify SYNC works.";
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     // ===== OTADATA atomic select =====
     // ESP-IDF OTADATA record format (32 bytes):
     //   0..3  ota_seq      u32  (highest wins)
@@ -2295,11 +2379,8 @@ void WebServer::start() {
         // Write to sector that currently holds the LOWER seq (alternating
         // writes = standard ESP-IDF OTA behaviour, preserves rollback).
         uint32_t target_offset = (seq0 <= seq1) ? 0xe000 : 0xf000;
-        ESPFlasher::Result wr = ESPFlasher::flash(cfg, rec, 32);
-        // ^ This writes with flash_offset from cfg.flash_offset default (0).
-        // We need targeted write — reuse cfg with flash_offset set.
         cfg.flash_offset = target_offset;
-        wr = ESPFlasher::flash(cfg, rec, 32);
+        ESPFlasher::Result wr = ESPFlasher::flash(cfg, rec, 32);
 
         PinPort::release(PinPort::PORT_B);
 
