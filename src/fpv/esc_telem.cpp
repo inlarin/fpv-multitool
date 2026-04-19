@@ -96,11 +96,13 @@ uint8_t polePairs() { return s_pole_count / 2; }
 void loop() {
     if (!s_running) return;
 
-    // Framing: ESC emits 10 bytes back-to-back. If we see >5ms gap between
-    // bytes, treat it as frame boundary. Simpler: reset pos on stale data.
+    // Framing: ESC emits 10 bytes back-to-back (~870 µs total @ 115200).
+    // Frames are ~10-20 ms apart. Anything >5 ms idle inside a frame = resync.
+    // (20 ms was too loose — noise could pile onto a partial frame and
+    // cause CRC failures instead of a clean resync.)
     static uint32_t lastByteMs = 0;
     uint32_t now = millis();
-    if (s_pos > 0 && (now - lastByteMs) > 20) {
+    if (s_pos > 0 && (now - lastByteMs) > 5) {
         s_pos = 0;  // frame timeout, resync
     }
 

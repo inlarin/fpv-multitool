@@ -1994,12 +1994,17 @@ void WebServer::start() {
                 WebState::flashState.fw_received = 0;
                 WebState::flashState.lastResult = "";
 
-                // Determine content length from Content-Length header
+                // Determine content length from Content-Length header.
+                // Multipart adds boundary overhead — 1 KB is plenty, and we
+                // clamp to MAX_FW_SIZE so cl just under the cap can't push
+                // us past it.
                 size_t alloc_size = MAX_FW_SIZE;
                 if (req->hasHeader("Content-Length")) {
                     size_t cl = req->header("Content-Length").toInt();
-                    // Multipart has some overhead, add small margin
-                    if (cl > 0 && cl < MAX_FW_SIZE) alloc_size = cl + 256;
+                    if (cl > 0 && cl < MAX_FW_SIZE) {
+                        alloc_size = cl + 1024;
+                        if (alloc_size > MAX_FW_SIZE) alloc_size = MAX_FW_SIZE;
+                    }
                 }
 
                 WebState::flashState.fw_data = (uint8_t*)ps_malloc(alloc_size);
@@ -2379,15 +2384,22 @@ void WebServer::start() {
 
     s_server->on("/api/ota", HTTP_POST,
         [](AsyncWebServerRequest *req) {
-            bool ok = !Update.hasError();
+            // `otaBeginOk` is set in the upload handler — if begin() failed
+            // we must report FAIL even if `Update.hasError()` happens to be
+            // clear (e.g. ESP32 Arduino variants where never-started Update
+            // state leaves _error at 0).
+            bool beginOk = !!req->_tempObject;  // reused as bool flag
+            bool ok = beginOk && !Update.hasError() && Update.isFinished();
             AsyncWebServerResponse *resp = req->beginResponse(
                 ok ? 200 : 500, "text/plain",
-                ok ? "OK — rebooting" : String("FAIL: ") + Update.errorString());
+                ok ? "OK — rebooting" :
+                     (String("FAIL: ") +
+                      (!beginOk ? "Update.begin() rejected (partition full? run /api/ota/abort)"
+                                : Update.errorString())));
             resp->addHeader("Connection", "close");
             req->send(resp);
             if (ok) {
                 Serial.println("[OTA] Success — rebooting in 500 ms");
-                // Schedule reboot after response flush
                 xTaskCreate([](void*) {
                     vTaskDelay(pdMS_TO_TICKS(500));
                     ESP.restart();
@@ -2398,11 +2410,14 @@ void WebServer::start() {
             if (index == 0) {
                 Serial.printf("[OTA] Upload start: %s\n", filename.c_str());
                 size_t content_len = req->contentLength();
-                if (!Update.begin(content_len > 0 ? content_len : UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+                if (Update.begin(content_len > 0 ? content_len : UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+                    req->_tempObject = (void*)1;  // begin-ok marker
+                } else {
                     Update.printError(Serial);
-                    return;
+                    req->_tempObject = nullptr;
                 }
             }
+            if (!req->_tempObject) return;  // skip writes when begin failed
             if (Update.isRunning() && Update.write(data, len) != len) {
                 Update.printError(Serial);
             }

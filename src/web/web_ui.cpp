@@ -1075,8 +1075,22 @@ function showWorkspace(ws) {
   showTab(tabName);
 }
 
+// Per-tab poll timers — cleared on tab-leave so switching doesn't
+// accumulate fetches forever (one per visited tab).
+const _tabTimers = ['_escTelemTimer', '_smbLogTimer', '_vrvTimer',
+                    'cpLogTimer', '_rcPollTimer', '_servoStateTimer',
+                    '_dumpPoll', '_otaPullPollTimer'];
+function _clearTabTimers() {
+  _tabTimers.forEach(name => {
+    try {
+      if (window[name]) { clearInterval(window[name]); window[name] = null; }
+    } catch(e) {}
+  });
+}
+
 function showTab(name) {
   if (!_tabValid(name)) name = _wsDefTab[_curWs];
+  _clearTabTimers();  // stop any polling from the previous tab
   document.querySelectorAll('.tab-content').forEach(e => e.style.display = 'none');
   document.getElementById('tab-'+name).style.display = '';
   // Mark active tab within current workspace
