@@ -2167,6 +2167,35 @@ void WebServer::start() {
         req->send(200, "text/plain", inv ? "CRSF started (inverted)" : "CRSF started");
     });
 
+    s_server->on("/api/crsf/state", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["running"]   = CRSFService::isRunning();
+        if (CRSFService::isRunning()) {
+            const auto &st = CRSFService::state();
+            d["connected"]    = st.connected;
+            d["total_frames"] = st.total_frames;
+            d["bad_crc"]      = st.bad_crc;
+            if (st.link.valid) {
+                JsonObject l = d["link"].to<JsonObject>();
+                l["rssi1"] = (int8_t)st.link.uplink_rssi1 * -1;
+                l["lq"]    = st.link.uplink_link_quality;
+                l["snr"]   = st.link.uplink_snr;
+                l["rf"]    = st.link.rf_mode;
+            }
+            const auto &dev = CRSFConfig::deviceInfo();
+            if (dev.valid) {
+                JsonObject dv = d["device"].to<JsonObject>();
+                dv["name"]   = dev.name;
+                dv["fw"]     = dev.sw_ver;
+                dv["hw"]     = dev.hw_ver;
+                dv["serial"] = dev.serial;
+                dv["fields"] = dev.field_count;
+            }
+        }
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     s_server->on("/api/crsf/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
         CRSFService::end();
         WebState::crsf.enabled = false;
@@ -2185,6 +2214,49 @@ void WebServer::start() {
         if (!CRSFService::isRunning()) { req->send(400, "text/plain", "CRSF not running"); return; }
         CRSFConfig::requestAllParameters();
         req->send(200, "text/plain", "Requesting parameters...");
+    });
+
+    // Blind param-read sweep for firmwares where DEVICE_INFO returns
+    // field_count=0 (happens on some Bayck / fork ELRS builds). Iterates
+    // IDs 1..max and sends a read request for each; params that reply get
+    // cached in CRSFConfig.
+    s_server->on("/api/crsf/read_params_blind", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!CRSFService::isRunning()) { req->send(400, "text/plain", "CRSF not running"); return; }
+        int maxId = req->hasParam("max", true)
+            ? req->getParam("max", true)->value().toInt() : 30;
+        if (maxId < 1) maxId = 1;
+        if (maxId > 80) maxId = 80;
+        // Space the reads 40 ms apart so we don't overrun the RX
+        for (int id = 1; id <= maxId; id++) {
+            CRSFService::sendParameterRead((uint8_t)id, 0);
+            delay(40);
+        }
+        req->send(200, "text/plain", String("Sweep sent for IDs 1..") + maxId);
+    });
+
+    // List all cached params (filled by /api/crsf/params or /api/crsf/read_params_blind)
+    s_server->on("/api/crsf/params_list", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["count"] = CRSFConfig::paramCount();
+        JsonArray arr = d["params"].to<JsonArray>();
+        for (int i = 1; i <= 80; i++) {
+            const CRSFConfig::Param *p = CRSFConfig::paramById((uint8_t)i);
+            if (!p || !p->complete) continue;
+            JsonObject o = arr.add<JsonObject>();
+            o["id"]        = p->id;
+            o["parent_id"] = p->parent_id;
+            o["type"]      = p->type;
+            o["name"]      = p->name;
+            o["value_num"] = p->value_num;
+            if (p->value_text.length() > 0) o["value_text"] = p->value_text;
+            if (p->unit.length() > 0)       o["unit"]       = p->unit;
+            if (p->options.length() > 0)    o["options"]    = p->options;
+            o["min"]       = p->min_val;
+            o["max"]       = p->max_val;
+            o["hidden"]    = p->hidden;
+        }
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     s_server->on("/api/crsf/write", HTTP_POST, [](AsyncWebServerRequest *req) {

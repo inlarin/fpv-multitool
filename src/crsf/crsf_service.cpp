@@ -234,9 +234,11 @@ bool cmdRxBind() {
 }
 
 bool cmdReboot() {
-    // ELRS: enter bootloader command
-    // Subcommand 0x06 (RESET), action 0x00 = reboot to bootloader
-    return sendCommand(0x06, 0x00, nullptr, 0);
+    // ELRS-specific bootloader entry:
+    // CRSF_COMMAND (0x32) -> subcmd 0x0A (ELRS_FUNC) -> action 0x0B (ENTER_BOOTLOADER)
+    // This is what ELRS Configurator itself issues. Subcmd 0x06/0x00 (general
+    // reset) is ignored by ELRS RX firmware.
+    return sendCommand(0x0A, 0x0B, nullptr, 0);
 }
 
 bool sendDevicePing() {

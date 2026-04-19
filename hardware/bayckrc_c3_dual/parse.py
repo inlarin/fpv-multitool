@@ -366,8 +366,9 @@ def main() -> None:
     print(f"[+] Wrote {txt_path}")
 
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(report, indent=2, ensure_ascii=False,
-                                                  default=str))
+        Path(args.json_out).write_text(
+            json.dumps(report, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8")
         print(f"[+] Wrote {args.json_out}")
 
 

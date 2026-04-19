@@ -1,3 +1,7 @@
 dump_*.bin
 parsed_*.txt
 parsed_*.json
+# parse.py's auto-generated report when --txt isn't specified lives next
+# to the dump as dump_NAME.parsed.txt — same rules (may contain secrets).
+dump_*.parsed.txt
+dump_*.parsed.json
