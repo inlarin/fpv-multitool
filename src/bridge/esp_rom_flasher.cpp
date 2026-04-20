@@ -36,6 +36,7 @@ static const uint8_t CMD_READ_FLASH_SLOW = 0x0E;  // ROM native, 64 B/request
 static const uint8_t CMD_CHANGE_BAUD  = 0x0F;
 static const uint8_t CMD_READ_FLASH   = 0xD2;  // stub-only stream-read
 static const uint8_t CMD_RUN_USER_CODE = 0xD3; // exit stub/ROM -> boot selected app
+static const uint8_t CMD_SPI_FLASH_MD5 = 0x13; // fast verify: ROM computes MD5 over a region
 
 // Parameters
 static const size_t FLASH_WRITE_BLOCK_SIZE = 1024;    // per FLASH_DATA packet
@@ -100,6 +101,10 @@ static uint8_t cksum(const uint8_t *data, size_t n) {
 static bool sendCmd(uint8_t cmd, const uint8_t *data, uint16_t size,
                    uint32_t checksum, uint32_t timeoutMs,
                    uint32_t *response_value = nullptr) {
+    // Flush any pending bytes from a previous frame — avoids reading
+    // a stale tail as if it were the current response.
+    while (s_uart->available()) s_uart->read();
+
     // Build packet: direction, cmd, size_lo, size_hi, cksum x4, data
     slipStart();
     slipWriteByte(0x00);
@@ -180,7 +185,13 @@ static bool flashBegin(uint32_t size, uint32_t offset) {
     *(uint32_t*)(data + 16) = 0;   // encrypted = 0 (plaintext flash)
 
     uint32_t ck = cksum(data, 20);
-    return sendCmd(CMD_FLASH_BEGIN, data, 20, ck, 10000); // erase may take long
+    // ESP32-C3 ROM erases ~40 KB/s — for 1 MB+ writes the pre-erase can
+    // take 30+ seconds. Give it 90s (covers up to ~3.5 MB). Without this,
+    // sendCmd() times out at 10s, we assume FLASH_BEGIN succeeded, then
+    // subsequent FLASH_DATA writes land in NOT-yet-erased sectors and are
+    // silently dropped. Observed symptom: first ~288 KB write OK, rest
+    // stays 0xFF.
+    return sendCmd(CMD_FLASH_BEGIN, data, 20, ck, 90000);
 }
 
 // Write one block of flash data (block_size must match flashBegin)
@@ -215,7 +226,16 @@ static bool flashEnd(bool reboot) {
     return sendCmd(CMD_FLASH_END, data, 4, ck, 3000);
 }
 
-// Main flash entry point
+// Forward declarations for helpers defined below.
+static bool spiAttach();
+static bool spiSetParams(uint32_t flash_size_bytes);
+
+// Main flash entry point.
+// Large writes (>~256 KB) on ESP32-C3 ROM drop silently past a certain
+// point within a single FLASH_BEGIN session — empirically 288 KB on the
+// Bayck RC C3 Dual. Workaround: split the payload into CHUNK_SIZE
+// sessions, each with its own FLASH_BEGIN / DATA... / FLASH_END(stay).
+// Only the FINAL FLASH_END respects cfg.stay_in_loader.
 Result flash(const Config &cfg, const uint8_t *data, size_t size) {
     if (!cfg.uart || !data || size == 0) return FLASH_ERR_INVALID_INPUT;
 
@@ -233,33 +253,59 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size) {
     }
     if (cfg.progress) cfg.progress(5, "Synced");
 
-    // FLASH_BEGIN
-    if (!flashBegin(size, cfg.flash_offset)) {
-        s_uart->end();
-        return FLASH_ERR_BEGIN_FAILED;
-    }
-    if (cfg.progress) cfg.progress(10, "Erasing");
+    // SPI_ATTACH — idempotent, do once.
+    spiAttach();
+    uint32_t fs = cfg.flash_offset + (uint32_t)size;
+    if (fs < 0x400000) fs = 0x400000;
+    spiSetParams(fs);
 
-    // FLASH_DATA blocks
-    uint32_t num_blocks = (size + FLASH_WRITE_BLOCK_SIZE - 1) / FLASH_WRITE_BLOCK_SIZE;
-    for (uint32_t i = 0; i < num_blocks; i++) {
-        size_t offset = i * FLASH_WRITE_BLOCK_SIZE;
-        size_t block_size = min((size_t)FLASH_WRITE_BLOCK_SIZE, size - offset);
+    // Split into ≤CHUNK_SIZE chunks to avoid the >288 KB silent-drop.
+    const size_t CHUNK_SIZE = 0x40000;   // 256 KB — safely under the cliff
+    size_t written_so_far = 0;
+    while (written_so_far < size) {
+        size_t chunk_len = size - written_so_far;
+        if (chunk_len > CHUNK_SIZE) chunk_len = CHUNK_SIZE;
+        bool is_last_chunk = (written_so_far + chunk_len >= size);
 
-        if (!flashData(data + offset, block_size, i)) {
+        if (!flashBegin(chunk_len, cfg.flash_offset + written_so_far)) {
             s_uart->end();
-            return FLASH_ERR_WRITE_FAILED;
+            return FLASH_ERR_BEGIN_FAILED;
+        }
+        if (cfg.progress) cfg.progress(10 + (int)(written_so_far * 85 / size), "Erasing");
+
+        uint32_t num_blocks = (chunk_len + FLASH_WRITE_BLOCK_SIZE - 1) / FLASH_WRITE_BLOCK_SIZE;
+        for (uint32_t i = 0; i < num_blocks; i++) {
+            size_t chunk_off = i * FLASH_WRITE_BLOCK_SIZE;
+            size_t block_size = min((size_t)FLASH_WRITE_BLOCK_SIZE, chunk_len - chunk_off);
+            if (!flashData(data + written_so_far + chunk_off, block_size, i)) {
+                s_uart->end();
+                return FLASH_ERR_WRITE_FAILED;
+            }
+            // Throttle — ESP32-C3 ROM's internal flash-write queue acks
+            // FLASH_DATA before the write is actually committed. Sending
+            // next block too fast causes silent drops past ~288 blocks.
+            delayMicroseconds(5000);
+            if (cfg.progress) {
+                int pct = 10 + (int)((written_so_far + chunk_off + block_size) * 85 / size);
+                cfg.progress(pct, "Writing");
+            }
         }
 
-        if (cfg.progress) {
-            int pct = 10 + (int)((i + 1) * 85 / num_blocks);
-            cfg.progress(pct, "Writing");
+        // End-of-chunk FLASH_END with stay-in-loader so ROM doesn't reset
+        // between chunks. Only the final chunk may reboot (see below).
+        if (!is_last_chunk) {
+            flashEnd(false);  // false = stay in bootloader between chunks
         }
+        written_so_far += chunk_len;
     }
 
-    // FLASH_END with reboot
-    if (!flashEnd(true)) {
-        // Non-fatal: some bootloaders don't respond to FLASH_END
+    // FLASH_END — only send when we actually want to reboot. Some ESP32-C3
+    // ROM variants auto-reset on ANY FLASH_END regardless of the payload
+    // flag, so for chained operations we just don't send it at all.
+    if (!cfg.stay_in_loader) {
+        if (!flashEnd(true)) {
+            // Non-fatal: some bootloaders don't respond to FLASH_END.
+        }
     }
 
     if (cfg.progress) cfg.progress(100, "Done");
@@ -417,6 +463,84 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) 
     }
 
     if (cfg.progress) cfg.progress(100, "Done");
+    s_uart->end();
+    return FLASH_OK;
+}
+
+// Ask ROM/stub to compute MD5 over a flash region. Request layout:
+//   [offset:u32, size:u32, zero:u32, zero:u32]  (16 bytes total)
+// Response "value" field (bytes 4..7 of status reply) contains the first
+// 4 bytes of the digest; the remaining 12 are in the response data area.
+// We read them all by parsing the full SLIP frame.
+Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t out[16]) {
+    if (!cfg.uart || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    s_uart->setRxBufferSize(1024);
+    delay(50);
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+
+    uint8_t data[16];
+    *(uint32_t*)(data + 0)  = offset;
+    *(uint32_t*)(data + 4)  = size;
+    *(uint32_t*)(data + 8)  = 0;
+    *(uint32_t*)(data + 12) = 0;
+    uint32_t ck = cksum(data, 16);
+
+    slipStart();
+    slipWriteByte(0x00);
+    slipWriteByte(CMD_SPI_FLASH_MD5);
+    slipWriteByte(16); slipWriteByte(0);
+    slipWriteByte(ck & 0xFF);
+    slipWriteByte((ck >> 8) & 0xFF);
+    slipWriteByte((ck >> 16) & 0xFF);
+    slipWriteByte((ck >> 24) & 0xFF);
+    slipWrite(data, 16);
+    slipEnd();
+    s_uart->flush();
+
+    // Response: dir=0x01, cmd=0x13, size=... varies per ROM variant:
+    //   * ROM reply: [dir=1, cmd=0x13, size=2+16+2, value=0, payload=<32 ASCII hex chars>+status_word]
+    //     — ROM sends the MD5 as 32 hex chars!
+    //   * Stub reply: [dir=1, cmd=0x13, size=2+16, value=0, payload=<16 raw bytes>+status_word]
+    // We accept both and convert ASCII-hex to raw if needed.
+    static uint8_t buf[128];
+    int n = slipRead(buf, sizeof(buf), 10000);  // MD5 over 1 MB ~200 ms but give margin
+    if (n < 8 || buf[0] != 0x01 || buf[1] != CMD_SPI_FLASH_MD5) {
+        s_uart->end();
+        return FLASH_ERR_READ_FAILED;
+    }
+    uint16_t resp_size = buf[2] | (buf[3] << 8);
+    if (n < 8 + resp_size) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
+
+    // Status is last 2 bytes of the data area.
+    uint8_t status = buf[8 + resp_size - 2];
+    if (status != 0x00) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
+
+    // The 16 MD5 bytes (raw or ASCII-hex) sit at buf[8 .. 8 + resp_size - 2].
+    uint8_t *md5_area = &buf[8];
+    uint16_t md5_len = resp_size - 2;
+
+    if (md5_len == 16) {
+        memcpy(out, md5_area, 16);
+    } else if (md5_len == 32) {
+        // ASCII hex from ROM — convert
+        for (int i = 0; i < 16; i++) {
+            char hi = md5_area[i * 2];
+            char lo = md5_area[i * 2 + 1];
+            auto h2i = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return 0;
+            };
+            out[i] = (uint8_t)((h2i(hi) << 4) | h2i(lo));
+        }
+    } else {
+        s_uart->end();
+        return FLASH_ERR_READ_FAILED;
+    }
+
     s_uart->end();
     return FLASH_OK;
 }

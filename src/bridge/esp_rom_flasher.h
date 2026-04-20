@@ -29,6 +29,7 @@ struct Config {
     uint32_t baud_rate = 115200;   // initial baud for sync
     uint32_t flash_baud = 460800;  // higher baud after sync (optional)
     uint32_t flash_offset = 0;     // flash offset address (0x0 for full image)
+    bool stay_in_loader = false;   // true = send FLASH_END(1) to stay in DFU so caller can chain more operations
     ProgressCallback progress = nullptr;
 };
 
@@ -53,6 +54,12 @@ Result eraseRegion(const Config &cfg, uint32_t offset, size_t size);
 // app partition). Opcode CMD_RUN_USER_CODE (0xD3). Works on both the ELRS
 // in-app stub and ROM bootloader.
 Result runUserCode(const Config &cfg);
+
+// Compute MD5 of `size` bytes at `offset` on the attached flash using
+// the ROM/stub SPI_FLASH_MD5 command (0x13). Fills 16-byte out digest.
+// ~600× faster than full-readback for verifying a flash write integrity.
+// Works on ESP32-S2/S3/C3 ROM (and all stubs). Does not touch flash.
+Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t out[16]);
 
 const char* errorString(Result r);
 

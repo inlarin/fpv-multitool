@@ -433,9 +433,15 @@ static void executeFlash() {
     size_t fw_size = WebState::flashState.fw_size;
     uint8_t *decompressed = nullptr; // temp buffer to free after
 
-    // Detect format and unpack if needed
-    auto fmt = FirmwareUnpack::detect(fw_ptr, fw_size);
-    Serial.printf("[Flash] Format: %s\n", FirmwareUnpack::formatName(fmt));
+    // Detect format and unpack if needed. `flash_raw` bypasses detection
+    // entirely — used when writing partition tables, OTADATA blobs, or
+    // any raw byte sequence that isn't a standalone ESP image.
+    FirmwareUnpack::Format fmt = WebState::flashState.flash_raw
+        ? FirmwareUnpack::FMT_RAW_BIN
+        : FirmwareUnpack::detect(fw_ptr, fw_size);
+    Serial.printf("[Flash] Format: %s (raw=%d)\n",
+                  FirmwareUnpack::formatName(fmt),
+                  WebState::flashState.flash_raw ? 1 : 0);
 
     if (fmt == FirmwareUnpack::FMT_GZIP) {
         WebState::flashState.stage = "Decompressing";
@@ -480,6 +486,7 @@ static void executeFlash() {
     cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
     cfg.baud_rate = 115200;
     cfg.flash_offset = WebState::flashState.flash_offset;
+    cfg.stay_in_loader = WebState::flashState.flash_stay;
     cfg.progress = flashProgress;
 
     ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size);
@@ -2078,9 +2085,22 @@ void WebServer::start() {
             return;
         }
         WebState::flashState.flash_offset = offset;
+        // ?raw=1 flag: skip format detection (for writing partition tables,
+        // OTADATA blobs, etc. whose magic bytes aren't 0xE9/gzip/ELRS).
+        WebState::flashState.flash_raw = req->hasParam("raw", true)
+            ? req->getParam("raw", true)->value() == "1"
+            : (req->hasParam("raw") && req->getParam("raw")->value() == "1");
+        // ?stay=1 flag: don't reboot RX after flash — keep it in DFU so the
+        // caller can chain more flashes / erases without user intervention.
+        WebState::flashState.flash_stay = req->hasParam("stay", true)
+            ? req->getParam("stay", true)->value() == "1"
+            : (req->hasParam("stay") && req->getParam("stay")->value() == "1");
         WebState::flashState.flash_request = true;
-        char msg[80];
-        snprintf(msg, sizeof(msg), "Flashing started at offset 0x%x", (unsigned)offset);
+        char msg[128];
+        snprintf(msg, sizeof(msg), "Flashing started at offset 0x%x%s%s",
+                 (unsigned)offset,
+                 WebState::flashState.flash_raw ? " (raw)" : "",
+                 WebState::flashState.flash_stay ? " (stay-in-DFU)" : "");
         req->send(200, "text/plain", msg);
     });
 
@@ -2201,7 +2221,9 @@ void WebServer::start() {
         uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
         uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
         // Safety cap — don't let a typo brick the whole flash.
-        if (size > 0x10000) { req->send(400, "text/plain", "size capped at 0x10000 (64 KB)"); return; }
+        // Allow up to 2 MB in one call so a full app partition (1.88 MB)
+        // can be erased in one SYNC session without loop-induced drops.
+        if (size > 0x200000) { req->send(400, "text/plain", "size capped at 0x200000 (2 MB)"); return; }
         if (offset > 0x400000 || offset + size > 0x400000) {
             req->send(400, "text/plain", "range outside 4 MB flash");
             return;
@@ -2232,6 +2254,97 @@ void WebServer::start() {
         if (s_dump.buf) { free(s_dump.buf); s_dump.buf = nullptr; }
         s_dump.size = 0; s_dump.progress = 0; s_dump.stage = ""; s_dump.error = "";
         req->send(200, "text/plain", "cleared");
+    });
+
+    // Fast flash-region integrity check. ROM computes MD5 over the
+    // requested range and returns 16 raw bytes (or 32 ASCII hex from
+    // some ROMs — ESPFlasher::spiFlashMd5 handles both). ~600x faster
+    // than readback for verifying writes.
+    //
+    //  POST /api/flash/md5  form: offset=<hex>&size=<hex>
+    //  -> {"md5": "ab12…", "offset": 0x10000, "size": 0x130000}
+    s_server->on("/api/flash/md5", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
+            req->send(400, "text/plain", "need offset + size");
+            return;
+        }
+        uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
+        uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "flash_md5")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+        uint8_t digest[16];
+        ESPFlasher::Result r = ESPFlasher::spiFlashMd5(cfg, offset, size, digest);
+        PinPort::release(PinPort::PORT_B);
+        if (r != ESPFlasher::FLASH_OK) {
+            req->send(500, "text/plain", ESPFlasher::errorString(r));
+            return;
+        }
+        char hex[33];
+        for (int i = 0; i < 16; i++) sprintf(hex + i * 2, "%02x", digest[i]);
+        hex[32] = 0;
+        JsonDocument d;
+        d["offset"] = offset;
+        d["size"]   = size;
+        d["md5"]    = hex;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // Erase a full partition by looping erase_region chunks. Use to wipe
+    // the entire app1 (MILELRS) partition which is 1.88 MB — exceeds
+    // the single-call 64 KB cap. Blocking, ~5-10 s total.
+    //
+    //  POST /api/flash/erase_partition  form: offset=<hex>&size=<hex>&chunk=0x10000
+    s_server->on("/api/flash/erase_partition", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
+            req->send(400, "text/plain", "need offset + size");
+            return;
+        }
+        uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
+        uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
+        uint32_t chunk  = req->hasParam("chunk", true)
+            ? strtoul(req->getParam("chunk", true)->value().c_str(), nullptr, 0) : 0x10000;
+        if (size > 0x200000) {
+            req->send(400, "text/plain", "size > 2 MB refused");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "erase_part")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        uint32_t done = 0;
+        bool ok = true;
+        const char *err = nullptr;
+        while (done < size && ok) {
+            uint32_t n = chunk;
+            if (done + n > size) n = size - done;
+            ESPFlasher::Result r = ESPFlasher::eraseRegion(cfg, offset + done, n);
+            if (r != ESPFlasher::FLASH_OK) { ok = false; err = ESPFlasher::errorString(r); break; }
+            done += n;
+            delay(5);
+        }
+        PinPort::release(PinPort::PORT_B);
+        if (ok) {
+            char msg[96];
+            snprintf(msg, sizeof(msg), "Erased %u bytes @ 0x%x in %u chunks",
+                     (unsigned)done, (unsigned)offset, (unsigned)((done + chunk - 1) / chunk));
+            req->send(200, "text/plain", msg);
+        } else {
+            req->send(500, "text/plain", err ? err : "partition erase failed");
+        }
     });
 
     // Exit stub / ROM cleanly — sends CMD_RUN_USER_CODE (0xD3).

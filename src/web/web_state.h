@@ -83,6 +83,8 @@ struct FlashState {
     String stage;                   // "Connecting", "Erasing", "Writing", "Done"
     String lastResult;              // final status message
     uint32_t flash_offset = 0;      // target offset (0 for full image, 0x10000 for app0)
+    bool flash_raw = false;          // skip format detection (writes arbitrary blobs, e.g. partition tables)
+    bool flash_stay = false;         // after write, keep RX in DFU (for chaining multiple flashes)
 };
 extern FlashState flashState;
 

@@ -16,6 +16,7 @@
 #include "web/web_server.h"
 #include "web/web_state.h"
 #include "battery/dji_battery.h"
+#include "battery/autel_battery.h"
 #include "battery/smbus_bridge.h"
 #include "battery/smbus_bridge_ui.h"
 #include "core/usb_mode.h"
@@ -78,6 +79,7 @@ void setup() {
     // Auto-start WiFi + web server in background
     autoStartWifi();
     DJIBattery::init(); // I2C for battery telemetry via web
+    AutelBattery::init(); // Autel read-only support (shares Wire1/Port B, 0x0B)
     SMBusBridge::begin();
     UsbMode::applyAtBoot();   // attach HID/Vendor interfaces if enabled in NVS
 
