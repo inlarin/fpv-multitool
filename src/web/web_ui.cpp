@@ -630,20 +630,121 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 <!-- ===== ELRS FLASH ===== -->
 <div id="tab-elrs" class="tab-content" style="display:none">
 
-  <!-- ===== RX Mode Detector (smart state probe) ===== -->
+  <!-- ===== 1. RX Status (consolidated: mode + identity from DEVICE_PING) ===== -->
   <div class="card">
-    <h2>RX Mode</h2>
+    <h2>RX Status</h2>
     <div class="warning">
-      Плата пробует 3 канала на Port B: ROM DFU @115200, ELRS in-app stub @420000, passive CRSF sniff @420000. Результат определяет какие кнопки ниже активны.
+      Один клик — плата пробует CRSF DEVICE_PING, ROM DFU sync, in-app stub sync. Показывает режим + (если RX в app) имя прошивки / версию / количество LUA-параметров.
     </div>
-    <div class="row"><span class="label">Current state:</span>
-      <span class="value" id="rxMode">
-        <span id="rxModeBadge" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px">unknown</span>
+    <div class="row"><span class="label">Mode:</span>
+      <span class="value">
+        <span id="rxModeBadge" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px">—</span>
         <small id="rxModeHint" style="color:var(--text-dim);margin-left:8px"></small>
       </span>
     </div>
-    <button onclick="rxProbeMode()" id="rxProbeBtn" style="width:100%">🔍 Probe RX mode</button>
+    <div class="row"><span class="label">Firmware:</span><span class="value" id="rxName">—</span></div>
+    <div class="row"><span class="label">Version:</span><span class="value" id="rxVer" style="font-family:monospace">—</span></div>
+    <div class="row"><span class="label">Serial / HW ID:</span><span class="value" id="rxIds" style="font-family:monospace;font-size:11px">—</span></div>
+    <div class="row"><span class="label">LUA param count:</span><span class="value" id="rxFields">—</span></div>
+    <button onclick="rxProbeMode()" id="rxProbeBtn" style="width:100%">🔍 Probe RX</button>
   </div>
+
+  <!-- ===== 2. Flash Firmware (unified flow) ===== -->
+  <div class="card">
+    <h2>Flash Firmware</h2>
+    <div class="warning">
+      <b>Источник</b> → <b>цель</b> → Flash. Путь (ROM DFU / in-app stub) выбирается по режиму RX автоматом. ROM DFU — полная прошивка (bootloader+partitions+app), требует BOOT+power-cycle. Stub-flash — только app0/app1, работает когда RX в app (без кнопок).
+    </div>
+
+    <!-- Step 1: Source -->
+    <div class="row"><span class="label">1. Source:</span>
+      <select id="fwSource" onchange="fwSourceChange()" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+        <option value="catalog">Catalog (official ELRS artifactory)</option>
+        <option value="upload">Upload from computer</option>
+      </select>
+    </div>
+
+    <div id="fwCatalogBox" style="margin:6px 0;padding:8px;background:var(--card-bg2);border:1px solid var(--border-soft);border-radius:4px">
+      <div class="row"><span class="label">Model:</span>
+        <select id="fwModel" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333;max-width:240px"></select>
+      </div>
+      <div class="row"><span class="label">Version:</span>
+        <select id="fwVersion" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+          <option value="3.5.3">3.5.3 (2024-11, proven)</option>
+          <option value="3.6.3" selected>3.6.3 (2026-01, last 3.x)</option>
+          <option value="4.0.0">4.0.0 (2026-02, latest LittleFS)</option>
+        </select>
+      </div>
+      <div class="row"><span class="label">Variant:</span>
+        <select id="fwVariant" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+          <option value="FCC" selected>FCC (US 915 + 2.4 ISM)</option>
+          <option value="LBT">LBT (EU 868 + 2.4 CE)</option>
+        </select>
+      </div>
+      <button onclick="fwFetch()" id="fwFetchBtn" style="width:100%">⬇ Download + cache in PSRAM</button>
+    </div>
+
+    <div id="fwUploadBox" style="margin:6px 0;padding:8px;background:var(--card-bg2);border:1px solid var(--border-soft);border-radius:4px;display:none">
+      <input type="file" id="fwUploadFile" accept=".bin,.gz,.elrs" onchange="fwUploadSelect()" style="margin:6px 0;width:100%">
+      <button onclick="fwDoUpload()" id="fwDoUploadBtn" style="width:100%" disabled>⬆ Upload to PSRAM</button>
+    </div>
+
+    <div class="row"><span class="label">Cached:</span><span class="value" id="fwCached">—</span></div>
+
+    <!-- Step 2: Target -->
+    <div class="row"><span class="label">2. Target:</span>
+      <select id="fwTarget" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+        <option value="0x10000">app0 @0x10000 (primary slot)</option>
+        <option value="0x1f0000">app1 @0x1F0000 (backup slot)</option>
+        <option value="0x0">full image @0x0 (incl. bootloader — ROM DFU only)</option>
+      </select>
+    </div>
+
+    <!-- Step 3: Path (auto) -->
+    <div class="row"><span class="label">3. Path:</span>
+      <span class="value" id="fwPath" style="font-family:monospace;font-size:11px">—</span>
+    </div>
+
+    <button onclick="fwFlash()" id="fwFlashBtn" style="width:100%;background:#0a3;margin-top:6px" disabled>🔥 Flash</button>
+
+    <div class="row" style="margin-top:6px"><span class="label">Status:</span><span class="value" id="fwStage">idle</span></div>
+    <div class="bar"><div class="bar-fill" id="fwBar" style="width:0%;background:#fa0"></div></div>
+    <div id="fwResult" style="margin-top:8px;font-family:monospace;font-size:11px;white-space:pre-wrap"></div>
+  </div>
+
+  <!-- ===== 3. Controls ===== -->
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="warning">
+      Прямые команды к приёмнику. CRSF-команды работают когда RX в app (не в DFU/WiFi). OTADATA-переключение требует DFU.
+    </div>
+    <div class="grid">
+      <button onclick="ctrlBind()" title="CRSF 'bd' frame → RX entering 60s bind window">🔗 Enter binding</button>
+      <button onclick="ctrlWifi()" title="MSP 0x0E → RX raises ExpressLRS RX AP (10.0.0.1 / expresslrs)">📡 Force WiFi</button>
+    </div>
+    <div class="grid" style="margin-top:4px">
+      <button onclick="ctrlStub()" title="CRSF 'bl' frame → RX enters in-app stub flasher @420000">⚡ Enter stub flasher</button>
+      <button onclick="ctrlExitDfu()" title="RUN_USER_CODE → RX reboots into OTADATA-selected app">↩ Exit DFU → app</button>
+    </div>
+    <div class="grid" style="margin-top:4px">
+      <button onclick="ctrlBoot(0)" class="success" title="Flip OTADATA → app0 on next reboot (requires DFU)">🅰 Boot app0</button>
+      <button onclick="ctrlBoot(1)" class="success" title="Flip OTADATA → app1 on next reboot (requires DFU)">🅱 Boot app1</button>
+    </div>
+    <div id="ctrlMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
+    <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
+      <b>Cannot</b>: exit WiFi via CRSF (нужен HTTP POST на 10.0.0.1 через телефон или физ. power-cycle). Force ROM DFU (нет RESET-провода на плате — только BOOT, нужно физически держать).
+    </div>
+  </div>
+
+  <!-- ===== 4. Advanced (collapsed legacy + debug cards) ===== -->
+  <details style="margin:8px 0">
+    <summary style="cursor:pointer;padding:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;font-weight:bold">▶ Advanced (legacy flash paths, RX dump, hardware.json, raw I/O, 5-step wizard)</summary>
+    <div style="margin-top:8px">
+    <!--
+      Legacy cards kept for power-user flows. The three cards above cover the
+      99% paths (Status / Flash / Controls). Everything below is either
+      diagnostic or explicitly low-level.
+    -->
 
   <!-- ===== Receiver Overview (unified identity) ===== -->
   <div class="card">
@@ -880,7 +981,10 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       Скорость ~12–25 KB/s, 4 MB ≈ 3–5 минут.
     </div>
   </div>
-</div>
+
+    </div>  <!-- /details content wrapper -->
+  </details>  <!-- /Advanced -->
+</div>  <!-- /#tab-elrs -->
 
 <!-- ===== CRSF ===== -->
 <div id="tab-crsf" class="tab-content" style="display:none">
@@ -1334,7 +1438,15 @@ function showTab(name) {
   if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
-  if (name === 'elrs') { rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); renderCatalog(); }
+  if (name === 'elrs') {
+    // Expose top-level consts on window so new fw*/ctrl* helpers can reach them
+    if (!window.ELRS_MODELS)   window.ELRS_MODELS = ELRS_MODELS;
+    if (!window.ELRS_RELEASES) window.ELRS_RELEASES = ELRS_RELEASES;
+    fwPopulateModels(); fwSourceChange(); fwPathUpdate();
+    // Hook onchange → path auto-update
+    const tgt = document.getElementById('fwTarget'); if (tgt) tgt.onchange = fwPathUpdate;
+    rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); renderCatalog();
+  }
 }
 
 // === SERVO ===
@@ -2457,9 +2569,14 @@ async function rxProbeMode() {
   const btn = document.getElementById('rxProbeBtn');
   const badge = document.getElementById('rxModeBadge');
   const hint = document.getElementById('rxModeHint');
-  btn.disabled = true; btn.textContent = '⏳ Probing (~2s)…';
+  btn.disabled = true; btn.textContent = '⏳ Probing (~1s)…';
   badge.textContent = 'probing…';
   badge.style.background = '#444';
+  // Clear identity rows
+  for (const id of ['rxName','rxVer','rxIds','rxFields']) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '—';
+  }
   try {
     const txt = await postForm('/api/elrs/rx_mode');
     const d = JSON.parse(txt);
@@ -2474,8 +2591,17 @@ async function rxProbeMode() {
     badge.textContent = c.lbl;
     badge.style.background = c.bg;
     badge.style.color = c.fg;
-    hint.textContent = d.hint + '  [' + d.bytes_at_420 + ' B at 420000]';
+    hint.textContent = d.hint || '';
+    if (d.app_ok && d.app) {
+      document.getElementById('rxName').textContent = d.app.name || '—';
+      const sv = d.app.sw_version || 0;
+      const verStr = ((sv >>> 24) & 0xff) + '.' + ((sv >>> 16) & 0xff) + '.' + ((sv >>> 8) & 0xff) + '.' + (sv & 0xff);
+      document.getElementById('rxVer').textContent = verStr + '  (raw 0x' + sv.toString(16).padStart(8, '0') + ')';
+      document.getElementById('rxIds').textContent = 'serial=' + d.app.serial_no + '  hw=0x' + d.app.hw_id.toString(16);
+      document.getElementById('rxFields').textContent = d.app.field_count + ' (param_ver ' + d.app.parameter_version + ')';
+    }
     rxApplyModeGate();
+    fwPathUpdate();
   } catch (e) {
     _rxMode = 'error';
     badge.textContent = 'error';
@@ -2483,8 +2609,179 @@ async function rxProbeMode() {
     badge.style.color = '#fff';
     hint.textContent = (e.message || e);
   } finally {
-    btn.disabled = false; btn.textContent = '🔍 Probe RX mode';
+    btn.disabled = false; btn.textContent = '🔍 Probe RX';
   }
+}
+
+// ===== Flash Firmware unified flow =====
+let _fwCached = null;  // { name, size } tracker for PSRAM buffer
+function fwSourceChange() {
+  const src = document.getElementById('fwSource').value;
+  document.getElementById('fwCatalogBox').style.display = src === 'catalog' ? 'block' : 'none';
+  document.getElementById('fwUploadBox').style.display  = src === 'upload'  ? 'block' : 'none';
+}
+function fwPopulateModels() {
+  const m = document.getElementById('fwModel');
+  if (!m || m.options.length) return;
+  if (!window.ELRS_MODELS) return;
+  for (const model of ELRS_MODELS) {
+    const opt = document.createElement('option');
+    opt.value = model.id;
+    opt.textContent = model.name + ' [' + model.role + ' · ' + model.chip + ']';
+    opt.dataset.fw = model.fw;
+    m.appendChild(opt);
+  }
+  m.value = 'bayck.rx_dual.dualc3';
+}
+function fwPathUpdate() {
+  const target = parseInt(document.getElementById('fwTarget').value, 16);
+  const path = document.getElementById('fwPath');
+  const btn  = document.getElementById('fwFlashBtn');
+  let pathText = '', pathOk = false;
+  if (target === 0) {
+    if (_rxMode === 'dfu') { pathText = 'ROM DFU @115200 — full flash (bootloader + partitions + app)'; pathOk = true; }
+    else                   { pathText = 'requires ROM DFU — put RX in DFU (hold BOOT + power-cycle)'; pathOk = false; }
+  } else {
+    if (_rxMode === 'app' || _rxMode === 'stub') {
+      pathText = 'in-app stub @420000 — no physical buttons needed';
+      pathOk = true;
+    } else if (_rxMode === 'dfu') {
+      pathText = 'ROM DFU @115200 — RX already in DFU';
+      pathOk = true;
+    } else {
+      pathText = 'RX is ' + _rxMode + ' — Flash unavailable; Probe first';
+      pathOk = false;
+    }
+  }
+  path.textContent = pathText;
+  btn.disabled = !pathOk || !_fwCached;
+  btn.title = !_fwCached ? 'Cache firmware first (Download or Upload)' : pathText;
+}
+async function fwFetch() {
+  const status = document.getElementById('fwResult');
+  const btn = document.getElementById('fwFetchBtn');
+  btn.disabled = true; btn.textContent = '⏳ Working…';
+  try {
+    const version = document.getElementById('fwVersion').value;
+    const variant = document.getElementById('fwVariant').value;
+    const modelId = document.getElementById('fwModel').value;
+    const model   = ELRS_MODELS.find(m => m.id === modelId);
+    if (!model) throw new Error('no model selected');
+    const rel = ELRS_RELEASES.find(r => r.version === version);
+    if (!rel) throw new Error('no release ' + version);
+    const url = 'https://artifactory.expresslrs.org/ExpressLRS/' + rel.sha + '/firmware.zip';
+    const path = 'firmware/' + variant + '/' + model.fw + '/firmware.bin';
+    status.textContent = 'Loading JSZip…';
+    await ensureJSZip();
+    status.textContent = 'Downloading ' + version + ' zip (~25 MB)…';
+    const zipBlob = await (await fetch(url, {mode:'cors'})).blob();
+    status.textContent = 'Unpacking ' + path + '…';
+    const zip = await JSZip.loadAsync(zipBlob);
+    const entry = zip.file(path);
+    if (!entry) throw new Error('not in zip: ' + path);
+    const fwBlob = await entry.async('blob');
+    status.textContent = 'Uploading ' + (fwBlob.size/1024).toFixed(1) + ' KB…';
+    const fd = new FormData();
+    fd.append('firmware', fwBlob, 'firmware.bin');
+    const txt = await postForm('/api/flash/upload', fd);
+    _fwCached = { name: version + '/' + model.fw + '/' + variant, size: fwBlob.size };
+    document.getElementById('fwCached').textContent = _fwCached.name + ' (' + (_fwCached.size/1024).toFixed(1) + ' KB)';
+    status.textContent = '✓ ' + version + ' ready: ' + txt;
+    status.style.color = '#0f0';
+    fwPathUpdate();
+  } catch (e) {
+    status.textContent = '✗ ' + (e.message || e);
+    status.style.color = '#f66';
+  } finally {
+    btn.disabled = false; btn.textContent = '⬇ Download + cache in PSRAM';
+  }
+}
+let _fwLocalFile = null;
+function fwUploadSelect() {
+  _fwLocalFile = document.getElementById('fwUploadFile').files[0];
+  document.getElementById('fwDoUploadBtn').disabled = !_fwLocalFile;
+}
+async function fwDoUpload() {
+  if (!_fwLocalFile) return;
+  const status = document.getElementById('fwResult');
+  const btn = document.getElementById('fwDoUploadBtn');
+  btn.disabled = true;
+  try {
+    status.textContent = 'Uploading ' + (_fwLocalFile.size/1024).toFixed(1) + ' KB…';
+    const fd = new FormData();
+    fd.append('firmware', _fwLocalFile);
+    const txt = await postForm('/api/flash/upload', fd);
+    _fwCached = { name: 'local:' + _fwLocalFile.name, size: _fwLocalFile.size };
+    document.getElementById('fwCached').textContent = _fwCached.name + ' (' + (_fwCached.size/1024).toFixed(1) + ' KB)';
+    status.textContent = '✓ ' + txt;
+    status.style.color = '#0f0';
+    fwPathUpdate();
+  } catch (e) {
+    status.textContent = '✗ ' + (e.message || e);
+    status.style.color = '#f66';
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function fwFlash() {
+  const status = document.getElementById('fwResult');
+  const stage  = document.getElementById('fwStage');
+  const bar    = document.getElementById('fwBar');
+  const btn    = document.getElementById('fwFlashBtn');
+  const target = document.getElementById('fwTarget').value;
+  if (!_fwCached) { alert('Cache firmware first'); return; }
+  // Path selection from current RX mode.
+  const via = (target !== '0x0' && (_rxMode === 'app' || _rxMode === 'stub')) ? 'stub' : '';
+  if (!confirm('Flash ' + _fwCached.name + ' to ' + target + (via ? ' via in-app stub (no BOOT required)' : ' via ROM DFU (RX must be in DFU)'))) return;
+  btn.disabled = true;
+  status.textContent = '';
+  try {
+    const fd = new FormData();
+    fd.append('offset', target);
+    if (via) fd.append('via', via);
+    fd.append('stay', target === '0x0' ? '0' : '0');
+    const reply = await postForm('/api/flash/start', fd);
+    status.textContent = reply;
+    // Poll /api/flash/status
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const s = await getJson('/api/flash/status');
+      stage.textContent = s.stage || '-';
+      bar.style.width = (s.progress || 0) + '%';
+      if (!s.in_progress && s.lastResult) {
+        status.textContent = (s.lastResult.startsWith('OK') ? '✓ ' : '✗ ') + s.lastResult;
+        status.style.color = s.lastResult.startsWith('OK') ? '#0f0' : '#f66';
+        break;
+      }
+    }
+  } catch (e) {
+    status.textContent = '✗ ' + (e.message || e);
+    status.style.color = '#f66';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ===== Controls =====
+function ctrlLog(msg, err) {
+  const el = document.getElementById('ctrlMsg');
+  const ts = new Date().toLocaleTimeString();
+  el.textContent = ts + '  ' + (err ? '✗ ' : '✓ ') + msg + '\n' + (el.textContent || '');
+  el.style.color = err ? '#f66' : '#0f0';
+}
+async function ctrlBind()  { try { ctrlLog(await postForm('/api/elrs/bind')); }
+                            catch (e) { ctrlLog(e.message || e, true); } }
+async function ctrlWifi()  { try { const r = await postForm('/api/elrs/enable_wifi'); ctrlLog(r); }
+                            catch (e) { ctrlLog(e.message || e, true); } }
+async function ctrlStub()  { try { ctrlLog(await postForm('/api/crsf/reboot_to_bl')); }
+                            catch (e) { ctrlLog(e.message || e, true); } }
+async function ctrlExitDfu() { try { ctrlLog(await postForm('/api/flash/exit_dfu')); }
+                               catch (e) { ctrlLog(e.message || e, true); } }
+async function ctrlBoot(slot) {
+  try {
+    const fd = new FormData(); fd.append('slot', String(slot));
+    ctrlLog(await postForm('/api/otadata/select', fd));
+  } catch (e) { ctrlLog(e.message || e, true); }
 }
 
 // ===== Receiver Overview (unified one-session identity) =====
