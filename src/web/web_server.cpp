@@ -2263,6 +2263,49 @@ void WebServer::start() {
     //
     //  POST /api/flash/md5  form: offset=<hex>&size=<hex>
     //  -> {"md5": "ab12…", "offset": 0x10000, "size": 0x130000}
+    // Synchronous small-region flash read. Returns hex (2 chars/byte) in the
+    // response body. No background task, no polling — the entire read happens
+    // inside the request handler so you can verify a freshly-flashed image
+    // within a single DFU session (the async /api/flash/dump/* path requires
+    // multiple round-trips and often loses DFU between them).
+    //  POST /api/flash/read_bytes  form: offset=<hex>&size=<hex, max 2048>
+    s_server->on("/api/flash/read_bytes", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
+            req->send(400, "text/plain", "need offset + size");
+            return;
+        }
+        uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
+        uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
+        if (size == 0 || size > 2048) {
+            req->send(400, "text/plain", "size must be 1..2048");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "flash_read_bytes")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+        uint8_t buf[2048];
+        ESPFlasher::Result r = ESPFlasher::readFlash(cfg, offset, size, buf);
+        PinPort::release(PinPort::PORT_B);
+        if (r != ESPFlasher::FLASH_OK) {
+            req->send(500, "text/plain", ESPFlasher::errorString(r));
+            return;
+        }
+        String hex;
+        hex.reserve(size * 2 + 16);
+        char h[3];
+        for (uint32_t i = 0; i < size; i++) {
+            snprintf(h, sizeof(h), "%02x", buf[i]);
+            hex += h;
+        }
+        req->send(200, "text/plain", hex);
+    });
+
     s_server->on("/api/flash/md5", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
             req->send(400, "text/plain", "need offset + size");

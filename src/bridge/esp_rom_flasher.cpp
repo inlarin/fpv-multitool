@@ -39,7 +39,11 @@ static const uint8_t CMD_RUN_USER_CODE = 0xD3; // exit stub/ROM -> boot selected
 static const uint8_t CMD_SPI_FLASH_MD5 = 0x13; // fast verify: ROM computes MD5 over a region
 
 // Parameters
-static const size_t FLASH_WRITE_BLOCK_SIZE = 1024;    // per FLASH_DATA packet
+// 4 KB per FLASH_DATA packet — aligns with SPI flash sector size so each
+// ack corresponds to exactly one erase-unit commit. 1 KB blocks caused
+// ROM to fall off a cliff at block 287 (the 288th 1-KB ack apparently
+// hits an internal buffer boundary). 4 KB is what esptool's stub uses.
+static const size_t FLASH_WRITE_BLOCK_SIZE = 4096;    // per FLASH_DATA packet
 static const uint32_t DEFAULT_TIMEOUT_MS = 3000;
 static const uint32_t SYNC_TIMEOUT_MS = 100;
 
@@ -130,8 +134,11 @@ static bool sendCmd(uint8_t cmd, const uint8_t *data, uint16_t size,
                      ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
     if (response_value) *response_value = value;
 
-    // Last 2 bytes = status
-    if (resp_size < 2 || n < 8 + resp_size) return true; // some commands have no status
+    // Last 2 bytes = status. Truncated frame → failure. SYNC is the only
+    // command with no status bytes, and it drains its replies via a separate
+    // loop in sync(), so reaching here with a short frame means a real
+    // communication drop (usually the 256 B default UART RX ring overflowed).
+    if (resp_size < 2 || n < 8 + resp_size) return false;
     uint8_t status = buf[8 + resp_size - 2];
     uint8_t err = buf[8 + resp_size - 1];
     (void)err;
@@ -240,8 +247,12 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size) {
     if (!cfg.uart || !data || size == 0) return FLASH_ERR_INVALID_INPUT;
 
     s_uart = cfg.uart;
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    // setRxBufferSize MUST be called before begin() — Arduino-ESP32
+    // allocates the UART ring during begin() and ignores later resizes
+    // until the next end()/begin() cycle. A stuck-at-256 ring overflows
+    // mid-frame at 115200 baud and desyncs the SLIP parser.
     s_uart->setRxBufferSize(4096);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     delay(100);
 
     if (cfg.progress) cfg.progress(0, "Connecting");
@@ -359,8 +370,8 @@ Result eraseRegion(const Config &cfg, uint32_t offset, size_t size) {
     if (!cfg.uart || size == 0) return FLASH_ERR_INVALID_INPUT;
 
     s_uart = cfg.uart;
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     s_uart->setRxBufferSize(4096);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     delay(100);
 
     if (cfg.progress) cfg.progress(0, "Connecting");
@@ -397,8 +408,8 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) 
     if (!cfg.uart || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
 
     s_uart = cfg.uart;
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     s_uart->setRxBufferSize(8192);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     delay(100);
 
     if (cfg.progress) cfg.progress(0, "Connecting");
@@ -475,10 +486,18 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) 
 Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t out[16]) {
     if (!cfg.uart || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
     s_uart = cfg.uart;
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     s_uart->setRxBufferSize(1024);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     delay(50);
     if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+
+    // ESP32-C3 ROM's SPI_FLASH_MD5 needs the SPI peripheral attached and
+    // geometry declared — same prerequisites as READ_FLASH. Without them the
+    // ROM rejects the command with status=1 (symptom: "READ_FLASH rejected").
+    spiAttach();
+    uint32_t fs = offset + size;
+    if (fs < 0x400000) fs = 0x400000;
+    spiSetParams(fs);
 
     uint8_t data[16];
     *(uint32_t*)(data + 0)  = offset;
@@ -552,8 +571,8 @@ Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t ou
 Result runUserCode(const Config &cfg) {
     if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
     s_uart = cfg.uart;
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     s_uart->setRxBufferSize(1024);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
     delay(50);
     // Sync first to make sure we're talking to the stub/ROM (some ROMs
     // won't accept commands until they've seen at least one valid frame).
