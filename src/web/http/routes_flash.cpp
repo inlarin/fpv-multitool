@@ -199,6 +199,93 @@ void executeFlash() {
 // registration lambdas below — preserving captures / behaviour verbatim.
 void registerRoutesFlash(AsyncWebServer *s_server) {
 
+    // Probe the current operational mode of a connected RX via Port B. Tries,
+    // in order: ROM DFU sync @ 115200, ELRS in-app stub sync @ 420000, then
+    // best-effort app-telemetry sniff @ 420000. Returns one of:
+    //   "dfu"     — ROM bootloader answered SYNC at 115200
+    //   "stub"    — ELRS in-app stub answered SYNC at 420000 (RX in stub mode)
+    //   "app"     — UART bytes observed on 420000 (CRSF telemetry heuristic)
+    //   "silent"  — no response and no bytes on either baud (likely in WiFi AP)
+    // UI uses this to enable/disable the right flash path buttons.
+    //   POST /api/elrs/rx_mode
+    s_server->on("/api/elrs/rx_mode", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_rx_mode")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        const char *mode = "silent";
+        uint32_t bytes_at_420 = 0;
+        bool dfu_ok = false, stub_ok = false;
+
+        // Test 1: ROM DFU SYNC @ 115200.
+        {
+            ESPFlasher::Config cfg;
+            cfg.uart = &Serial1;
+            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+            cfg.baud_rate = 115200;
+            ESPFlasher::ChipInfo ci;
+            if (ESPFlasher::chipInfo(cfg, &ci) == ESPFlasher::FLASH_OK && ci.ok) {
+                dfu_ok = true;
+                mode = "dfu";
+            }
+        }
+
+        // Test 2: in-app stub SYNC @ 420000 (only if DFU didn't match).
+        if (!dfu_ok) {
+            ESPFlasher::Config cfg;
+            cfg.uart = &Serial1;
+            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+            cfg.baud_rate = 420000;
+            ESPFlasher::ChipInfo ci;
+            if (ESPFlasher::chipInfo(cfg, &ci) == ESPFlasher::FLASH_OK && ci.ok) {
+                stub_ok = true;
+                mode = "stub";
+            }
+        }
+
+        // Test 3: passive sniff @ 420000 for ~700 ms (CRSF telemetry comes at
+        // ~10 ms cadence on running ELRS with a linked handset). No reply
+        // required — any byte counts.
+        if (!dfu_ok && !stub_ok) {
+            Serial1.setRxBufferSize(1024);
+            Serial1.begin(420000, SERIAL_8N1,
+                          PinPort::rx_pin(PinPort::PORT_B),
+                          PinPort::tx_pin(PinPort::PORT_B));
+            delay(10);
+            while (Serial1.available()) Serial1.read();
+            uint32_t deadline = millis() + 700;
+            while (millis() < deadline) {
+                while (Serial1.available()) { Serial1.read(); bytes_at_420++; }
+                delay(5);
+            }
+            Serial1.end();
+            if (bytes_at_420 > 0) mode = "app";
+        }
+
+        PinPort::release(PinPort::PORT_B);
+
+        JsonDocument d;
+        d["mode"]          = mode;
+        d["dfu_ok"]        = dfu_ok;
+        d["stub_ok"]       = stub_ok;
+        d["bytes_at_420"]  = bytes_at_420;
+        d["hint"] =
+            dfu_ok  ? "ROM DFU — use Flash(DFU) path; Stub-flash unavailable" :
+            stub_ok ? "in-app stub already active — SYNC works @ 420000" :
+            (bytes_at_420 > 0)
+                    ? "running app — Stub-flash available; listen found CRSF telemetry"
+                    : "silent — likely WiFi AP mode (UART disabled) OR link dropped; "
+                      "reboot RX (physical or HTTP /reboot on 10.0.0.1) to return to app";
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
     s_server->on("/api/flash/upload", HTTP_POST,
         [](AsyncWebServerRequest *req) {
             // If upload handler flagged an out-of-memory or overflow condition,

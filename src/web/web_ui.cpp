@@ -630,6 +630,21 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 <!-- ===== ELRS FLASH ===== -->
 <div id="tab-elrs" class="tab-content" style="display:none">
 
+  <!-- ===== RX Mode Detector (smart state probe) ===== -->
+  <div class="card">
+    <h2>RX Mode</h2>
+    <div class="warning">
+      Плата пробует 3 канала на Port B: ROM DFU @115200, ELRS in-app stub @420000, passive CRSF sniff @420000. Результат определяет какие кнопки ниже активны.
+    </div>
+    <div class="row"><span class="label">Current state:</span>
+      <span class="value" id="rxMode">
+        <span id="rxModeBadge" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px">unknown</span>
+        <small id="rxModeHint" style="color:var(--text-dim);margin-left:8px"></small>
+      </span>
+    </div>
+    <button onclick="rxProbeMode()" id="rxProbeBtn" style="width:100%">🔍 Probe RX mode</button>
+  </div>
+
   <!-- ===== Receiver Overview (unified identity) ===== -->
   <div class="card">
     <h2>Receiver Overview</h2>
@@ -2416,6 +2431,62 @@ async function getJson(url) {
   return r.json();
 }
 
+// ===== RX mode detector =====
+// Probes RX on Port B for current operational state. Runs once when ELRS
+// tab opens + on demand via button. Result gates which flash buttons are
+// enabled (Stub-flash needs mode='app', DFU flash wants 'dfu').
+let _rxMode = 'unknown';
+function rxApplyModeGate() {
+  // Enable/disable the per-slot flash buttons based on mode.
+  const stubButtons = document.querySelectorAll('button[onclick^="rxFlashStub"]');
+  const dfuButtons  = document.querySelectorAll('button[onclick^="rxFlashToSlot"]');
+  stubButtons.forEach(b => {
+    b.disabled = (_rxMode !== 'app' && _rxMode !== 'stub');
+    b.title = b.disabled
+      ? 'Stub-flash requires RX in app or already in stub — current mode: ' + _rxMode
+      : 'Auto-flash via in-app ELRS stub @420000';
+  });
+  dfuButtons.forEach(b => {
+    b.disabled = (_rxMode !== 'dfu');
+    b.title = b.disabled
+      ? 'Flash (DFU) requires RX in ROM DFU (hold BOOT + power-cycle) — current mode: ' + _rxMode
+      : 'ROM DFU flash @115200';
+  });
+}
+async function rxProbeMode() {
+  const btn = document.getElementById('rxProbeBtn');
+  const badge = document.getElementById('rxModeBadge');
+  const hint = document.getElementById('rxModeHint');
+  btn.disabled = true; btn.textContent = '⏳ Probing (~2s)…';
+  badge.textContent = 'probing…';
+  badge.style.background = '#444';
+  try {
+    const txt = await postForm('/api/elrs/rx_mode');
+    const d = JSON.parse(txt);
+    _rxMode = d.mode;
+    const colors = {
+      'dfu':    {bg:'#c60',   fg:'#fff', lbl:'DFU (ROM @115200)'},
+      'stub':   {bg:'#06c',   fg:'#fff', lbl:'STUB (@420000)'},
+      'app':    {bg:'#0a3',   fg:'#fff', lbl:'APP (running)'},
+      'silent': {bg:'#633',   fg:'#fcc', lbl:'SILENT (WiFi/halted)'},
+    };
+    const c = colors[d.mode] || {bg:'#333', fg:'#ccc', lbl:d.mode};
+    badge.textContent = c.lbl;
+    badge.style.background = c.bg;
+    badge.style.color = c.fg;
+    hint.textContent = d.hint + '  [' + d.bytes_at_420 + ' B at 420000]';
+    rxApplyModeGate();
+  } catch (e) {
+    _rxMode = 'error';
+    badge.textContent = 'error';
+    badge.style.background = '#900';
+    badge.style.color = '#fff';
+    hint.textContent = (e.message || e);
+  } finally {
+    btn.disabled = false; btn.textContent = '🔍 Probe RX mode';
+  }
+}
+
 // ===== Receiver Overview (unified one-session identity) =====
 async function rxScan() {
   const btn = document.getElementById('rxScanBtn');
@@ -2466,6 +2537,7 @@ async function rxScan() {
       slotsDiv.appendChild(col);
     }
     ov.style.display = 'block';
+    rxApplyModeGate();  // re-gate after slot buttons rendered
   } catch (e) {
     err.textContent = 'Scan failed: ' + (e.message || e);
   } finally {
