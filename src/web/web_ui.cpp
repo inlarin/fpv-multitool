@@ -629,6 +629,21 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 
 <!-- ===== ELRS FLASH ===== -->
 <div id="tab-elrs" class="tab-content" style="display:none">
+  <!-- ===== Chip detect ===== -->
+  <div class="card">
+    <h2>Detect receiver</h2>
+    <div class="warning">
+      RX должен быть в <b>ROM DFU</b> (hold BOOT + power-cycle). Определяет
+      chip family и MAC до начала прошивки — если не отвечает, остальные
+      кнопки тоже не сработают.
+    </div>
+    <div class="row"><span class="label">Chip:</span><span class="value" id="chipName">-</span></div>
+    <div class="row"><span class="label">MAC:</span><span class="value" id="chipMac" style="font-family:monospace;font-size:11px">-</span></div>
+    <div class="row"><span class="label">Magic:</span><span class="value" id="chipMagic" style="font-family:monospace;font-size:11px">-</span></div>
+    <button onclick="detectChip()" id="chipDetectBtn" style="width:100%">Detect chip</button>
+    <div id="chipResult" style="margin-top:8px;font-family:monospace;font-size:11px"></div>
+  </div>
+
   <!-- ===== RX flip 5-step wizard ===== -->
   <div class="card">
     <h2>RX vanilla-flip wizard (5 steps)</h2>
@@ -1216,7 +1231,7 @@ function showWorkspace(ws) {
 const _tabTimers = ['_escTelemTimer', '_smbLogTimer', '_vrvTimer',
                     'cpLogTimer', '_rcPollTimer', '_servoStateTimer',
                     '_dumpPoll', '_otaPullPollTimer',
-                    '_slotFlashPoll', '_otadataPoll'];
+                    '_slotFlashPoll', '_otadataPoll', '_flashPoll'];
 function _clearTabTimers() {
   _tabTimers.forEach(name => {
     try {
@@ -2327,6 +2342,48 @@ function showCmdResult(msg) {
 }
 
 // === ELRS FLASH ===
+// Shared fetch helper — throws on HTTP error so callers can't confuse a
+// 4xx/5xx with success. fetch() alone resolves on any HTTP response, so
+// plain `.then(r=>r.text())` silently swallows "Port B busy" 409s.
+async function postForm(url, form) {
+  const r = await fetch(url, form ? {method:'POST', body: form} : {method:'POST'});
+  const t = await r.text();
+  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (t || r.statusText));
+  return t;
+}
+async function getJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (await r.text()));
+  return r.json();
+}
+
+// ===== Chip detection =====
+async function detectChip() {
+  const btn = document.getElementById('chipDetectBtn');
+  const setRes = (msg, err) => {
+    const el = document.getElementById('chipResult');
+    el.style.color = err ? '#f66' : '#0f0';
+    el.textContent = (new Date().toLocaleTimeString()) + '  ' + msg;
+  };
+  btn.disabled = true;
+  document.getElementById('chipName').textContent = 'detecting...';
+  document.getElementById('chipMac').textContent = '-';
+  document.getElementById('chipMagic').textContent = '-';
+  try {
+    const txt = await postForm('/api/elrs/chip_info');
+    const j = JSON.parse(txt);
+    document.getElementById('chipName').textContent = j.chip || '-';
+    document.getElementById('chipMac').textContent = j.mac_ok ? j.mac : '(not supported for this chip)';
+    document.getElementById('chipMagic').textContent = j.magic_hex || '-';
+    setRes('detect OK: ' + (j.chip || 'unknown'));
+  } catch (e) {
+    document.getElementById('chipName').textContent = 'FAIL';
+    setRes(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 let selectedFile = null;
 function onFwSelect() {
   selectedFile = document.getElementById('fwFile').files[0];
@@ -2335,35 +2392,73 @@ function onFwSelect() {
     document.getElementById('uploadBtn').disabled = false;
   }
 }
-function uploadFw() {
+async function uploadFw() {
   if (!selectedFile) return;
   const fd = new FormData();
   fd.append('firmware', selectedFile);
-  document.getElementById('flashStage').textContent = 'Uploading...';
+  const stage = document.getElementById('flashStage');
+  const result = document.getElementById('flashResult');
+  stage.textContent = 'Uploading...';
   document.getElementById('uploadBtn').disabled = true;
-  fetch('/api/flash/upload', {method:'POST', body:fd})
-    .then(r=>r.text()).then(t=>{
-      document.getElementById('flashStage').textContent = 'Uploaded';
-      document.getElementById('flashBtn').disabled = false;
-      document.getElementById('flashResult').textContent = t;
-    })
-    .catch(e=>{
-      document.getElementById('flashStage').textContent = 'Upload error';
-      document.getElementById('flashResult').textContent = e;
-      document.getElementById('uploadBtn').disabled = false;
-    });
-}
-function startFlash() {
-  if (!confirm('Убедись что приёмник в DFU режиме!\nПродолжить прошивку?')) return;
   document.getElementById('flashBtn').disabled = true;
-  document.getElementById('flashResult').textContent = '';
-  fetch('/api/flash/start', {method:'POST'})
-    .then(r=>r.text()).then(t=>{
-      document.getElementById('flashResult').textContent = t;
-    });
+  try {
+    const t = await postForm('/api/flash/upload', fd);
+    stage.textContent = 'Uploaded';
+    result.style.color = '#0f0';
+    result.textContent = t;
+    document.getElementById('flashBtn').disabled = false;
+  } catch (e) {
+    stage.textContent = 'Upload error';
+    result.style.color = '#f66';
+    result.textContent = e.message;
+  } finally {
+    document.getElementById('uploadBtn').disabled = false;
+  }
+}
+let _flashPoll = null;
+async function startFlash() {
+  if (!confirm('Убедись что приёмник в DFU режиме!\nПродолжить прошивку?')) return;
+  const btn = document.getElementById('flashBtn');
+  const result = document.getElementById('flashResult');
+  btn.disabled = true;
+  result.style.color = '#0f0';
+  result.textContent = '';
+  try {
+    const t = await postForm('/api/flash/start');
+    result.textContent = t;
+    if (!_flashPoll) _flashPoll = setInterval(flashPoll, 1000);
+  } catch (e) {
+    document.getElementById('flashStage').textContent = 'start error';
+    result.style.color = '#f66';
+    result.textContent = e.message;
+    btn.disabled = false;
+  }
+}
+function flashPoll() {
+  fetch('/api/flash/status').then(r => r.ok ? r.json() : null).then(j => {
+    if (!j) return;
+    const stage = j.stage || (j.in_progress ? 'flashing' : 'idle');
+    const pct = j.progress_pct || 0;
+    document.getElementById('flashStage').textContent =
+      j.in_progress ? (stage + ' (' + pct + '%)') : stage;
+    document.getElementById('flashBar').style.width = pct + '%';
+    if (!j.in_progress && !j.requested) {
+      if (_flashPoll) { clearInterval(_flashPoll); _flashPoll = null; }
+      if (j.lastResult) {
+        const lr = j.lastResult;
+        const result = document.getElementById('flashResult');
+        // "OK (verified …)" = success; anything else = failure
+        const isOk = lr.startsWith('OK') || /verified/i.test(lr);
+        result.style.color = isOk ? '#0f0' : '#f66';
+        result.textContent = 'Result: ' + lr;
+      }
+      // Re-enable flash button iff a firmware buffer is still loaded
+      document.getElementById('flashBtn').disabled = (j.fw_size === 0);
+    }
+  }).catch(()=>{ /* transient WiFi glitch — keep polling */ });
 }
 function clearFw() {
-  fetch('/api/flash/clear', {method:'POST'}).then(()=>{
+  postForm('/api/flash/clear').then(()=>{
     document.getElementById('fwFile').value = '';
     document.getElementById('fwSize').textContent = '-';
     document.getElementById('flashStage').textContent = 'idle';
@@ -2372,12 +2467,15 @@ function clearFw() {
     document.getElementById('uploadBtn').disabled = true;
     document.getElementById('flashBtn').disabled = true;
     selectedFile = null;
+  }).catch(e => {
+    document.getElementById('flashResult').style.color = '#f66';
+    document.getElementById('flashResult').textContent = 'clear failed: ' + e.message;
   });
 }
 
 // === Receiver firmware DUMP ===
 let _dumpPoll = null;
-function dumpStart() {
+async function dumpStart() {
   const offset = document.getElementById('dumpOffset').value;
   const size   = document.getElementById('dumpSize').value;
   const fd = new FormData();
@@ -2387,18 +2485,19 @@ function dumpStart() {
   document.getElementById('dumpStage').textContent = 'starting...';
   document.getElementById('dumpStartBtn').disabled = true;
   document.getElementById('dumpDownloadBtn').disabled = true;
-  fetch('/api/flash/dump/start', {method:'POST', body: fd})
-    .then(r => r.text()).then(t => {
-      document.getElementById('dumpStage').textContent = t;
-      if (!_dumpPoll) _dumpPoll = setInterval(dumpPoll, 1000);
-    })
-    .catch(e => {
-      document.getElementById('dumpError').textContent = 'start failed: ' + e;
-      document.getElementById('dumpStartBtn').disabled = false;
-    });
+  try {
+    const t = await postForm('/api/flash/dump/start', fd);
+    document.getElementById('dumpStage').textContent = t;
+    if (!_dumpPoll) _dumpPoll = setInterval(dumpPoll, 1000);
+  } catch (e) {
+    document.getElementById('dumpError').textContent = e.message;
+    document.getElementById('dumpStage').textContent = 'start failed';
+    document.getElementById('dumpStartBtn').disabled = false;
+  }
 }
 function dumpPoll() {
-  fetch('/api/flash/dump/status').then(r=>r.json()).then(j=>{
+  fetch('/api/flash/dump/status').then(r => r.ok ? r.json() : null).then(j => {
+    if (!j) return;
     document.getElementById('dumpStage').textContent = j.stage || (j.running ? 'reading' : 'idle');
     document.getElementById('dumpBar').style.width = (j.progress || 0) + '%';
     document.getElementById('dumpError').textContent = j.error || '';
@@ -2407,18 +2506,23 @@ function dumpPoll() {
       document.getElementById('dumpStartBtn').disabled = false;
       document.getElementById('dumpDownloadBtn').disabled = !j.ready;
     }
-  }).catch(()=>{});
+  }).catch(e => {
+    document.getElementById('dumpError').textContent = 'poll error: ' + e.message;
+  });
 }
 function dumpDownload() {
   window.location.href = '/api/flash/dump/download';
 }
-function dumpClear() {
-  fetch('/api/flash/dump/clear', {method:'POST'}).then(()=>{
+async function dumpClear() {
+  try {
+    await postForm('/api/flash/dump/clear');
     document.getElementById('dumpStage').textContent = 'cleared';
     document.getElementById('dumpBar').style.width = '0%';
     document.getElementById('dumpError').textContent = '';
     document.getElementById('dumpDownloadBtn').disabled = true;
-  }).catch(e => console.warn('dumpClear failed:', e));
+  } catch (e) {
+    document.getElementById('dumpError').textContent = 'clear failed: ' + e.message;
+  }
 }
 
 // ===================================================================
@@ -2464,23 +2568,24 @@ function slotLog(msg, isError) {
   el.textContent = (new Date().toLocaleTimeString()) + '  ' + msg + '\n' + el.textContent;
 }
 
-function slotUpload() {
+async function slotUpload() {
   if (!_slotFile) return;
   const fd = new FormData();
   fd.append('firmware', _slotFile);
   document.getElementById('slotStage').textContent = 'Uploading...';
   document.getElementById('slotUploadBtn').disabled = true;
-  fetch('/api/flash/upload', {method:'POST', body: fd})
-    .then(r => r.text()).then(t => {
-      document.getElementById('slotStage').textContent = 'Uploaded';
-      document.getElementById('slotFlashBtn').disabled = false;
-      slotLog('upload OK: ' + t);
-    })
-    .catch(e => {
-      document.getElementById('slotStage').textContent = 'Upload error';
-      document.getElementById('slotUploadBtn').disabled = false;
-      slotLog('upload FAIL: ' + e, true);
-    });
+  document.getElementById('slotFlashBtn').disabled = true;
+  try {
+    const t = await postForm('/api/flash/upload', fd);
+    document.getElementById('slotStage').textContent = 'Uploaded';
+    document.getElementById('slotFlashBtn').disabled = false;
+    slotLog('upload OK: ' + t);
+  } catch (e) {
+    document.getElementById('slotStage').textContent = 'Upload error';
+    slotLog('upload FAIL: ' + e.message, true);
+  } finally {
+    document.getElementById('slotUploadBtn').disabled = false;
+  }
 }
 
 async function slotFlash() {
@@ -2525,23 +2630,31 @@ async function slotFlash() {
 }
 
 function slotFlashPollFn() {
-  fetch('/api/flash/status').then(r => r.json()).then(j => {
+  fetch('/api/flash/status').then(r => r.ok ? r.json() : null).then(j => {
+    if (!j) return;
     const stage = j.stage || (j.in_progress ? 'flashing' : 'idle');
-    document.getElementById('slotStage').textContent = stage + ' (' + (j.progress_pct || 0) + '%)';
+    document.getElementById('slotStage').textContent =
+      j.in_progress ? (stage + ' (' + (j.progress_pct || 0) + '%)') : stage;
     document.getElementById('slotBar').style.width = (j.progress_pct || 0) + '%';
-    if (!j.in_progress) {
+    if (!j.in_progress && !j.requested) {
       if (_slotFlashPoll) { clearInterval(_slotFlashPoll); _slotFlashPoll = null; }
       document.getElementById('slotFlashBtn').disabled = false;
-      if (j.lastResult) slotLog('done: ' + j.lastResult);
-      if (j.lastResult && /ok|success|done/i.test(j.lastResult)) {
-        slotLog('→ Теперь используй OTADATA card ниже чтобы пометить этот слот активным.');
-        rxWizMark('flash', 'ok');
+      if (j.lastResult) {
+        // "OK …" / "verified" = success. Anything with FAIL/error = bad.
+        // Plain `ok` substring match used to match "Gzip decompress failed".
+        const lr = j.lastResult;
+        const isOk = (lr.startsWith('OK') || /verified/i.test(lr)) && !/FAIL|ERROR/i.test(lr);
+        slotLog((isOk ? 'done OK: ' : 'FAIL: ') + lr, !isOk);
+        if (isOk) {
+          slotLog('→ Теперь используй OTADATA card ниже чтобы пометить этот слот активным.');
+          rxWizMark('flash', 'ok');
+        } else {
+          rxWizMark('flash', 'fail');
+        }
       }
     }
   }).catch(e => {
-    slotLog('poll FAIL: ' + e, true);
-    if (_slotFlashPoll) { clearInterval(_slotFlashPoll); _slotFlashPoll = null; }
-    document.getElementById('slotFlashBtn').disabled = false;
+    // Transient error — keep polling. Real failures surface via j.lastResult.
   });
 }
 

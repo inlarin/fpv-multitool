@@ -448,6 +448,8 @@ static void executeFlash() {
         size_t out_size = 0;
         decompressed = FirmwareUnpack::gunzip(fw_ptr, fw_size, &out_size);
         if (!decompressed) {
+            WebState::flashState.stage = "Failed";
+            WebState::flashState.progress_pct = 0;
             WebState::flashState.in_progress = false;
             WebState::flashState.lastResult = "Gzip decompress failed";
             return;
@@ -458,6 +460,8 @@ static void executeFlash() {
         size_t out_size = 0;
         const uint8_t *extracted = FirmwareUnpack::extractELRS(fw_ptr, fw_size, &out_size);
         if (!extracted) {
+            WebState::flashState.stage = "Failed";
+            WebState::flashState.progress_pct = 0;
             WebState::flashState.in_progress = false;
             WebState::flashState.lastResult = "ELRS container parse failed";
             return;
@@ -465,6 +469,8 @@ static void executeFlash() {
         fw_ptr = extracted;
         fw_size = out_size;
     } else if (fmt != FirmwareUnpack::FMT_RAW_BIN) {
+        WebState::flashState.stage = "Failed";
+        WebState::flashState.progress_pct = 0;
         WebState::flashState.in_progress = false;
         WebState::flashState.lastResult = "Unknown firmware format (not .bin/.gz/.elrs)";
         return;
@@ -474,6 +480,8 @@ static void executeFlash() {
     WebState::flashState.stage = "Starting";
 
     if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
+        WebState::flashState.stage = "Failed";
+        WebState::flashState.progress_pct = 0;
         WebState::flashState.in_progress = false;
         WebState::flashState.lastResult = "Port B busy — switch to UART";
         if (decompressed) free(decompressed);
@@ -2053,6 +2061,13 @@ void WebServer::start() {
 
     s_server->on("/api/flash/upload", HTTP_POST,
         [](AsyncWebServerRequest *req) {
+            // If upload handler flagged an out-of-memory or overflow condition,
+            // surface it to the client rather than pretending the upload succeeded.
+            if (WebState::flashState.lastResult.length() > 0 &&
+                WebState::flashState.fw_size == 0) {
+                req->send(413, "text/plain", WebState::flashState.lastResult);
+                return;
+            }
             if (WebState::flashState.fw_size > 0) {
                 req->send(200, "text/plain", "Uploaded " + String(WebState::flashState.fw_size) + " bytes");
             } else {
@@ -2100,7 +2115,14 @@ void WebServer::start() {
                 Serial.printf("[Flash] allocated %u bytes for upload\n", (unsigned)alloc_size);
             }
             if (!WebState::flashState.fw_data) return;
-            if (index + len > MAX_FW_SIZE) return;  // overflow guard
+            if (index + len > MAX_FW_SIZE) {
+                // Truncated upload — mark explicitly so POST handler returns 413
+                // instead of reporting a short success.
+                WebState::Lock lock;
+                WebState::flashState.fw_size = 0;
+                WebState::flashState.lastResult = "Upload exceeds MAX_FW_SIZE — file too large";
+                return;
+            }
             memcpy(WebState::flashState.fw_data + index, data, len);
             WebState::flashState.fw_received = index + len;
             if (final) {
@@ -2134,24 +2156,53 @@ void WebServer::start() {
             req->send(400, "text/plain", "offset too large (>8 MB)");
             return;
         }
-        WebState::flashState.flash_offset = offset;
-        // ?raw=1 flag: skip format detection (for writing partition tables,
-        // OTADATA blobs, etc. whose magic bytes aren't 0xE9/gzip/ELRS).
-        WebState::flashState.flash_raw = req->hasParam("raw", true)
+        // Set request atomically so main-loop dispatch sees a consistent
+        // offset/raw/stay tuple even on dual-core reorderings.
+        bool raw = req->hasParam("raw", true)
             ? req->getParam("raw", true)->value() == "1"
             : (req->hasParam("raw") && req->getParam("raw")->value() == "1");
-        // ?stay=1 flag: don't reboot RX after flash — keep it in DFU so the
-        // caller can chain more flashes / erases without user intervention.
-        WebState::flashState.flash_stay = req->hasParam("stay", true)
+        bool stay = req->hasParam("stay", true)
             ? req->getParam("stay", true)->value() == "1"
             : (req->hasParam("stay") && req->getParam("stay")->value() == "1");
-        WebState::flashState.flash_request = true;
+        {
+            WebState::Lock lock;
+            WebState::flashState.flash_offset = offset;
+            WebState::flashState.flash_raw = raw;
+            WebState::flashState.flash_stay = stay;
+            WebState::flashState.stage = "Queued";
+            WebState::flashState.progress_pct = 0;
+            WebState::flashState.lastResult = "";
+            WebState::flashState.flash_request = true;
+        }
         char msg[128];
         snprintf(msg, sizeof(msg), "Flashing started at offset 0x%x%s%s",
                  (unsigned)offset,
-                 WebState::flashState.flash_raw ? " (raw)" : "",
-                 WebState::flashState.flash_stay ? " (stay-in-DFU)" : "");
+                 raw ? " (raw)" : "",
+                 stay ? " (stay-in-DFU)" : "");
         req->send(200, "text/plain", msg);
+    });
+
+    // GET /api/flash/status — lets the UI poll progress over HTTP without
+    // relying on the WebSocket broadcast (which only runs every second and
+    // only updates the main flash card's DOM ids).
+    s_server->on("/api/flash/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["fw_size"]      = WebState::flashState.fw_size;
+        d["fw_received"]  = WebState::flashState.fw_received;
+        d["in_progress"]  = WebState::flashState.in_progress;
+        d["progress"]     = WebState::flashState.progress_pct;
+        // Mirror under both keys — frontend uses progress_pct for slot-flash
+        // polling, progress for dump polling. Keep both to avoid breaking either.
+        d["progress_pct"] = WebState::flashState.progress_pct;
+        d["stage"]        = WebState::flashState.stage;
+        d["lastResult"]   = WebState::flashState.lastResult;
+        d["result"]       = WebState::flashState.lastResult;
+        d["offset"]       = WebState::flashState.flash_offset;
+        d["raw"]          = WebState::flashState.flash_raw;
+        d["stay"]         = WebState::flashState.flash_stay;
+        d["requested"]    = WebState::flashState.flash_request;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     // ===== Receiver firmware DUMP (READ_FLASH via ROM bootloader) =====
@@ -2191,19 +2242,20 @@ void WebServer::start() {
             req->send(500, "text/plain", "alloc failed — no PSRAM/heap for dump");
             return;
         }
+        // Acquire Port B BEFORE flipping `running` so a failed acquire can't
+        // leave the status endpoint reporting a non-existent dump as live.
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_dump")) {
+            free(s_dump.buf); s_dump.buf = nullptr;
+            s_dump.error = "Port B busy — switch Setup to Receiver";
+            req->send(409, "text/plain", s_dump.error);
+            return;
+        }
         s_dump.size    = size;
         s_dump.offset  = offset;
         s_dump.progress = 0;
         s_dump.stage   = "Queued";
         s_dump.error   = "";
         s_dump.running = true;
-
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_dump")) {
-            s_dump.running = false;
-            s_dump.error = "Port B busy — switch Setup to Receiver";
-            req->send(409, "text/plain", s_dump.error);
-            return;
-        }
 
         xTaskCreate([](void *) {
             ESPFlasher::Config cfg;
@@ -2490,6 +2542,45 @@ void WebServer::start() {
         } else {
             req->send(500, "text/plain", err ? err : "partition erase failed");
         }
+    });
+
+    // Chip detection — reads CHIP_DETECT_MAGIC_VALUE + MAC over the same
+    // Port B UART. RX must be in ROM DFU (hold BOOT + power-cycle). Cheap
+    // one-round-trip sanity check before any flash op.
+    s_server->on("/api/elrs/chip_info", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress || s_dump.running) {
+            req->send(409, "text/plain", "flash/dump in progress — wait for it to finish");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_chip_info")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        ESPFlasher::ChipInfo info;
+        ESPFlasher::Result r = ESPFlasher::chipInfo(cfg, &info);
+        PinPort::release(PinPort::PORT_B);
+        if (r != ESPFlasher::FLASH_OK) {
+            req->send(500, "text/plain", ESPFlasher::errorString(r));
+            return;
+        }
+        JsonDocument d;
+        d["chip"]         = info.chip_name;
+        d["magic_hex"]    = String("0x") + String(info.magic_value, HEX);
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 info.mac[0], info.mac[1], info.mac[2], info.mac[3], info.mac[4], info.mac[5]);
+        d["mac"]          = macStr;
+        bool macBlank = true;
+        for (int i = 0; i < 6; i++) if (info.mac[i]) { macBlank = false; break; }
+        d["mac_ok"]       = !macBlank;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     // Exit stub / ROM cleanly — sends CMD_RUN_USER_CODE (0xD3).

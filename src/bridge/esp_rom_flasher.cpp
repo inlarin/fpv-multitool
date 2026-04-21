@@ -609,6 +609,66 @@ Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t ou
     return FLASH_OK;
 }
 
+// Chip detection via READ_REG of CHIP_DETECT_MAGIC_VALUE (0x40001000) + EFUSE
+// MAC registers. Magic values follow esptool.py's table — each SoC family
+// writes a distinct ROM-boot sentinel into that register.
+Result chipInfo(const Config &cfg, ChipInfo *out) {
+    if (!cfg.uart || !out) return FLASH_ERR_INVALID_INPUT;
+    memset(out, 0, sizeof(*out));
+    out->chip_name = "unknown";
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(4096);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(50);
+
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+
+    // CHIP_DETECT_MAGIC_VALUE_ADDR = 0x40001000 on every chip that implements
+    // the ROM bootloader we care about. Value is a per-family sentinel.
+    auto readReg = [](uint32_t addr, uint32_t *val) -> bool {
+        uint8_t req[4];
+        *(uint32_t*)req = addr;
+        return sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, val);
+    };
+
+    uint32_t magic = 0;
+    if (!readReg(0x40001000, &magic)) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
+    out->magic_value = magic;
+    switch (magic) {
+        case 0xfff0c101: out->chip_name = "ESP8266"; break;
+        case 0x00f01d83: out->chip_name = "ESP32"; break;
+        case 0x000007c6: out->chip_name = "ESP32-S2"; break;
+        case 0x00000009:
+        case 0xeb004136: out->chip_name = "ESP32-S3"; break;
+        case 0x6921506f:
+        case 0x1b31506f: out->chip_name = "ESP32-C3"; break;
+        case 0x0da1806f: out->chip_name = "ESP32-C6"; break;
+        case 0xd7b73e80: out->chip_name = "ESP32-H2"; break;
+        default:         out->chip_name = "unknown"; break;
+    }
+    out->ok = true;
+
+    // MAC read via EFUSE block — only wired up for ESP32-C3 (the only chip
+    // we've shipped real hardware against). Address layout differs across
+    // SoCs; when we encounter a new one we extend this switch.
+    if (magic == 0x6921506f || magic == 0x1b31506f) {
+        uint32_t m0 = 0, m1 = 0;
+        if (readReg(0x60008844, &m0) && readReg(0x60008848, &m1)) {
+            // esptool packs as >II(mac1, mac0)[2:8] → high word high bytes
+            out->mac[0] = (uint8_t)(m1 >> 8);
+            out->mac[1] = (uint8_t)(m1 >> 0);
+            out->mac[2] = (uint8_t)(m0 >> 24);
+            out->mac[3] = (uint8_t)(m0 >> 16);
+            out->mac[4] = (uint8_t)(m0 >> 8);
+            out->mac[5] = (uint8_t)(m0 >> 0);
+        }
+    }
+
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Exit stub/ROM, jump to user code (i.e. OTADATA-selected app).
 // Stub implementation in ELRS calls ESP.restart(); ROM bootloader jumps to
 // app directly. Opcode: 0xD3, no args, no response (stub may or may not

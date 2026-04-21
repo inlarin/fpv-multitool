@@ -72,6 +72,20 @@ Result runUserCode(const Config &cfg);
 // Works on ESP32-S2/S3/C3 ROM (and all stubs). Does not touch flash.
 Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t out[16]);
 
+// Detect attached chip. Syncs + issues READ_REG against the SoC-identifying
+// registers (UART_DATE + EFUSE_BASE + MAC words) to derive chip family, MAC,
+// and a best-effort flash size (via manufacturer ID).
+// All fields except `ok` are zero-initialised; unknown fields stay 0.
+struct ChipInfo {
+    bool     ok;
+    uint32_t magic_value;      // UART_DATE register — family discriminator
+    const char *chip_name;     // "ESP32-C3" / "ESP32-S3" / "ESP8266" / "unknown"
+    uint8_t  mac[6];           // base MAC from EFUSE (all 0 if read failed)
+    uint32_t flash_id;         // JEDEC id from SPI flash (0 if read failed)
+    uint32_t flash_size;       // derived from JEDEC (0 if unknown)
+};
+Result chipInfo(const Config &cfg, ChipInfo *out);
+
 const char* errorString(Result r);
 
 } // namespace ESPFlasher
