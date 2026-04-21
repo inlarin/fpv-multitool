@@ -894,6 +894,104 @@ Result sendCrsfReboot(const Config &cfg) {
     return FLASH_OK;
 }
 
+// Shared CRSF CRC8-DVB-S2 (poly 0xD5, init 0) over [data..data+n).
+static uint8_t crsfCrc8(const uint8_t *data, size_t n) {
+    uint8_t c = 0;
+    for (size_t i = 0; i < n; i++) {
+        c ^= data[i];
+        for (int b = 0; b < 8; b++) c = (c & 0x80) ? ((c << 1) ^ 0xD5) : (c << 1);
+    }
+    return c;
+}
+
+// DEVICE_PING (CRSF ext-header type 0x28) → DEVICE_INFO (0x29) parse.
+// Frame layout (`src/lib/CrsfProtocol/crsf_protocol.h` + CRSFEndpoint):
+//   TX: EC 04 28 00 EC <crc>  (broadcast ping)
+//   RX: <addr> <len> 29 <dest=EC> <orig=EC> <name\0> <ser_u32_BE>
+//       <hw_u32_BE> <sw_u32_BE> <field_cnt> <param_ver> <crc>
+Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *out) {
+    if (!cfg.uart || !out) return FLASH_ERR_INVALID_INPUT;
+    memset(out, 0, sizeof(*out));
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(512);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(20);
+    while (s_uart->available()) s_uart->read();
+
+    // TX ping.
+    uint8_t ping[6] = {0xEC, 0x04, 0x28, 0x00, 0xEC, 0x00};
+    ping[5] = crsfCrc8(ping + 2, 3);  // type + dest + orig
+    s_uart->write(ping, 6);
+    s_uart->flush();
+
+    // RX: scan incoming bytes for `<addr> <len> 29 …<crc>` within timeout.
+    // Simpler: accumulate up to 128 bytes, then search pattern.
+    uint8_t buf[128];
+    size_t got = 0;
+    uint32_t deadline = millis() + timeout_ms;
+    while (millis() < deadline && got < sizeof(buf)) {
+        while (s_uart->available() && got < sizeof(buf)) buf[got++] = s_uart->read();
+        delay(2);
+    }
+    s_uart->end();
+
+    // Find the 0x29 DEVICE_INFO response.
+    int found = -1;
+    for (size_t i = 0; i + 3 < got; i++) {
+        uint8_t len = buf[i + 1];
+        if (buf[i + 2] == 0x29 && len >= 12 && i + 2 + len <= got) {
+            found = (int)i;
+            break;
+        }
+    }
+    if (found < 0) return FLASH_ERR_READ_FAILED;
+
+    uint8_t plen = buf[found + 1];
+    // Body: [type=29][dest][orig][name\0...][ser:4][hw:4][sw:4][fcnt][pver][crc]
+    const uint8_t *body = buf + found + 3;  // skip [addr,len,type]
+    int body_len = plen - 2;                // minus type+crc
+
+    // Name starts at body[2] (after dest+orig), null-terminated.
+    int name_start = 2;
+    int name_end = name_start;
+    while (name_end < body_len && body[name_end] != 0) name_end++;
+    int nlen = name_end - name_start;
+    if (nlen > (int)sizeof(out->name) - 1) nlen = sizeof(out->name) - 1;
+    memcpy(out->name, body + name_start, nlen);
+    out->name[nlen] = 0;
+
+    // After name\0: 4+4+4 = 12 bytes of BE-encoded u32 + field_cnt + parameter_ver.
+    int after = name_end + 1;
+    if (after + 14 > body_len) return FLASH_ERR_READ_FAILED;
+    auto be32 = [](const uint8_t *p) {
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    };
+    out->serial_no         = be32(body + after);
+    out->hw_id             = be32(body + after + 4);
+    out->sw_version        = be32(body + after + 8);
+    out->field_count       = body[after + 12];
+    out->parameter_version = body[after + 13];
+    out->ok = true;
+    return FLASH_OK;
+}
+
+// CRSF "enter binding" — EC 04 32 62 64 <crc> at cfg.baud_rate.
+Result sendCrsfBind(const Config &cfg) {
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(256);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(20);
+    uint8_t frame[6] = {0xEC, 0x04, 0x32, 0x62, 0x64, 0x00};
+    frame[5] = crsfCrc8(frame + 2, 3);
+    s_uart->write(frame, sizeof(frame));
+    s_uart->flush();
+    delay(100);
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Exit stub/ROM, jump to user code (i.e. OTADATA-selected app).
 // Stub implementation in ELRS calls ESP.restart(); ROM bootloader jumps to
 // app directly. Opcode: 0xD3, no args, no response (stub may or may not

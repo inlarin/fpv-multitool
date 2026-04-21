@@ -94,6 +94,33 @@ Result chipInfo(const Config &cfg, ChipInfo *out);
 // Returns FLASH_OK unconditionally (TX-only, no ack).
 Result sendCrsfReboot(const Config &cfg);
 
+// DEVICE_PING (CRSF 0x28) → DEVICE_INFO (0x29) probe. Sends a broadcast ping
+// at cfg.baud_rate and waits up to `timeout_ms` for the RX to reply with its
+// identity packet. Cleanest way to detect "ELRS app is alive" — responds only
+// if serialUpdate/wifiUpdate/radioFailed aren't active.
+//
+// On success, fills the caller's ElrsDeviceInfo struct:
+//   - name: product name string (e.g. "BAYCKRC C3 …")
+//   - serial_no: u32 from payload (often 0)
+//   - hw_id: u32
+//   - sw_version: u32 (big-endian in payload; parsed)
+//   - field_count: number of LUA parameter entries available
+// Returns FLASH_OK on reply, FLASH_ERR_READ_FAILED on timeout.
+struct ElrsDeviceInfo {
+    bool     ok;
+    char     name[64];
+    uint32_t serial_no;
+    uint32_t hw_id;
+    uint32_t sw_version;
+    uint8_t  field_count;
+    uint8_t  parameter_version;
+};
+Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *out);
+
+// Send CRSF "enter binding" frame (EC 04 32 62 64 <crc>). Safe runtime op —
+// puts RX into bind mode for 60 s. TX-only, no ack expected.
+Result sendCrsfBind(const Config &cfg);
+
 // Full dual-slot identity read + OTADATA in one Serial1 session. RX must be
 // in DFU. Reads OTADATA sectors, then the first 16 KB of app0 (@0x10000) and
 // app1 (@0x1f0000) to extract target/version/git/etc baked into seg0 rodata.

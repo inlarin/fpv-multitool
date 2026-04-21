@@ -218,13 +218,27 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             return;
         }
         const char *mode = "silent";
-        uint32_t bytes_at_420 = 0;
         bool dfu_ok = false, stub_ok = false;
+        ESPFlasher::ElrsDeviceInfo devInfo;
+        devInfo.ok = false;
 
-        // Test 1: ROM DFU SYNC @ 115200 — short, authoritative. If RX is in
-        // ROM BL, this succeeds in <100 ms. If RX is in app, SYNC bytes reach
-        // it as out-of-spec CRSF garbage which the CRSF parser ignores.
+        // Test 1: CRSF DEVICE_PING @ 420000. RX in app answers with DEVICE_INFO
+        // containing name + version — most authoritative + informative probe.
+        // serialUpdate / wifiUpdate / radioFailed stay silent → falls through.
         {
+            ESPFlasher::Config cfg;
+            cfg.uart = &Serial1;
+            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+            cfg.baud_rate = 420000;
+            if (ESPFlasher::crsfDevicePing(cfg, 200, &devInfo) == ESPFlasher::FLASH_OK && devInfo.ok) {
+                mode = "app";
+            }
+        }
+
+        // Test 2: ROM DFU SYNC @ 115200 (only if app didn't answer).
+        if (!devInfo.ok) {
+            delay(50);
             ESPFlasher::Config cfg;
             cfg.uart = &Serial1;
             cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
@@ -237,34 +251,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             }
         }
 
-        // Cool-down — give any in-progress CRSF frame a moment to land on the
-        // handset before we flip baud. 50 ms is enough for one full 420000-baud
-        // frame (~200 µs).
-        if (!dfu_ok) delay(50);
-
-        // Test 2: passive sniff @ 420000 for 400 ms. Running ELRS with an
-        // active handset link emits CRSF telemetry at ~10 ms cadence → dozens
-        // of bytes in 400 ms. Silent RX (WiFi AP / stub / halted) → 0 bytes.
-        if (!dfu_ok) {
-            Serial1.setRxBufferSize(1024);
-            Serial1.begin(420000, SERIAL_8N1,
-                          PinPort::rx_pin(PinPort::PORT_B),
-                          PinPort::tx_pin(PinPort::PORT_B));
-            delay(10);
-            while (Serial1.available()) Serial1.read();
-            uint32_t deadline = millis() + 400;
-            while (millis() < deadline) {
-                while (Serial1.available()) { Serial1.read(); bytes_at_420++; }
-                delay(5);
-            }
-            Serial1.end();
-            if (bytes_at_420 > 0) mode = "app";
-        }
-
-        // Test 3: in-app stub SYNC @ 420000 — catches RX-just-post-'bl' state
-        // where app is paused and stub is waiting for SLIP. No bytes at 420000
-        // because stub doesn't broadcast; only reveals via SYNC response.
-        if (!dfu_ok && bytes_at_420 == 0) {
+        // Test 3: in-app stub SYNC @ 420000 (RX just post-'bl' frame).
+        if (!devInfo.ok && !dfu_ok) {
             delay(50);
             ESPFlasher::Config cfg;
             cfg.uart = &Serial1;
@@ -281,19 +269,93 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         PinPort::release(PinPort::PORT_B);
 
         JsonDocument d;
-        d["mode"]          = mode;
-        d["dfu_ok"]        = dfu_ok;
-        d["stub_ok"]       = stub_ok;
-        d["bytes_at_420"]  = bytes_at_420;
+        d["mode"]    = mode;
+        d["dfu_ok"]  = dfu_ok;
+        d["stub_ok"] = stub_ok;
+        d["app_ok"]  = devInfo.ok;
+        if (devInfo.ok) {
+            JsonObject a = d["app"].to<JsonObject>();
+            a["name"]             = devInfo.name;
+            a["serial_no"]        = devInfo.serial_no;
+            a["hw_id"]            = devInfo.hw_id;
+            a["sw_version"]       = devInfo.sw_version;
+            a["field_count"]      = devInfo.field_count;
+            a["parameter_version"] = devInfo.parameter_version;
+        }
         d["hint"] =
-            dfu_ok  ? "ROM DFU — use Flash(DFU) path; Stub-flash unavailable" :
-            stub_ok ? "in-app stub already active — SYNC works @ 420000" :
-            (bytes_at_420 > 0)
-                    ? "running app — Stub-flash available; listen found CRSF telemetry"
-                    : "silent — likely WiFi AP mode (UART disabled) OR link dropped; "
-                      "reboot RX (physical or HTTP /reboot on 10.0.0.1) to return to app";
+            devInfo.ok ? (String("RX running ") + devInfo.name + " — Stub-flash available; DFU flash disabled") :
+            dfu_ok     ? "ROM DFU — use Flash(DFU) path; Stub-flash unavailable" :
+            stub_ok    ? "in-app stub already active — SYNC works @ 420000" :
+                         "silent — WiFi AP mode (UART disabled), halted, or wiring lost. "
+                         "To recover: power-cycle RX (no BOOT) — app starts for ~60s before "
+                         "auto-wifi kicks in (only if wifi-on-interval > 0).";
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
+    });
+
+    // Read ELRS device identity via DEVICE_PING/INFO. Use when Probe returns
+    // mode='app' but you want full details (name, version, field count).
+    //   POST /api/elrs/device_info
+    s_server->on("/api/elrs/device_info", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_device_info")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+        ESPFlasher::ElrsDeviceInfo info;
+        ESPFlasher::Result r = ESPFlasher::crsfDevicePing(cfg, 300, &info);
+        PinPort::release(PinPort::PORT_B);
+        if (r != ESPFlasher::FLASH_OK || !info.ok) {
+            req->send(500, "text/plain",
+                "No DEVICE_INFO reply — RX not in app (may be wifi/stub/dfu/silent)");
+            return;
+        }
+        JsonDocument d;
+        d["name"]              = info.name;
+        d["serial_no"]         = info.serial_no;
+        d["hw_id"]             = info.hw_id;
+        char ver[16];
+        snprintf(ver, sizeof(ver), "%u.%u.%u.%u",
+                 (unsigned)(info.sw_version >> 24) & 0xff,
+                 (unsigned)(info.sw_version >> 16) & 0xff,
+                 (unsigned)(info.sw_version >>  8) & 0xff,
+                 (unsigned)(info.sw_version      ) & 0xff);
+        d["sw_version"]        = ver;
+        d["sw_version_raw"]    = info.sw_version;
+        d["field_count"]       = info.field_count;
+        d["parameter_version"] = info.parameter_version;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // CRSF "enter binding" — puts RX into 60s bind-wait. Safe runtime op,
+    // no flash destruction. Useful for pairing to a new handset without phones.
+    //   POST /api/elrs/bind
+    s_server->on("/api/elrs/bind", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_bind")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+        ESPFlasher::sendCrsfBind(cfg);
+        PinPort::release(PinPort::PORT_B);
+        req->send(200, "text/plain", "CRSF 'bd' frame sent — RX in bind mode for 60 s");
     });
 
     s_server->on("/api/flash/upload", HTTP_POST,
