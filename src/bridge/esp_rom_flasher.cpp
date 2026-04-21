@@ -689,17 +689,26 @@ static void parseBuildInfo(const uint8_t *buf, size_t n, SlotIdentity *id) {
     }
     if (magic_pos < 0) return;
 
+    // readStr: read one null-terminated printable string.
+    // - Skips leading null / non-printable bytes (record separators like 0x1e
+    //   that binary_configurator plants between strings break JSON).
+    // - Stops on first null OR first non-printable byte OR end of buffer.
+    // - Always null-terminates; returns false if nothing useful read.
+    auto isPrintable = [](uint8_t c) { return c >= 0x20 && c <= 0x7e; };
     auto readStr = [&](size_t *pp, char *out, size_t max) -> bool {
+        while (*pp < n && !isPrintable(buf[*pp]) && buf[*pp] != 0) (*pp)++;
         while (*pp < n && buf[*pp] == 0) (*pp)++;
         if (*pp >= n) { out[0] = 0; return false; }
         size_t start = *pp;
-        while (*pp < n && buf[*pp] != 0 && (*pp - start) < max - 1) {
+        while (*pp < n && isPrintable(buf[*pp]) && (*pp - start) < max - 1) {
             out[*pp - start] = (char)buf[*pp];
             (*pp)++;
         }
         out[*pp - start] = 0;
-        while (*pp < n && buf[*pp] != 0) (*pp)++;  // skip rest of overflowing string
-        return true;
+        // Advance past the remaining non-printable / null run so the next call
+        // doesn't re-read the same byte.
+        while (*pp < n && (buf[*pp] == 0 || !isPrintable(buf[*pp]))) (*pp)++;
+        return out[0] != 0;
     };
 
     // After magic: target, optional binary_name, version/lua, git
@@ -744,9 +753,15 @@ static void parseBuildInfo(const uint8_t *buf, size_t n, SlotIdentity *id) {
     int prev_start = prev_end;
     while (prev_start > 0 && buf[prev_start - 1] != 0) prev_start--;
 
-    if (prev_end - prev_start + 1 > 0 && prev_end - prev_start + 1 < (int)sizeof(id->product)) {
-        memcpy(id->product, buf + prev_start, prev_end - prev_start + 1);
-        id->product[prev_end - prev_start + 1] = 0;
+    int plen = prev_end - prev_start + 1;
+    if (plen > 0 && plen < (int)sizeof(id->product)) {
+        // Copy only printable ASCII to keep output JSON-safe.
+        int w = 0;
+        for (int i = 0; i < plen && w < (int)sizeof(id->product) - 1; i++) {
+            uint8_t c = buf[prev_start + i];
+            if (isPrintable(c)) id->product[w++] = (char)c;
+        }
+        id->product[w] = 0;
     }
 }
 

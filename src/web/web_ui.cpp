@@ -670,20 +670,17 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       Официальные билды ExpressLRS. Браузер скачивает zip → достаёт <code>firmware.bin</code> (path: <code>firmware/FCC/Unified_ESP32C3_LR1121_RX/</code>) → аплоадит на плату в buffer. Дальше Flash to slot (ниже). Плата работает только как upload-приёмник — никаких proxy-загрузок через неё.
     </div>
     <div id="elrsCatalog" style="display:flex;flex-direction:column;gap:4px;margin-top:6px"></div>
-    <div class="row"><span class="label">Variant:</span>
+    <div class="row"><span class="label">Model:</span>
+      <select id="elrsModel" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333;max-width:240px"></select>
+    </div>
+    <div class="row"><span class="label">Radio variant:</span>
       <select id="elrsVariant" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
         <option value="FCC" selected>FCC (US 915 + 2.4 ISM)</option>
         <option value="LBT">LBT (EU 868 + 2.4 CE)</option>
       </select>
     </div>
-    <div class="row"><span class="label">Target firmware:</span>
-      <select id="elrsTarget" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
-        <option value="Unified_ESP32C3_LR1121_RX" selected>Unified_ESP32C3_LR1121_RX (C3+LR1121 RX)</option>
-        <option value="Unified_ESP32C3_2400_RX">Unified_ESP32C3_2400_RX (C3+SX1280 RX)</option>
-        <option value="Unified_ESP32_LR1121_TX">Unified_ESP32_LR1121_TX (ESP32+LR1121 TX)</option>
-        <option value="Unified_ESP32_2400_TX">Unified_ESP32_2400_TX (ESP32+SX1280 TX)</option>
-        <option value="Unified_ESP8285_2400_RX">Unified_ESP8285_2400_RX (ESP8285 RX)</option>
-      </select>
+    <div class="row"><span class="label">Resolved target:</span>
+      <span class="value" id="elrsResolved" style="font-family:monospace;font-size:11px">-</span>
     </div>
     <div id="catStatus" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
     <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
@@ -2527,6 +2524,29 @@ const ELRS_RELEASES = [
   {version:'3.6.3', date:'2026-01-21', sha:'288efe1acf223e479f81349d68dda5505135301a', note:'last 3.x'},
   {version:'3.5.3', date:'2024-11-29', sha:'40555e141efb0c93ea8d075ec47a27592355f924', note:'known-good on BAYCK C3 Dual'},
 ];
+
+// Curated list of RX/TX models → {chip, radio, firmware variant, product_name}.
+// Sourced from ELRS targets.json (master). Used to feed the catalog selector
+// so users pick "BAYCK C3 Dual" rather than raw "Unified_ESP32C3_LR1121_RX".
+const ELRS_MODELS = [
+  // --- Bayck RC ---
+  {id:'bayck.rx_dual.dualc3', name:'BAYCK RC C3 Dual Band 100mW Gemini RX (our RX)', chip:'esp32-c3', fw:'Unified_ESP32C3_LR1121_RX', role:'RX', note:'= our test receiver'},
+  {id:'bayck.rx_dual.dual',   name:'BAYCK 900/2400 Dual Band Gemini RX (ESP32)',      chip:'esp32',    fw:'Unified_ESP32_LR1121_RX',   role:'RX'},
+  {id:'bayck.rx_dual.single', name:'BAYCK C3 Dual Band Nano RX',                      chip:'esp32-c3', fw:'Unified_ESP32C3_LR1121_RX', role:'RX'},
+  {id:'bayck.tx_dual.nano',         name:'BAYCK Dual Band 1W Nano TX',         chip:'esp32', fw:'Unified_ESP32_LR1121_TX', role:'TX'},
+  {id:'bayck.tx_dual.nano_gemini',  name:'BAYCK Dual Band 1W Nano Gemini TX',  chip:'esp32', fw:'Unified_ESP32_LR1121_TX', role:'TX'},
+  {id:'bayck.tx_dual.micro_gemini', name:'BAYCK Dual Band 1W Micro Gemini TX', chip:'esp32', fw:'Unified_ESP32_LR1121_TX', role:'TX'},
+  // --- Generic C3 + LR1121 (rrd2, rr2) ---
+  {id:'generic.c3.lr1121.diversity', name:'Generic C3 LR1121 True Diversity RX', chip:'esp32-c3', fw:'Unified_ESP32C3_LR1121_RX', role:'RX'},
+  {id:'generic.c3.lr1121.single',    name:'Generic C3 LR1121 RX',                chip:'esp32-c3', fw:'Unified_ESP32C3_LR1121_RX', role:'RX'},
+  // --- Popular 2.4 GHz only ESP32-C3 ---
+  {id:'generic.c3.sx1280.rx',   name:'Generic C3 SX1280 2.4 GHz RX', chip:'esp32-c3', fw:'Unified_ESP32C3_2400_RX', role:'RX'},
+  {id:'matek.2400_rx.r24d',     name:'Matek R24-D 2.4 GHz RX (ESP8285)', chip:'esp8285', fw:'Unified_ESP8285_2400_RX', role:'RX'},
+  // --- ESP32 + SX1280 TX ---
+  {id:'generic.esp32.2400_tx',  name:'Generic ESP32 2.4 GHz TX', chip:'esp32', fw:'Unified_ESP32_2400_TX', role:'TX'},
+  // --- ESP8285 900 MHz RX ---
+  {id:'generic.esp8285.900_rx', name:'Generic ESP8285 900 MHz RX', chip:'esp8285', fw:'Unified_ESP8285_900_RX', role:'RX'},
+];
 function renderCatalog() {
   const host = document.getElementById('elrsCatalog');
   if (!host) return;
@@ -2541,6 +2561,32 @@ function renderCatalog() {
       '<a href="https://artifactory.expresslrs.org/ExpressLRS/' + r.sha + '/firmware.zip" target="_blank" style="font-size:11px;color:var(--accent)">zip</a>';
     host.appendChild(row);
   }
+  // Populate model selector, preselect BAYCK C3 Dual (our known RX).
+  const ms = document.getElementById('elrsModel');
+  if (ms && !ms.options.length) {
+    for (const m of ELRS_MODELS) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name + '  [' + m.role + ' · ' + m.chip + ']';
+      opt.dataset.fw = m.fw;
+      ms.appendChild(opt);
+    }
+    ms.value = 'bayck.rx_dual.dualc3';
+    ms.onchange = catUpdateResolved;
+    document.getElementById('elrsVariant').onchange = catUpdateResolved;
+    catUpdateResolved();
+  }
+}
+function catModel() {
+  const id = document.getElementById('elrsModel').value;
+  return ELRS_MODELS.find(m => m.id === id);
+}
+function catUpdateResolved() {
+  const m = catModel();
+  const variant = document.getElementById('elrsVariant').value;
+  if (!m) return;
+  document.getElementById('elrsResolved').textContent =
+    'firmware/' + variant + '/' + m.fw + '/firmware.bin';
 }
 async function ensureJSZip() {
   if (window.JSZip) return;

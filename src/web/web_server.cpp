@@ -2658,13 +2658,20 @@ void WebServer::start() {
         req->send(200, "application/json", out);
     });
 
-    // Send CRSF "enable WiFi" command to the receiver. This is a command-frame
-    // targetting the receiver's ELRS-Rx config (device addr 0xEC = Receiver,
-    // subcmd 0x04 = command-execute). The frame is the same shape as the
-    // "reboot to bootloader" but with the "Enable WiFi" command code. On
-    // vanilla ELRS 3.x and MILELRS the receiver responds by starting the
-    // SoftAP (SSID "ExpressLRS RX", pwd "expresslrs", IP 10.0.0.1).
-    // We TX-only; no response expected.
+    // Send MSP-over-CRSF "set RX WiFi mode" (MSP function 0x0E). Mirrors what
+    // the ELRS Configurator / OpenTX Lua script sends. RX handler at
+    // [rx_main.cpp:1228] defers by 500 ms then flips connectionState to
+    // wifiUpdate → SoftAP "ExpressLRS RX" at 10.0.0.1.
+    //
+    // Actual packet layout derived from
+    // [hardware/bayckrc_c3_dual/elrs_3_6_3_src/src/lib/Handset/CRSF.cpp:79]
+    // (SetMspV2Request): the MSP header byte is 0x50 (NOT 0x30 as some 3rd-
+    // party docs say), with length field being 2 bytes LE.
+    //   Frame: C8 0B 7A EC EA  50 00 0E 00 00 00  <mspCRC>  <crsfCRC>
+    //          addr len type dest orig  status flags func_lo func_hi len_lo len_hi  crc  crc
+    //   mspCRC  = CRC8-DVB-S2(0xD5, init 0) over [flags..payload] i.e. bytes[1..5+0]
+    //   crsfCRC = CRC8-DVB-S2(0xD5, init 0) over [type..mspCRC] i.e. frameSize-1 bytes
+    //
     //   POST /api/elrs/enable_wifi  [form: inverted=0|1]
     s_server->on("/api/elrs/enable_wifi", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (WebState::flashState.in_progress || s_dump.running) {
@@ -2678,62 +2685,57 @@ void WebServer::start() {
             req->send(409, "text/plain", "Port B busy");
             return;
         }
-        // ELRS param write: addr=0xEC dest, len, type=0x2D, src=0xEA, field,
-        //                   value, CRC. We use the well-known "Bind" style
-        //                   TX_OPEN_WIFI command via the CRSF "Enable WiFi"
-        //                   LUA command on device 0xEC.
-        // Simpler path: the same 5-byte "bl" frame pattern with subcmd 0x0E
-        // is documented as "Enable WiFi" in the ELRS CRSF device protocol.
-        //   EC 04 32 62 77 <CRC8>   — 'bw' frame equivalent
-        // The exact bytes change across ELRS versions; we send a broadcast
-        // "Enter WiFi config" equivalent that vanilla 3.x accepts.
-        //
-        // Fallback: rely on the user pressing the RX button 3× fast. But for
-        // programmatic control we transmit the CRSF frame directly below.
-
+        Serial1.end();
         Serial1.begin(420000, SERIAL_8N1,
                       PinPort::rx_pin(PinPort::PORT_B),
                       PinPort::tx_pin(PinPort::PORT_B),
                       inverted);
-        delay(10);
-        // CRSF "Enable WiFi" subcommand frame. Payload: dest=0xEC (Receiver),
-        // src=0xEA (Handset), subcmd byte 0x01 (Enter Bind), 0x0E (Enter WiFi)
-        // varies. We send two common forms — the receiver will ack the one
-        // it recognises.
-        //
-        // Form 1: ELRS Rx in 3.x responds to a SUBCMD frame type=0x32 with
-        // payload "bl" to go to BL, and "br" to reboot; "bw" is sometimes
-        // used for enable-wifi in forks. We trust the ELRS Lua script
-        // convention: send a CRSF_FRAMETYPE_DEVICE_PING (0x28) → targets the
-        // receiver to broadcast it's awake. Then send a write to the
-        // receiver's "WiFi" lua field. Doing the full param write requires
-        // knowing the field index — complex.
-        //
-        // Pragmatic approach: send the standard CRSF "RX_REBOOT" frame plus
-        // a "Enable WiFi" via the param-exec frame. Both are harmless on
-        // receivers that don't recognise them.
-        //
-        // Frame format: [dest=0xEC][len=4][type=0x32][payload 'b','w']['crc']
-        uint8_t frame[] = {0xEC, 0x04, 0x32, 'b', 'w', 0x00};
-        // CRC8 dvb-s2 polynomial, init 0, applied over [type..payload]:
-        uint8_t crc = 0;
-        uint8_t crc_tbl_start = 2, crc_tbl_end = 5;
-        for (uint8_t i = crc_tbl_start; i < crc_tbl_end; i++) {
-            crc ^= frame[i];
-            for (int b = 0; b < 8; b++) {
-                if (crc & 0x80) crc = (crc << 1) ^ 0xD5;
-                else            crc = (crc << 1);
+        delay(20);
+
+        auto crc8d5 = [](const uint8_t *d, size_t n) {
+            uint8_t c = 0;
+            for (size_t i = 0; i < n; i++) {
+                c ^= d[i];
+                for (int b = 0; b < 8; b++) c = (c & 0x80) ? ((c << 1) ^ 0xD5) : (c << 1);
             }
-        }
-        frame[5] = crc;
+            return c;
+        };
+
+        // MSP-V2 inner (7 bytes, 0-payload request for func=0x000E):
+        //   [0]=0x50 status, [1]=0 flags, [2]=0x0E func_lo, [3]=0x00 func_hi,
+        //   [4]=0 len_lo, [5]=0 len_hi, [6]=mspCRC over bytes [1..5]
+        uint8_t msp[7] = {0x50, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x00};
+        msp[6] = crc8d5(msp + 1, 5);
+
+        // Outer CRSF (13 bytes):
+        //   [0]=0xC8 addr, [1]=0x0B frame_size, [2]=0x7A type (MSP_WRITE),
+        //   [3]=0xEC dest (Receiver), [4]=0xEA orig (RadioTransmitter),
+        //   [5..11]=MSP packet, [12]=crsfCRC over bytes [2..11]
+        uint8_t frame[13];
+        frame[0] = 0xC8;   // any valid CRSF addr; RX parses dest from extended header
+        frame[1] = 0x0B;   // frame_size = type + ext_header(2) + msp(7) + crc(1) = 11
+        frame[2] = 0x7A;   // CRSF_FRAMETYPE_MSP_WRITE
+        frame[3] = 0xEC;   // CRSF_ADDRESS_CRSF_RECEIVER
+        frame[4] = 0xEA;   // CRSF_ADDRESS_RADIO_TRANSMITTER
+        memcpy(frame + 5, msp, 7);
+        frame[12] = crc8d5(frame + 2, 10);
+
         Serial1.write(frame, sizeof(frame));
         Serial1.flush();
-        delay(50);
+        delay(60);
         Serial1.end();
         PinPort::release(PinPort::PORT_B);
 
-        req->send(200, "text/plain",
-            "CRSF 'enable WiFi' frame sent — RX should advertise 'ExpressLRS RX' AP (pwd: expresslrs)");
+        char hex[64];
+        snprintf(hex, sizeof(hex), "MSP CRC=0x%02x, CRSF CRC=0x%02x", msp[6], frame[12]);
+        JsonDocument d;
+        d["frame_hex"] = "C8 0B 7A EC EA 50 00 0E 00 00 00 " + String(msp[6], HEX) + " " + String(frame[12], HEX);
+        d["note"]      = "MSP_ELRS_SET_RX_WIFI_MODE sent. RX should raise SoftAP in ~700 ms.";
+        d["ap_ssid"]   = "ExpressLRS RX";
+        d["ap_pwd"]    = "expresslrs";
+        d["ap_url"]    = "http://10.0.0.1";
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
     });
 
     // Exit stub / ROM cleanly — sends CMD_RUN_USER_CODE (0xD3).
