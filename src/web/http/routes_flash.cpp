@@ -221,7 +221,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint32_t bytes_at_420 = 0;
         bool dfu_ok = false, stub_ok = false;
 
-        // Test 1: ROM DFU SYNC @ 115200.
+        // Test 1: ROM DFU SYNC @ 115200 — short, authoritative. If RX is in
+        // ROM BL, this succeeds in <100 ms. If RX is in app, SYNC bytes reach
+        // it as out-of-spec CRSF garbage which the CRSF parser ignores.
         {
             ESPFlasher::Config cfg;
             cfg.uart = &Serial1;
@@ -235,8 +237,35 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             }
         }
 
-        // Test 2: in-app stub SYNC @ 420000 (only if DFU didn't match).
+        // Cool-down — give any in-progress CRSF frame a moment to land on the
+        // handset before we flip baud. 50 ms is enough for one full 420000-baud
+        // frame (~200 µs).
+        if (!dfu_ok) delay(50);
+
+        // Test 2: passive sniff @ 420000 for 400 ms. Running ELRS with an
+        // active handset link emits CRSF telemetry at ~10 ms cadence → dozens
+        // of bytes in 400 ms. Silent RX (WiFi AP / stub / halted) → 0 bytes.
         if (!dfu_ok) {
+            Serial1.setRxBufferSize(1024);
+            Serial1.begin(420000, SERIAL_8N1,
+                          PinPort::rx_pin(PinPort::PORT_B),
+                          PinPort::tx_pin(PinPort::PORT_B));
+            delay(10);
+            while (Serial1.available()) Serial1.read();
+            uint32_t deadline = millis() + 400;
+            while (millis() < deadline) {
+                while (Serial1.available()) { Serial1.read(); bytes_at_420++; }
+                delay(5);
+            }
+            Serial1.end();
+            if (bytes_at_420 > 0) mode = "app";
+        }
+
+        // Test 3: in-app stub SYNC @ 420000 — catches RX-just-post-'bl' state
+        // where app is paused and stub is waiting for SLIP. No bytes at 420000
+        // because stub doesn't broadcast; only reveals via SYNC response.
+        if (!dfu_ok && bytes_at_420 == 0) {
+            delay(50);
             ESPFlasher::Config cfg;
             cfg.uart = &Serial1;
             cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
@@ -247,25 +276,6 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 stub_ok = true;
                 mode = "stub";
             }
-        }
-
-        // Test 3: passive sniff @ 420000 for ~700 ms (CRSF telemetry comes at
-        // ~10 ms cadence on running ELRS with a linked handset). No reply
-        // required — any byte counts.
-        if (!dfu_ok && !stub_ok) {
-            Serial1.setRxBufferSize(1024);
-            Serial1.begin(420000, SERIAL_8N1,
-                          PinPort::rx_pin(PinPort::PORT_B),
-                          PinPort::tx_pin(PinPort::PORT_B));
-            delay(10);
-            while (Serial1.available()) Serial1.read();
-            uint32_t deadline = millis() + 700;
-            while (millis() < deadline) {
-                while (Serial1.available()) { Serial1.read(); bytes_at_420++; }
-                delay(5);
-            }
-            Serial1.end();
-            if (bytes_at_420 > 0) mode = "app";
         }
 
         PinPort::release(PinPort::PORT_B);
