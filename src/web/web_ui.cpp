@@ -2458,7 +2458,8 @@ async function rxScan() {
         body += '<button onclick="otadataSelect(' + i + ')" style="font-size:11px;padding:3px 6px">Boot app' + i + '</button>';
       }
       body += '<button onclick="rxBackupSlot(' + i + ')" style="font-size:11px;padding:3px 6px">Backup</button>';
-      body += '<button onclick="rxFlashToSlot(' + i + ')" style="font-size:11px;padding:3px 6px;background:#0a3">Flash here</button>';
+      body += '<button onclick="rxFlashToSlot(' + i + ')" style="font-size:11px;padding:3px 6px;background:#0a3" title="ROM DFU path (manual BOOT+power-cycle required)">Flash (DFU)</button>';
+      body += '<button onclick="rxFlashStub(' + i + ')" style="font-size:11px;padding:3px 6px;background:#06c" title="Auto-flash via in-app ELRS stub @420000 — RX must be in app (not DFU)">⚡ Stub-flash</button>';
       body += '<button class="danger" onclick="rxEraseSlot(' + i + ')" style="font-size:11px;padding:3px 6px">Erase</button>';
       body += '</div>';
       col.innerHTML = body;
@@ -2482,6 +2483,35 @@ function rxFlashToSlot(slot) {
   const radio = document.querySelector('input[name="slotSel"][value="app' + slot + '"]');
   if (radio) { radio.checked = true; if (typeof slotOnSlotChange === 'function') slotOnSlotChange(); }
   alert('Slot app' + slot + ' selected. Scroll to "Slot-targeted flash" — upload firmware.bin and hit Erase+Flash.');
+}
+
+// ===== Stub-flash (auto, no BOOT+power-cycle required) =====
+// Sends CRSF 'bl' frame to running RX then flashes via the in-app esptool
+// stub @ 420000. Only works if RX is currently running the app. If RX is in
+// real ROM DFU (physical BOOT), use the normal Flash (DFU) path instead.
+async function rxFlashStub(slot) {
+  const r = document.getElementById('elrsResolved');
+  const fwInfo = r && r.textContent && r.textContent !== '-'
+    ? ' (current catalog selection: ' + r.textContent + ')'
+    : '';
+  if (!confirm(
+      'Auto-flash via in-app stub to app' + slot + '?\n\n' +
+      '1. Receiver must be running the app (LED on, vanilla ELRS or MILELRS).\n' +
+      '2. Plate will send CRSF \'bl\' frame → RX enters stub @ 420000 on same pins.\n' +
+      '3. Flash proceeds without physical BOOT + power-cycle.\n\n' +
+      'Requires firmware already uploaded to plate PSRAM (use Catalog Fetch or the file-upload card below).' + fwInfo
+  )) return;
+  const fd = new FormData();
+  fd.append('offset', slot === 0 ? '0x10000' : '0x1f0000');
+  fd.append('via', 'stub');
+  // Stub cannot touch bootloader; stay flag irrelevant (FLASH_END reboots)
+  fd.append('stay', '0');
+  try {
+    const txt = await postForm('/api/flash/start', fd);
+    alert('Stub-flash queued: ' + txt + '\n\nWatch /api/flash/status or the main flash progress widget. When done, power-cycle is NOT required — RX auto-reboots into new app.');
+  } catch (e) {
+    alert('Stub-flash failed: ' + (e.message || e));
+  }
 }
 async function rxEraseSlot(slot) {
   if (!confirm('Erase app' + slot + ' partition (1.88 MB)? This is irreversible.')) return;

@@ -86,6 +86,14 @@ struct ChipInfo {
 };
 Result chipInfo(const Config &cfg, ChipInfo *out);
 
+// Send the CRSF "reboot to bootloader" command frame (EC 04 32 62 6C 0A) at
+// the given baud. On ESP32-C3 + ELRS 3.x this switches the RX from the app
+// into its in-app esptool stub flasher on the SAME UART at the SAME baud —
+// no physical BOOT + power-cycle required. Caller must then talk SLIP on
+// the configured pins at that baud.
+// Returns FLASH_OK unconditionally (TX-only, no ack).
+Result sendCrsfReboot(const Config &cfg);
+
 // Full dual-slot identity read + OTADATA in one Serial1 session. RX must be
 // in DFU. Reads OTADATA sectors, then the first 16 KB of app0 (@0x10000) and
 // app1 (@0x1f0000) to extract target/version/git/etc baked into seg0 rodata.

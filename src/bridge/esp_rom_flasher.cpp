@@ -870,6 +870,30 @@ Result receiverInfo(const Config &cfg, ReceiverInfo *out) {
     return FLASH_OK;
 }
 
+// CRSF 'bl' frame — the authoritative 6-byte command that puts an ELRS
+// receiver into its bootloader/stub flasher. On ESP32-C3 this reaches the
+// in-app stub (not ROM DFU) at whatever baud the frame arrived on — so
+// cfg.baud_rate MUST be 420000 (vanilla CRSF default). TX-only.
+// Frame: EC 04 32 62 6C 0A (last byte = CRC8-DVB-S2 poly 0xD5 over bytes
+// [type..payload]). Verified against
+// hardware/bayckrc_c3_dual/elrs_3_6_3_src/src/test/test_telemetry/test_telemetry.cpp.
+Result sendCrsfReboot(const Config &cfg) {
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(512);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(20);
+    static const uint8_t frame[6] = {0xEC, 0x04, 0x32, 0x62, 0x6C, 0x0A};
+    s_uart->write(frame, sizeof(frame));
+    s_uart->flush();
+    // Give the ELRS telemetry task a slot to consume + flip into serialUpdate.
+    // Measured: ~150 ms covers "bl received → stub ready to answer SYNC" on
+    // a running vanilla 3.5.3 image. We wait a bit longer for safety.
+    delay(250);
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Exit stub/ROM, jump to user code (i.e. OTADATA-selected app).
 // Stub implementation in ELRS calls ESP.restart(); ROM bootloader jumps to
 // app directly. Opcode: 0xD3, no args, no response (stub may or may not

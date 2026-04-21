@@ -492,10 +492,27 @@ static void executeFlash() {
     cfg.uart = &Serial1;
     cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
     cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
-    cfg.baud_rate = 115200;
+    // Two flash paths:
+    //   via_stub=false (default) — talk ROM DFU at 115200. User must have
+    //   physically put RX in DFU (BOOT + power-cycle). Required for full
+    //   bootloader/partition flash.
+    //   via_stub=true — send CRSF 'bl' frame at 420000, RX transitions into
+    //   its in-app esptool stub on the same UART at 420000. No physical
+    //   buttons required. Only reaches app0/app1 partitions (stub cannot
+    //   touch bootloader @ 0x0 or partition table @ 0x8000).
+    bool via_stub = WebState::flashState.flash_via_stub;
+    cfg.baud_rate = via_stub ? 420000 : 115200;
     cfg.flash_offset = WebState::flashState.flash_offset;
     cfg.stay_in_loader = WebState::flashState.flash_stay;
     cfg.progress = flashProgress;
+
+    if (via_stub) {
+        WebState::flashState.stage = "CRSF bl";
+        Serial.printf("[Flash] via stub — sending CRSF 'bl' @ 420000\n");
+        ESPFlasher::sendCrsfReboot(cfg);
+        // After sendCrsfReboot returns, Serial1 is closed; ESPFlasher::flash()
+        // re-opens at 420000 and does its own SYNC against the stub.
+    }
 
     // 5-point sample verify in-session. Spread across the image so any
     // silent-drop past some internal ROM boundary is caught. 256 B per
@@ -2164,21 +2181,32 @@ void WebServer::start() {
         bool stay = req->hasParam("stay", true)
             ? req->getParam("stay", true)->value() == "1"
             : (req->hasParam("stay") && req->getParam("stay")->value() == "1");
+        // via=stub → plate sends CRSF 'bl' at 420000 first, then talks SLIP
+        // at 420000 to the RX's in-app esptool stub. No physical BOOT req'd.
+        // Only works if RX is currently running the app (not in real ROM DFU
+        // via hardware-strapped BOOT). Cannot reach bootloader @ 0x0 or
+        // partition table @ 0x8000 — stub writes via esp_ota_*.
+        String via;
+        if (req->hasParam("via", true)) via = req->getParam("via", true)->value();
+        else if (req->hasParam("via")) via = req->getParam("via")->value();
+        bool via_stub = (via == "stub");
         {
             WebState::Lock lock;
             WebState::flashState.flash_offset = offset;
             WebState::flashState.flash_raw = raw;
             WebState::flashState.flash_stay = stay;
+            WebState::flashState.flash_via_stub = via_stub;
             WebState::flashState.stage = "Queued";
             WebState::flashState.progress_pct = 0;
             WebState::flashState.lastResult = "";
             WebState::flashState.flash_request = true;
         }
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Flashing started at offset 0x%x%s%s",
+        char msg[160];
+        snprintf(msg, sizeof(msg), "Flashing started @ 0x%x%s%s via %s",
                  (unsigned)offset,
                  raw ? " (raw)" : "",
-                 stay ? " (stay-in-DFU)" : "");
+                 stay ? " (stay-in-DFU)" : "",
+                 via_stub ? "in-app stub @420000" : "ROM DFU @115200");
         req->send(200, "text/plain", msg);
     });
 
@@ -2200,6 +2228,7 @@ void WebServer::start() {
         d["offset"]       = WebState::flashState.flash_offset;
         d["raw"]          = WebState::flashState.flash_raw;
         d["stay"]         = WebState::flashState.flash_stay;
+        d["via_stub"]     = WebState::flashState.flash_via_stub;
         d["requested"]    = WebState::flashState.flash_request;
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
