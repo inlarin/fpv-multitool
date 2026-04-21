@@ -86,6 +86,39 @@ struct ChipInfo {
 };
 Result chipInfo(const Config &cfg, ChipInfo *out);
 
+// Full dual-slot identity read + OTADATA in one Serial1 session. RX must be
+// in DFU. Reads OTADATA sectors, then the first 16 KB of app0 (@0x10000) and
+// app1 (@0x1f0000) to extract target/version/git/etc baked into seg0 rodata.
+// Avoids losing DFU between separate readFlash calls. One PinPort+begin per
+// request.
+struct SlotIdentity {
+    bool     present;               // first byte is 0xE9 (valid ESP image magic)
+    uint32_t offset;                // absolute flash offset (e.g. 0x10000)
+    uint32_t entry_point;           // ESP image entry addr
+    char     target[48];            // e.g. "UNIFIED_ESP32C3_LR1121_RX"
+    char     version_or_lua[32];    // varies: "3.5.3" / "MILELRS_v348" / etc
+    char     git[12];               // short hash like "40555e"
+    char     product[96];           // "ExpressLRS RX" / "Unified" / etc — before magic
+    uint32_t first_nonff_byte;      // end-of-image estimate (partition-relative, 0 if unknown)
+};
+struct OtadataSector {
+    uint32_t seq;
+    uint32_t state;
+    uint32_t crc;
+    bool     read_ok;
+    bool     blank;                 // all 0xFF (uninitialised)
+};
+struct ReceiverInfo {
+    bool          chip_ok;
+    ChipInfo      chip;
+    bool          otadata_ok;
+    OtadataSector otadata[2];
+    int           active_slot;      // -1 if none / both blank; else 0 or 1
+    uint32_t      max_seq;
+    SlotIdentity  slot[2];          // [0] = app0 @ 0x10000, [1] = app1 @ 0x1f0000
+};
+Result receiverInfo(const Config &cfg, ReceiverInfo *out);
+
 const char* errorString(Result r);
 
 } // namespace ESPFlasher

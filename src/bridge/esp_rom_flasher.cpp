@@ -669,6 +669,192 @@ Result chipInfo(const Config &cfg, ChipInfo *out) {
     return FLASH_OK;
 }
 
+// Parse ELRS build-info rodata: looks for the 4-byte `be ef ca fe` sentinel
+// that binary_configurator plants before the target/version/git strings, and
+// extracts the surrounding null-terminated strings. Format observed across
+// vanilla ELRS 3.5.x / 3.6.x and the MILELRS fork:
+//
+//   <product\0> <ap_password\0> <ap_ssid\0> <hostname\0> <be ef ca fe>
+//   <target\0> [<binary_name\0>] [<version\0>|<lua\0>] <git\0>
+//
+// Order of the "after" strings varies by build (MILELRS has MILELRS_v348 in
+// the slot where vanilla has "3.5.3"), so we capture them generically and let
+// the caller label them.
+static void parseBuildInfo(const uint8_t *buf, size_t n, SlotIdentity *id) {
+    int magic_pos = -1;
+    for (size_t i = 0; i + 4 <= n; i++) {
+        if (buf[i] == 0xbe && buf[i+1] == 0xef && buf[i+2] == 0xca && buf[i+3] == 0xfe) {
+            magic_pos = (int)i; break;
+        }
+    }
+    if (magic_pos < 0) return;
+
+    auto readStr = [&](size_t *pp, char *out, size_t max) -> bool {
+        while (*pp < n && buf[*pp] == 0) (*pp)++;
+        if (*pp >= n) { out[0] = 0; return false; }
+        size_t start = *pp;
+        while (*pp < n && buf[*pp] != 0 && (*pp - start) < max - 1) {
+            out[*pp - start] = (char)buf[*pp];
+            (*pp)++;
+        }
+        out[*pp - start] = 0;
+        while (*pp < n && buf[*pp] != 0) (*pp)++;  // skip rest of overflowing string
+        return true;
+    };
+
+    // After magic: target, optional binary_name, version/lua, git
+    size_t p = magic_pos + 4;
+    readStr(&p, id->target, sizeof(id->target));
+    readStr(&p, id->version_or_lua, sizeof(id->version_or_lua));
+    // Next string looks like git hash (6-8 hex chars); overwrite version if it
+    // looks like a hash and previous doesn't.
+    char tmp[24];
+    if (readStr(&p, tmp, sizeof(tmp))) {
+        auto isHex6to8 = [](const char *s) {
+            size_t len = strlen(s);
+            if (len < 6 || len > 8) return false;
+            for (size_t i = 0; i < len; i++) {
+                char c = s[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                    return false;
+            }
+            return true;
+        };
+        if (isHex6to8(tmp)) {
+            strncpy(id->git, tmp, sizeof(id->git) - 1);
+        } else if (isHex6to8(id->version_or_lua)) {
+            // prev slot was actually the git hash — shift
+            strncpy(id->git, id->version_or_lua, sizeof(id->git) - 1);
+            strncpy(id->version_or_lua, tmp, sizeof(id->version_or_lua) - 1);
+        }
+    }
+
+    // Before magic: find last null-terminated string (likely hostname "elrs_rx"
+    // or the product string "ExpressLRS RX"). Walk backwards, skip null runs,
+    // then pick up to 3 strings.
+    int end = magic_pos - 1;
+    while (end > 0 && buf[end] == 0) end--;
+    // Find last string start
+    int start = end;
+    while (start > 0 && buf[start - 1] != 0) start--;
+    // We're at start of last string ("elrs_rx" / "wifi_hostname")
+    // One more step back to find the string before (usually "ExpressLRS RX")
+    int prev_end = start - 1;
+    while (prev_end > 0 && buf[prev_end] == 0) prev_end--;
+    int prev_start = prev_end;
+    while (prev_start > 0 && buf[prev_start - 1] != 0) prev_start--;
+
+    if (prev_end - prev_start + 1 > 0 && prev_end - prev_start + 1 < (int)sizeof(id->product)) {
+        memcpy(id->product, buf + prev_start, prev_end - prev_start + 1);
+        id->product[prev_end - prev_start + 1] = 0;
+    }
+}
+
+// Scan a slot inside an already-open DFU session. Reads 16 KB at slot offset,
+// marks `present` if ESP image magic 0xE9 sits at byte 0, then extracts the
+// ELRS build-info strings. `first_nonff_byte` left 0 (follow-up binary search
+// later — not used yet).
+static bool scanSlotInSession(uint32_t slot_offset, SlotIdentity *id) {
+    memset(id, 0, sizeof(*id));
+    id->offset = slot_offset;
+
+    static uint8_t buf[16384];
+    if (!readFlashInSession(slot_offset, sizeof(buf), buf)) return false;
+
+    id->present = (buf[0] == 0xE9);
+    if (!id->present) return true;  // scan ok, slot just empty/corrupt
+    id->entry_point = (uint32_t)buf[4] | ((uint32_t)buf[5] << 8)
+                    | ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 24);
+    parseBuildInfo(buf, sizeof(buf), id);
+    return true;
+}
+
+// Full dual-slot receiver info in one DFU session. Sync + SPI_ATTACH + SPI_SET_PARAMS,
+// then read OTADATA (0xe000+0xf000), then scan app0 and app1. Does NOT send
+// FLASH_END — caller may follow up with more reads if desired.
+Result receiverInfo(const Config &cfg, ReceiverInfo *out) {
+    if (!cfg.uart || !out) return FLASH_ERR_INVALID_INPUT;
+    memset(out, 0, sizeof(*out));
+    out->active_slot = -1;
+    out->slot[0].offset = 0x10000;
+    out->slot[1].offset = 0x1f0000;
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(8192);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(50);
+
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+
+    // Chip identity via READ_REG — same as chipInfo() but inline.
+    uint32_t magic = 0;
+    uint8_t req[4];
+    *(uint32_t*)req = 0x40001000;
+    if (sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, &magic)) {
+        out->chip_ok = true;
+        out->chip.magic_value = magic;
+        out->chip.ok = true;
+        switch (magic) {
+            case 0xfff0c101: out->chip.chip_name = "ESP8266"; break;
+            case 0x00f01d83: out->chip.chip_name = "ESP32"; break;
+            case 0x000007c6: out->chip.chip_name = "ESP32-S2"; break;
+            case 0x00000009:
+            case 0xeb004136: out->chip.chip_name = "ESP32-S3"; break;
+            case 0x6921506f:
+            case 0x1b31506f: out->chip.chip_name = "ESP32-C3"; break;
+            case 0x0da1806f: out->chip.chip_name = "ESP32-C6"; break;
+            case 0xd7b73e80: out->chip.chip_name = "ESP32-H2"; break;
+            default:         out->chip.chip_name = "unknown"; break;
+        }
+        if (magic == 0x6921506f || magic == 0x1b31506f) {
+            uint32_t m0 = 0, m1 = 0;
+            *(uint32_t*)req = 0x60008844;
+            sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, &m0);
+            *(uint32_t*)req = 0x60008848;
+            sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, &m1);
+            out->chip.mac[0] = (uint8_t)(m1 >> 8);
+            out->chip.mac[1] = (uint8_t)(m1 >> 0);
+            out->chip.mac[2] = (uint8_t)(m0 >> 24);
+            out->chip.mac[3] = (uint8_t)(m0 >> 16);
+            out->chip.mac[4] = (uint8_t)(m0 >> 8);
+            out->chip.mac[5] = (uint8_t)(m0 >> 0);
+        }
+    }
+
+    // Prep flash subsystem once, then do multiple reads in-session.
+    spiAttach();
+    spiSetParams(0x400000);
+
+    // OTADATA — 2 × 32 B at 0xe000 and 0xf000.
+    uint8_t otab[2][32];
+    bool ota_ok[2] = {false, false};
+    ota_ok[0] = readFlashInSession(0xe000, 32, otab[0]);
+    ota_ok[1] = readFlashInSession(0xf000, 32, otab[1]);
+    out->otadata_ok = (ota_ok[0] || ota_ok[1]);
+    uint32_t max_seq = 0;
+    for (int i = 0; i < 2; i++) {
+        out->otadata[i].read_ok = ota_ok[i];
+        if (!ota_ok[i]) continue;
+        uint32_t seq   = *(uint32_t*)&otab[i][0];
+        uint32_t state = *(uint32_t*)&otab[i][24];
+        uint32_t crc   = *(uint32_t*)&otab[i][28];
+        out->otadata[i].seq = seq;
+        out->otadata[i].state = state;
+        out->otadata[i].crc = crc;
+        out->otadata[i].blank = (seq == 0xFFFFFFFF);
+        if (!out->otadata[i].blank && seq > max_seq) max_seq = seq;
+    }
+    out->max_seq = max_seq;
+    out->active_slot = (max_seq == 0) ? -1 : (int)((max_seq - 1) & 1);
+
+    // Slot scan — app0 / app1.
+    scanSlotInSession(0x10000,  &out->slot[0]);
+    scanSlotInSession(0x1f0000, &out->slot[1]);
+
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Exit stub/ROM, jump to user code (i.e. OTADATA-selected app).
 // Stub implementation in ELRS calls ESP.restart(); ROM bootloader jumps to
 // app directly. Opcode: 0xD3, no args, no response (stub may or may not

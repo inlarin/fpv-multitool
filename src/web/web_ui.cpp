@@ -629,7 +629,69 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 
 <!-- ===== ELRS FLASH ===== -->
 <div id="tab-elrs" class="tab-content" style="display:none">
-  <!-- ===== Chip detect ===== -->
+
+  <!-- ===== Receiver Overview (unified identity) ===== -->
+  <div class="card">
+    <h2>Receiver Overview</h2>
+    <div class="warning">
+      RX в <b>DFU</b> (BOOT + power-cycle) → Scan. Один запрос — чип, MAC, OTADATA, идентичность обоих app-слотов (target / version / git) в одной DFU-сессии.
+    </div>
+    <button onclick="rxScan()" id="rxScanBtn" style="width:100%">🔍 Scan receiver</button>
+    <div id="rxOv" style="display:none;margin-top:10px">
+      <div class="row"><span class="label">Chip:</span><span class="value" id="rxChip">-</span></div>
+      <div class="row"><span class="label">MAC:</span><span class="value" id="rxMac" style="font-family:monospace">-</span></div>
+      <div class="row"><span class="label">Active slot:</span><span class="value" id="rxActive">-</span></div>
+      <div class="row"><span class="label">OTADATA max_seq:</span><span class="value" id="rxMaxSeq">-</span></div>
+      <div id="rxSlots" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
+    </div>
+    <div id="rxScanErr" style="color:#f66;margin-top:8px;font-family:monospace;font-size:11px"></div>
+  </div>
+
+  <!-- ===== WiFi / AP ===== -->
+  <div class="card">
+    <h2>RX WiFi AP</h2>
+    <div class="warning">
+      Vanilla ELRS &amp; MILELRS поднимают SoftAP после "Force WiFi" команды по CRSF. Работает когда RX в app-режиме (не в DFU).
+    </div>
+    <div class="row"><span class="label">SSID:</span><span class="value">ExpressLRS RX</span></div>
+    <div class="row"><span class="label">Password:</span><span class="value">expresslrs</span></div>
+    <div class="row"><span class="label">URL:</span><a href="http://10.0.0.1" target="_blank" class="value" style="color:var(--accent)">http://10.0.0.1</a></div>
+    <div class="row"><span class="label">Inverted CRSF:</span>
+      <span><input type="checkbox" id="rxWifiInv"> <small style="color:var(--text-dim)">для F3/F4 FC</small></span>
+    </div>
+    <button onclick="rxForceWifi()" id="rxWifiBtn" style="width:100%">📡 Force WiFi on (CRSF)</button>
+    <div id="rxWifiMsg" style="margin-top:8px;font-size:11px;color:var(--text-dim)"></div>
+  </div>
+
+  <!-- ===== Firmware Catalog ===== -->
+  <div class="card">
+    <h2>Firmware Catalog (artifactory.expresslrs.org)</h2>
+    <div class="warning">
+      Официальные билды ExpressLRS. Браузер скачивает zip → достаёт <code>firmware.bin</code> (path: <code>firmware/FCC/Unified_ESP32C3_LR1121_RX/</code>) → аплоадит на плату в buffer. Дальше Flash to slot (ниже). Плата работает только как upload-приёмник — никаких proxy-загрузок через неё.
+    </div>
+    <div id="elrsCatalog" style="display:flex;flex-direction:column;gap:4px;margin-top:6px"></div>
+    <div class="row"><span class="label">Variant:</span>
+      <select id="elrsVariant" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+        <option value="FCC" selected>FCC (US 915 + 2.4 ISM)</option>
+        <option value="LBT">LBT (EU 868 + 2.4 CE)</option>
+      </select>
+    </div>
+    <div class="row"><span class="label">Target firmware:</span>
+      <select id="elrsTarget" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+        <option value="Unified_ESP32C3_LR1121_RX" selected>Unified_ESP32C3_LR1121_RX (C3+LR1121 RX)</option>
+        <option value="Unified_ESP32C3_2400_RX">Unified_ESP32C3_2400_RX (C3+SX1280 RX)</option>
+        <option value="Unified_ESP32_LR1121_TX">Unified_ESP32_LR1121_TX (ESP32+LR1121 TX)</option>
+        <option value="Unified_ESP32_2400_TX">Unified_ESP32_2400_TX (ESP32+SX1280 TX)</option>
+        <option value="Unified_ESP8285_2400_RX">Unified_ESP8285_2400_RX (ESP8285 RX)</option>
+      </select>
+    </div>
+    <div id="catStatus" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
+    <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
+      После Fetch: прошивка лежит в PSRAM платы. Используй "Slot-targeted flash" ниже чтобы записать в app0 (0x10000) или app1 (0x1F0000).
+    </div>
+  </div>
+
+  <!-- ===== Chip detect (legacy, для быстрой single-command проверки) ===== -->
   <div class="card">
     <h2>Detect receiver</h2>
     <div class="warning">
@@ -1260,7 +1322,7 @@ function showTab(name) {
   if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
-  if (name === 'elrs') { rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); }
+  if (name === 'elrs') { rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); renderCatalog(); }
 }
 
 // === SERVO ===
@@ -2355,6 +2417,167 @@ async function getJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (await r.text()));
   return r.json();
+}
+
+// ===== Receiver Overview (unified one-session identity) =====
+async function rxScan() {
+  const btn = document.getElementById('rxScanBtn');
+  const err = document.getElementById('rxScanErr');
+  const ov  = document.getElementById('rxOv');
+  btn.disabled = true; err.textContent = ''; btn.textContent = '⏳ Scanning…';
+  try {
+    const txt = await postForm('/api/elrs/receiver_info');
+    const d = JSON.parse(txt);
+    document.getElementById('rxChip').textContent =
+      (d.chip.name || 'unknown') + '  (magic ' + (d.chip.magic_hex || '-') + ')';
+    document.getElementById('rxMac').textContent = d.chip.mac_ok ? d.chip.mac : '(not read)';
+    document.getElementById('rxActive').textContent =
+      d.otadata.active_slot >= 0 ? ('app' + d.otadata.active_slot) : 'none (both blank)';
+    document.getElementById('rxMaxSeq').textContent =
+      d.otadata.max_seq + (d.otadata.ok ? '' : ' (read failed)');
+
+    const slotsDiv = document.getElementById('rxSlots');
+    slotsDiv.innerHTML = '';
+    for (let i = 0; i < 2; i++) {
+      const s = d.slots[i];
+      const col = document.createElement('div');
+      col.style.cssText = 'flex:1 1 220px;background:var(--card-bg2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px';
+      const badge = s.active
+        ? '<span style="background:#0a3;color:#fff;padding:1px 6px;border-radius:3px">ACTIVE</span>'
+        : (s.present ? '<span style="background:#333;color:#ccc;padding:1px 6px;border-radius:3px">inactive</span>'
+                     : '<span style="background:#633;color:#fcc;padding:1px 6px;border-radius:3px">empty</span>');
+      let body = '<div style="font-weight:bold;margin-bottom:4px">app' + i + ' @ ' + s.offset + ' &nbsp; ' + badge + '</div>';
+      if (s.present) {
+        body += '<div><b>target:</b> <code style="color:var(--accent)">' + (s.target || '-') + '</code></div>';
+        body += '<div><b>version/lua:</b> ' + (s.version_or_lua || '-') + '</div>';
+        body += '<div><b>git:</b> <code>' + (s.git || '-') + '</code></div>';
+        body += '<div><b>product:</b> ' + (s.product || '-') + '</div>';
+        body += '<div><b>entry:</b> <code>' + s.entry + '</code></div>';
+      } else {
+        body += '<div style="color:var(--text-dim);font-style:italic">slot blank or corrupt (first byte != 0xE9)</div>';
+      }
+      body += '<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">';
+      if (!s.active && s.present) {
+        body += '<button onclick="otadataSelect(' + i + ')" style="font-size:11px;padding:3px 6px">Boot app' + i + '</button>';
+      }
+      body += '<button onclick="rxBackupSlot(' + i + ')" style="font-size:11px;padding:3px 6px">Backup</button>';
+      body += '<button onclick="rxFlashToSlot(' + i + ')" style="font-size:11px;padding:3px 6px;background:#0a3">Flash here</button>';
+      body += '<button class="danger" onclick="rxEraseSlot(' + i + ')" style="font-size:11px;padding:3px 6px">Erase</button>';
+      body += '</div>';
+      col.innerHTML = body;
+      slotsDiv.appendChild(col);
+    }
+    ov.style.display = 'block';
+  } catch (e) {
+    err.textContent = 'Scan failed: ' + (e.message || e);
+  } finally {
+    btn.disabled = false; btn.textContent = '🔍 Scan receiver';
+  }
+}
+function rxBackupSlot(slot) {
+  const off = slot === 0 ? '0x10000' : '0x1f0000';
+  document.getElementById('dumpOffset').value = off;
+  document.getElementById('dumpSize').value = '0x200000';
+  alert('Dump offset/size prefilled. Scroll down to "Dump Receiver Firmware" and press Dump.');
+  location.hash = '#tab-elrs';
+}
+function rxFlashToSlot(slot) {
+  const radio = document.querySelector('input[name="slotSel"][value="app' + slot + '"]');
+  if (radio) { radio.checked = true; if (typeof slotOnSlotChange === 'function') slotOnSlotChange(); }
+  alert('Slot app' + slot + ' selected. Scroll to "Slot-targeted flash" — upload firmware.bin and hit Erase+Flash.');
+}
+async function rxEraseSlot(slot) {
+  if (!confirm('Erase app' + slot + ' partition (1.88 MB)? This is irreversible.')) return;
+  const off = slot === 0 ? '0x10000' : '0x1f0000';
+  const fd = new FormData();
+  fd.append('offset', off);
+  fd.append('size', '0x1e0000');
+  fd.append('chunk', '0x40000');
+  try {
+    const r = await postForm('/api/flash/erase_partition', fd);
+    alert('Erase done: ' + r);
+    rxScan();
+  } catch (e) {
+    alert('Erase failed: ' + (e.message || e));
+  }
+}
+
+// ===== WiFi force-enable =====
+async function rxForceWifi() {
+  const btn = document.getElementById('rxWifiBtn');
+  const msg = document.getElementById('rxWifiMsg');
+  btn.disabled = true;
+  const fd = new FormData();
+  fd.append('inverted', document.getElementById('rxWifiInv').checked ? '1' : '0');
+  try {
+    const txt = await postForm('/api/elrs/enable_wifi', fd);
+    msg.textContent = '✓ ' + txt;
+    msg.style.color = '#0f0';
+  } catch (e) {
+    msg.textContent = '✗ ' + (e.message || e);
+    msg.style.color = '#f66';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ===== Firmware Catalog =====
+const ELRS_RELEASES = [
+  {version:'4.0.0', date:'2026-02-06', sha:'ed9fc3e637207e8d656ffe9b1b3e8eef418573c6', note:'latest (LittleFS)'},
+  {version:'3.6.3', date:'2026-01-21', sha:'288efe1acf223e479f81349d68dda5505135301a', note:'last 3.x'},
+  {version:'3.5.3', date:'2024-11-29', sha:'40555e141efb0c93ea8d075ec47a27592355f924', note:'known-good on BAYCK C3 Dual'},
+];
+function renderCatalog() {
+  const host = document.getElementById('elrsCatalog');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const r of ELRS_RELEASES) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px;border:1px solid var(--border-soft);border-radius:4px';
+    row.innerHTML =
+      '<div style="flex:1"><b>' + r.version + '</b> · ' + r.date +
+      ' <span style="color:var(--text-dim);font-size:11px">' + r.note + '</span></div>' +
+      '<button onclick="catFetch(\'' + r.version + '\', \'' + r.sha + '\')" style="font-size:12px">Fetch</button>' +
+      '<a href="https://artifactory.expresslrs.org/ExpressLRS/' + r.sha + '/firmware.zip" target="_blank" style="font-size:11px;color:var(--accent)">zip</a>';
+    host.appendChild(row);
+  }
+}
+async function ensureJSZip() {
+  if (window.JSZip) return;
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('failed to load JSZip CDN'));
+    document.head.appendChild(s);
+  });
+}
+async function catFetch(version, sha) {
+  const status = document.getElementById('catStatus');
+  const variant = document.getElementById('elrsVariant').value;
+  const target  = document.getElementById('elrsTarget').value;
+  const url = 'https://artifactory.expresslrs.org/ExpressLRS/' + sha + '/firmware.zip';
+  const path = 'firmware/' + variant + '/' + target + '/firmware.bin';
+  try {
+    status.textContent = 'Loading JSZip…';
+    await ensureJSZip();
+    status.textContent = 'Downloading ' + version + ' zip (~25 MB) from artifactory…';
+    const zipBlob = await (await fetch(url, {mode:'cors'})).blob();
+    status.textContent = 'Unpacking ' + path + ' from zip…';
+    const zip = await JSZip.loadAsync(zipBlob);
+    const entry = zip.file(path);
+    if (!entry) throw new Error('not in zip: ' + path + '. Target might differ between versions — check zip contents');
+    const fwBlob = await entry.async('blob');
+    status.textContent = 'Uploading ' + (fwBlob.size/1024).toFixed(1) + ' KB to plate buffer…';
+    const fd = new FormData();
+    fd.append('firmware', fwBlob, 'firmware.bin');
+    const txt = await postForm('/api/flash/upload', fd);
+    status.textContent = '✓ ' + version + ' ready in PSRAM: ' + txt + '\nNow scroll to "Slot-targeted flash" and Flash to app0 or app1.';
+    status.style.color = '#0f0';
+  } catch (e) {
+    status.textContent = '✗ ' + (e.message || e);
+    status.style.color = '#f66';
+  }
 }
 
 // ===== Chip detection =====
