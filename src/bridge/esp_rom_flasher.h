@@ -33,7 +33,18 @@ struct Config {
     ProgressCallback progress = nullptr;
 };
 
-Result flash(const Config &cfg, const uint8_t *data, size_t size);
+// Sample region for in-session readback verify. Populated by flash() when
+// provided — read back AFTER the FLASH_DATA loop but BEFORE Serial1.end(),
+// so the RX never loses DFU between write and verify.
+struct Sample {
+    uint32_t offset;    // flash offset (absolute)
+    uint32_t size;      // bytes to read (<=256)
+    uint8_t  data[256]; // filled by flash() on success
+    bool     ok;        // true if this sample was read without error
+};
+
+Result flash(const Config &cfg, const uint8_t *data, size_t size,
+             Sample *samples = nullptr, size_t n_samples = 0);
 
 // Read `size` bytes from flash at `offset` on an attached ESP32-C3 / S2 / S3
 // receiver that's already in ROM bootloader mode. Destination buffer must

@@ -489,9 +489,56 @@ static void executeFlash() {
     cfg.stay_in_loader = WebState::flashState.flash_stay;
     cfg.progress = flashProgress;
 
-    ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size);
+    // 5-point sample verify in-session. Spread across the image so any
+    // silent-drop past some internal ROM boundary is caught. 256 B per
+    // sample keeps stack modest (< 2 KB total).
+    const int N_SAMPLES = 5;
+    ESPFlasher::Sample samples[N_SAMPLES];
+    uint32_t sample_file_offs[N_SAMPLES];
+    {
+        uint32_t last = (fw_size >= 256) ? (fw_size - 256) : 0;
+        sample_file_offs[0] = 0;
+        sample_file_offs[1] = (uint32_t)(fw_size / 4);
+        sample_file_offs[2] = (uint32_t)(fw_size / 2);
+        sample_file_offs[3] = (uint32_t)(fw_size * 3 / 4);
+        sample_file_offs[4] = last;
+        for (int i = 0; i < N_SAMPLES; i++) {
+            samples[i].offset = cfg.flash_offset + sample_file_offs[i];
+            samples[i].size = (fw_size >= 256) ? 256 : (uint32_t)fw_size;
+            samples[i].ok = false;
+        }
+    }
+
+    ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size, samples, N_SAMPLES);
 
     PinPort::release(PinPort::PORT_B);
+
+    // Compare samples against local image on success.
+    String verifyMsg;
+    if (r == ESPFlasher::FLASH_OK) {
+        int mismatches = 0;
+        int read_fail = 0;
+        uint32_t first_mismatch_file_off = 0xFFFFFFFF;
+        for (int i = 0; i < N_SAMPLES; i++) {
+            if (!samples[i].ok) { read_fail++; continue; }
+            if (memcmp(samples[i].data, fw_ptr + sample_file_offs[i], samples[i].size) != 0) {
+                mismatches++;
+                if (first_mismatch_file_off == 0xFFFFFFFF) {
+                    first_mismatch_file_off = sample_file_offs[i];
+                }
+            }
+        }
+        if (mismatches == 0 && read_fail == 0) {
+            verifyMsg = " (verified " + String(N_SAMPLES) + "/" + String(N_SAMPLES) + " samples)";
+        } else {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                " VERIFY FAILED: %d mismatch, %d read_fail, first bad @file+0x%x",
+                mismatches, read_fail, (unsigned)first_mismatch_file_off);
+            verifyMsg = buf;
+            r = ESPFlasher::FLASH_ERR_WRITE_FAILED;
+        }
+    }
 
     if (decompressed) free(decompressed);
 
@@ -506,9 +553,9 @@ static void executeFlash() {
         WebState::flashState.fw_size = 0;
         WebState::flashState.fw_received = 0;
         WebState::flashState.in_progress = false;
-        WebState::flashState.lastResult = ESPFlasher::errorString(r);
+        WebState::flashState.lastResult = String(ESPFlasher::errorString(r)) + verifyMsg;
     }
-    Serial.printf("[Flash] Result: %s (buffer freed)\n", ESPFlasher::errorString(r));
+    Serial.printf("[Flash] Result: %s%s\n", ESPFlasher::errorString(r), verifyMsg.c_str());
 }
 
 void WebServer::start() {
@@ -1997,6 +2044,9 @@ void WebServer::start() {
         d["flash_fw_buf"]  = WebState::flashState.fw_data ? "allocated" : "null";
         d["flash_stage"]   = WebState::flashState.stage;
         d["flash_offset"]  = WebState::flashState.flash_offset;
+        d["flash_progress"] = WebState::flashState.progress_pct;
+        d["flash_in_progress"] = WebState::flashState.in_progress;
+        d["flash_last_result"] = WebState::flashState.lastResult;
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });
@@ -3682,10 +3732,17 @@ void WebServer::loop() {
         s_ws->cleanupClients();
     }
 
-    // Execute flash request
+    // Execute flash request on a dedicated task. Running executeFlash() on
+    // the main loop blocks every other main-loop consumer (CRSF, WS broadcast,
+    // battery service) for ~3 minutes; worse, the idle-task watchdog on core 0
+    // fired mid-flash and rebooted the plate. The dump path already uses a
+    // task for the same reason.
     if (WebState::flashState.flash_request && !WebState::flashState.in_progress) {
         WebState::flashState.flash_request = false;
-        executeFlash();
+        xTaskCreate([](void *){
+            executeFlash();
+            vTaskDelete(nullptr);
+        }, "elrs_flash", 8192, nullptr, 1, nullptr);
     }
 
     // Execute pending battery service actions from web thread

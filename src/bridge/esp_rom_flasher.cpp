@@ -238,12 +238,55 @@ static bool spiAttach();
 static bool spiSetParams(uint32_t flash_size_bytes);
 
 // Main flash entry point.
-// Large writes (>~256 KB) on ESP32-C3 ROM drop silently past a certain
-// point within a single FLASH_BEGIN session — empirically 288 KB on the
-// Bayck RC C3 Dual. Workaround: split the payload into CHUNK_SIZE
-// sessions, each with its own FLASH_BEGIN / DATA... / FLASH_END(stay).
-// Only the FINAL FLASH_END respects cfg.stay_in_loader.
-Result flash(const Config &cfg, const uint8_t *data, size_t size) {
+// Single FLASH_BEGIN for the entire image, then N × FLASH_DATA blocks.
+// Earlier versions chunked at 256 KB because with 1 KB blocks the ROM hit a
+// block-count cliff at 287 blocks (~287 KB). With 4 KB blocks that same
+// block-count limit maps to ~1.1 MB — past any single ELRS image we flash.
+// Chunking itself turned out to break on the second chunk's FLASH_BEGIN
+// (timed out after 90 s), so single-session is both simpler and correct.
+// Read up to 256 bytes from flash inside an already-open session (Serial1
+// is live, RX is in DFU). Avoids losing DFU between write and verify — the
+// separate readFlash() path does its own begin/sync/end, and empirically
+// that end() triggers the RX to exit DFU under some ROM timing.
+// Caller must have already done sync + spiAttach + spiSetParams earlier in
+// the session. Uses CMD_READ_FLASH_SLOW (0x0E) with 64 B chunks.
+static bool readFlashInSession(uint32_t offset, uint32_t size, uint8_t *out) {
+    static const uint32_t CHUNK = 64;
+    static uint8_t resp[128];
+    uint32_t received = 0;
+    while (received < size) {
+        uint32_t take = (size - received > CHUNK) ? CHUNK : (size - received);
+        uint8_t req[8];
+        *(uint32_t*)(req + 0) = offset + received;
+        *(uint32_t*)(req + 4) = take;
+        uint32_t ck = cksum(req, 8);
+
+        slipStart();
+        slipWriteByte(0x00);
+        slipWriteByte(CMD_READ_FLASH_SLOW);
+        slipWriteByte(8); slipWriteByte(0);
+        slipWriteByte(ck & 0xFF);
+        slipWriteByte((ck >> 8) & 0xFF);
+        slipWriteByte((ck >> 16) & 0xFF);
+        slipWriteByte((ck >> 24) & 0xFF);
+        slipWrite(req, 8);
+        slipEnd();
+        s_uart->flush();
+
+        int n = slipRead(resp, sizeof(resp), 2000);
+        if (n < 8 || resp[0] != 0x01 || resp[1] != CMD_READ_FLASH_SLOW) return false;
+        uint16_t resp_size = resp[2] | (resp[3] << 8);
+        int data_len = (int)resp_size - 2;
+        if (data_len <= 0 || 8 + data_len > n) return false;
+        if ((uint32_t)data_len > take) data_len = (int)take;
+        memcpy(out + received, resp + 8, data_len);
+        received += data_len;
+    }
+    return true;
+}
+
+Result flash(const Config &cfg, const uint8_t *data, size_t size,
+             Sample *samples, size_t n_samples) {
     if (!cfg.uart || !data || size == 0) return FLASH_ERR_INVALID_INPUT;
 
     s_uart = cfg.uart;
@@ -257,57 +300,59 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size) {
 
     if (cfg.progress) cfg.progress(0, "Connecting");
 
-    // SYNC
     if (!sync()) {
         s_uart->end();
         return FLASH_ERR_NO_SYNC;
     }
     if (cfg.progress) cfg.progress(5, "Synced");
 
-    // SPI_ATTACH — idempotent, do once.
     spiAttach();
     uint32_t fs = cfg.flash_offset + (uint32_t)size;
     if (fs < 0x400000) fs = 0x400000;
     spiSetParams(fs);
 
-    // Split into ≤CHUNK_SIZE chunks to avoid the >288 KB silent-drop.
-    const size_t CHUNK_SIZE = 0x40000;   // 256 KB — safely under the cliff
-    size_t written_so_far = 0;
-    while (written_so_far < size) {
-        size_t chunk_len = size - written_so_far;
-        if (chunk_len > CHUNK_SIZE) chunk_len = CHUNK_SIZE;
-        bool is_last_chunk = (written_so_far + chunk_len >= size);
+    if (!flashBegin(size, cfg.flash_offset)) {
+        s_uart->end();
+        return FLASH_ERR_BEGIN_FAILED;
+    }
+    if (cfg.progress) cfg.progress(10, "Erasing");
 
-        if (!flashBegin(chunk_len, cfg.flash_offset + written_so_far)) {
+    uint32_t num_blocks = (size + FLASH_WRITE_BLOCK_SIZE - 1) / FLASH_WRITE_BLOCK_SIZE;
+    for (uint32_t i = 0; i < num_blocks; i++) {
+        size_t chunk_off = (size_t)i * FLASH_WRITE_BLOCK_SIZE;
+        size_t block_size = (size - chunk_off) < FLASH_WRITE_BLOCK_SIZE
+            ? (size - chunk_off)
+            : FLASH_WRITE_BLOCK_SIZE;
+        if (!flashData(data + chunk_off, block_size, i)) {
             s_uart->end();
-            return FLASH_ERR_BEGIN_FAILED;
+            return FLASH_ERR_WRITE_FAILED;
         }
-        if (cfg.progress) cfg.progress(10 + (int)(written_so_far * 85 / size), "Erasing");
+        // Throttle between blocks. ESP32-C3 ROM's FLASH_DATA handler acks on
+        // receive, not on commit — NOR flash writes at ~40 KB/s, so each 4 KB
+        // block needs ~100 ms to physically land. Without throttle, the ROM's
+        // internal write queue overflows somewhere beyond ~256 KB and
+        // subsequent ACKs become lies. Wire time alone is ~365 ms/block at
+        // 115200 baud, so ~30 s of added delay is cheap insurance.
+        delay(100);
+        if (cfg.progress) {
+            int pct = 10 + (int)((chunk_off + block_size) * 85 / size);
+            cfg.progress(pct, "Writing");
+        }
+    }
 
-        uint32_t num_blocks = (chunk_len + FLASH_WRITE_BLOCK_SIZE - 1) / FLASH_WRITE_BLOCK_SIZE;
-        for (uint32_t i = 0; i < num_blocks; i++) {
-            size_t chunk_off = i * FLASH_WRITE_BLOCK_SIZE;
-            size_t block_size = min((size_t)FLASH_WRITE_BLOCK_SIZE, chunk_len - chunk_off);
-            if (!flashData(data + written_so_far + chunk_off, block_size, i)) {
-                s_uart->end();
-                return FLASH_ERR_WRITE_FAILED;
+    // In-session sample readback BEFORE FLASH_END/Serial1.end(). The RX
+    // tends to exit DFU if the UART goes silent between our commands
+    // (suspected ROM watchdog / auto-baud retrigger), so we verify while
+    // we still have the session open.
+    if (samples && n_samples > 0) {
+        if (cfg.progress) cfg.progress(97, "Verifying");
+        for (size_t i = 0; i < n_samples; i++) {
+            if (samples[i].size == 0 || samples[i].size > sizeof(samples[i].data)) {
+                samples[i].ok = false;
+                continue;
             }
-            // Throttle — ESP32-C3 ROM's internal flash-write queue acks
-            // FLASH_DATA before the write is actually committed. Sending
-            // next block too fast causes silent drops past ~288 blocks.
-            delayMicroseconds(5000);
-            if (cfg.progress) {
-                int pct = 10 + (int)((written_so_far + chunk_off + block_size) * 85 / size);
-                cfg.progress(pct, "Writing");
-            }
+            samples[i].ok = readFlashInSession(samples[i].offset, samples[i].size, samples[i].data);
         }
-
-        // End-of-chunk FLASH_END with stay-in-loader so ROM doesn't reset
-        // between chunks. Only the final chunk may reboot (see below).
-        if (!is_last_chunk) {
-            flashEnd(false);  // false = stay in bootloader between chunks
-        }
-        written_so_far += chunk_len;
     }
 
     // FLASH_END — only send when we actually want to reboot. Some ESP32-C3
