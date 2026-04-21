@@ -2319,6 +2319,58 @@ void WebServer::start() {
     // within a single DFU session (the async /api/flash/dump/* path requires
     // multiple round-trips and often loses DFU between them).
     //  POST /api/flash/read_bytes  form: offset=<hex>&size=<hex, max 2048>
+    // Passive UART sniffer for RX boot diagnostics. Opens Serial1 at the
+    // requested baud, reads bytes for `ms` milliseconds, returns hex + ASCII
+    // rendering. Used to catch ESP-IDF ROM boot banner (74880 baud default
+    // on ESP32-C3) or ELRS app-level output. Does NOT transmit — so RX is
+    // undisturbed, user just power-cycles RX while we listen.
+    //   POST /api/bridge/listen  form: baud=<int>&ms=<int, max 8000>
+    s_server->on("/api/bridge/listen", HTTP_POST, [](AsyncWebServerRequest *req) {
+        uint32_t baud = req->hasParam("baud", true)
+            ? strtoul(req->getParam("baud", true)->value().c_str(), nullptr, 0) : 74880;
+        uint32_t ms = req->hasParam("ms", true)
+            ? strtoul(req->getParam("ms", true)->value().c_str(), nullptr, 0) : 3000;
+        if (ms > 8000) ms = 8000;
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "bridge_listen")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        Serial1.setRxBufferSize(4096);
+        Serial1.begin(baud, SERIAL_8N1,
+                      PinPort::rx_pin(PinPort::PORT_B),
+                      PinPort::tx_pin(PinPort::PORT_B));
+        delay(20);
+        while (Serial1.available()) Serial1.read();
+
+        // Read loop
+        static uint8_t buf[3072];
+        size_t got = 0;
+        uint32_t deadline = millis() + ms;
+        while (millis() < deadline && got < sizeof(buf)) {
+            while (Serial1.available() && got < sizeof(buf)) buf[got++] = Serial1.read();
+            delay(5);
+        }
+        Serial1.end();
+        PinPort::release(PinPort::PORT_B);
+
+        // Build response: hex followed by ASCII render (non-printable → .)
+        String out;
+        out.reserve(got * 4 + 64);
+        out += "bytes=" + String((unsigned)got) + " baud=" + String((unsigned)baud) + "\n--- HEX ---\n";
+        char h[4];
+        for (size_t i = 0; i < got; i++) {
+            snprintf(h, sizeof(h), "%02x ", buf[i]);
+            out += h;
+            if ((i % 32) == 31) out += "\n";
+        }
+        out += "\n--- ASCII ---\n";
+        for (size_t i = 0; i < got; i++) {
+            char c = (buf[i] >= 0x20 && buf[i] < 0x7F) ? (char)buf[i] : '.';
+            out += c;
+        }
+        req->send(200, "text/plain", out);
+    });
+
     s_server->on("/api/flash/read_bytes", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
             req->send(400, "text/plain", "need offset + size");
