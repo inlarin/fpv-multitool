@@ -74,9 +74,22 @@ Three flash layouts to support:
 - `fwPathUpdate()` already checks mode; add profile check to disable targets
   whose slot doesn't exist.
 
-### Phase M3 — Dynamic Dump UI
-- `#dumpSize` select → populate with detected flash size (4/8/16 MB) +
-  "active app only (faster)" option that dumps just `[active_app_offset, size]`.
+### Phase M3 — Dynamic Dump UI (user feedback 2026-04-22)
+**Current:** fixed dropdown offsets/sizes; user has to know the layout.
+
+**Goal:** after probe, **recommend what to dump** based on detected device:
+- Profile known → show "presets" row:
+  - `[Active app only]` — just the running partition (~1.88 MB on C3,
+    ~2.5-3 MB on S3 TX). ~2 min. Enough for firmware version / UID /
+    WiFi creds if in ELRSOPTS.
+  - `[NVS + active app]` — ~24 KB + app. ~2 min. The common "full
+    identity + config" dump.
+  - `[Full flash]` — whole 4/8/16 MB. ~5-15 min. For deep analysis
+    or clone-to-same-target backup.
+  - `[Custom offset/size]` — current behaviour, expert mode.
+- Each preset shows estimated time + what it'll reveal.
+- Profile unknown (never probed) → fall back to current "full 4 MB" default
+  but show "Probe first to get size-aware presets" hint.
 - `#dumpOffset` → dropdown instead of text input: `0x0 (full)`, `0x10000 (app0)`,
   `0x1F0000 (app1)`, `0x9000 (NVS)`.
 - On "active app only" → pulls offset+size from `_rxProfile`.
