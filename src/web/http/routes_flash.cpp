@@ -1133,70 +1133,11 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(200, "application/json", out);
     });
 
-    s_server->on("/api/elrs/enable_wifi", HTTP_POST, [](AsyncWebServerRequest *req) {
-        if (WebState::flashState.in_progress || s_dump.running) {
-            req->send(409, "text/plain", "flash/dump in progress");
-            return;
-        }
-        bool inverted = req->hasParam("inverted", true)
-                        ? req->getParam("inverted", true)->value() == "1"
-                        : false;
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_enable_wifi")) {
-            req->send(409, "text/plain", "Port B busy");
-            return;
-        }
-        Serial1.end();
-        Serial1.begin(420000, SERIAL_8N1,
-                      PinPort::rx_pin(PinPort::PORT_B),
-                      PinPort::tx_pin(PinPort::PORT_B),
-                      inverted);
-        delay(20);
-
-        auto crc8d5 = [](const uint8_t *d, size_t n) {
-            uint8_t c = 0;
-            for (size_t i = 0; i < n; i++) {
-                c ^= d[i];
-                for (int b = 0; b < 8; b++) c = (c & 0x80) ? ((c << 1) ^ 0xD5) : (c << 1);
-            }
-            return c;
-        };
-
-        // MSP-V2 inner (7 bytes, 0-payload request for func=0x000E):
-        //   [0]=0x50 status, [1]=0 flags, [2]=0x0E func_lo, [3]=0x00 func_hi,
-        //   [4]=0 len_lo, [5]=0 len_hi, [6]=mspCRC over bytes [1..5]
-        uint8_t msp[7] = {0x50, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x00};
-        msp[6] = crc8d5(msp + 1, 5);
-
-        // Outer CRSF (13 bytes):
-        //   [0]=0xC8 addr, [1]=0x0B frame_size, [2]=0x7A type (MSP_WRITE),
-        //   [3]=0xEC dest (Receiver), [4]=0xEA orig (RadioTransmitter),
-        //   [5..11]=MSP packet, [12]=crsfCRC over bytes [2..11]
-        uint8_t frame[13];
-        frame[0] = 0xC8;   // any valid CRSF addr; RX parses dest from extended header
-        frame[1] = 0x0B;   // frame_size = type + ext_header(2) + msp(7) + crc(1) = 11
-        frame[2] = 0x7A;   // CRSF_FRAMETYPE_MSP_WRITE
-        frame[3] = 0xEC;   // CRSF_ADDRESS_CRSF_RECEIVER
-        frame[4] = 0xEA;   // CRSF_ADDRESS_RADIO_TRANSMITTER
-        memcpy(frame + 5, msp, 7);
-        frame[12] = crc8d5(frame + 2, 10);
-
-        Serial1.write(frame, sizeof(frame));
-        Serial1.flush();
-        delay(60);
-        Serial1.end();
-        PinPort::release(PinPort::PORT_B);
-
-        char hex[64];
-        snprintf(hex, sizeof(hex), "MSP CRC=0x%02x, CRSF CRC=0x%02x", msp[6], frame[12]);
-        JsonDocument d;
-        d["frame_hex"] = "C8 0B 7A EC EA 50 00 0E 00 00 00 " + String(msp[6], HEX) + " " + String(frame[12], HEX);
-        d["note"]      = "MSP_ELRS_SET_RX_WIFI_MODE sent. RX should raise SoftAP in ~700 ms.";
-        d["ap_ssid"]   = "ExpressLRS RX";
-        d["ap_pwd"]    = "expresslrs";
-        d["ap_url"]    = "http://10.0.0.1";
-        String out; serializeJson(d, out);
-        req->send(200, "application/json", out);
-    });
+    // /api/elrs/enable_wifi was removed — vanilla ELRS doesn't dispatch
+    // UART-received MSP locally (see docs/elrs_state_machine_research.md),
+    // so MSP_ELRS_SET_RX_WIFI_MODE over this wire is architecturally a no-op.
+    // To enter WiFi on the RX: 3× rapid BOOT button-press, 60 s auto-wifi
+    // timer, or command via a linked handset.
 
     s_server->on("/api/flash/exit_dfu", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "exit_dfu")) {

@@ -745,22 +745,21 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     </div>
     <div class="grid">
       <button onclick="ctrlBind()" title="CRSF 'bd' frame → RX entering 60s bind window">🔗 Enter binding</button>
-      <button onclick="ctrlWifi()" title="MSP 0x0E via UART — vanilla ELRS does NOT execute UART-MSP locally (forwards to handset via radio instead). Endpoint kept for MILELRS forks that may patch this. Reliable path: 3× rapid BOOT button-press on RX.">📡 Force WiFi (see note)</button>
-    </div>
-    <div class="grid" style="margin-top:4px">
       <button onclick="ctrlStub()" title="CRSF 'bl' frame → RX enters in-app stub flasher @420000">⚡ Enter stub flasher</button>
-      <button onclick="ctrlExitDfu()" title="RUN_USER_CODE → RX reboots into OTADATA-selected app">↩ Exit DFU → app</button>
     </div>
     <div class="grid" style="margin-top:4px">
       <button onclick="ctrlBoot(0)" class="success" title="Flip OTADATA → app0 on next reboot (requires DFU)">🅰 Boot app0</button>
       <button onclick="ctrlBoot(1)" class="success" title="Flip OTADATA → app1 on next reboot (requires DFU)">🅱 Boot app1</button>
     </div>
+    <div class="grid" style="margin-top:4px">
+      <button onclick="ctrlExitDfu()" title="RUN_USER_CODE → RX reboots into OTADATA-selected app">↩ Exit DFU → app</button>
+    </div>
     <div id="ctrlMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
     <div style="margin-top:6px;font-size:11px;color:var(--text-dim);line-height:1.5">
-      <b>Architectural limits (vanilla ELRS):</b><br>
-      • <b>Force WiFi via UART</b> не работает — vanilla ELRS пересылает MSP на handset через радио, не выполняет локально. Rely on 3× BOOT-press на RX, или 60s-auto-wifi timer, или через handset.<br>
-      • <b>Exit WiFi via CRSF</b> нет opcode'а — HTTP POST на <code>10.0.0.1/reboot</code> через телефон или power-cycle RX.<br>
-      • <b>ROM DFU programmatic</b> невозможен — на плате только BOOT-провод (GPIO3), нет RESET. Требует физ. BOOT+power-cycle.
+      <b>Что НЕ может плата (архитектурные границы vanilla ELRS):</b><br>
+      • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP локально. Способы: <span style="color:var(--text)">3× BOOT-press на RX</span>, или <span style="color:var(--text)">60s-auto-wifi timer</span>, или через handset.<br>
+      • <b>Exit WiFi via CRSF</b> — нет opcode'а. HTTP POST на <code>10.0.0.1/reboot</code> через телефон или power-cycle RX.<br>
+      • <b>Force ROM DFU</b> — на плате только BOOT-провод (GPIO3), нет RESET. Только физ. BOOT+power-cycle.
     </div>
   </div>
 
@@ -791,96 +790,18 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="rxScanErr" style="color:#f66;margin-top:8px;font-family:monospace;font-size:11px"></div>
   </div>
 
-  <!-- ===== WiFi / AP ===== -->
-  <div class="card">
-    <h2>RX WiFi AP</h2>
-    <div class="warning">
-      Vanilla ELRS &amp; MILELRS поднимают SoftAP после "Force WiFi" команды по CRSF. Работает когда RX в app-режиме (не в DFU).
-    </div>
-    <div class="row"><span class="label">SSID:</span><span class="value">ExpressLRS RX</span></div>
-    <div class="row"><span class="label">Password:</span><span class="value">expresslrs</span></div>
-    <div class="row"><span class="label">URL:</span><a href="http://10.0.0.1" target="_blank" class="value" style="color:var(--accent)">http://10.0.0.1</a></div>
-    <div class="row"><span class="label">Inverted CRSF:</span>
-      <span><input type="checkbox" id="rxWifiInv"> <small style="color:var(--text-dim)">для F3/F4 FC</small></span>
-    </div>
-    <button onclick="rxForceWifi()" id="rxWifiBtn" style="width:100%">📡 Force WiFi on (CRSF)</button>
-    <div id="rxWifiMsg" style="margin-top:8px;font-size:11px;color:var(--text-dim)"></div>
-  </div>
-
-  <!-- ===== Firmware Catalog ===== -->
-  <div class="card">
-    <h2>Firmware Catalog (artifactory.expresslrs.org)</h2>
-    <div class="warning">
-      Официальные билды ExpressLRS. Браузер скачивает zip → достаёт <code>firmware.bin</code> (path: <code>firmware/FCC/Unified_ESP32C3_LR1121_RX/</code>) → аплоадит на плату в buffer. Дальше Flash to slot (ниже). Плата работает только как upload-приёмник — никаких proxy-загрузок через неё.
-    </div>
-    <div id="elrsCatalog" style="display:flex;flex-direction:column;gap:4px;margin-top:6px"></div>
-    <div class="row"><span class="label">Model:</span>
-      <select id="elrsModel" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333;max-width:240px"></select>
-    </div>
-    <div class="row"><span class="label">Radio variant:</span>
-      <select id="elrsVariant" style="padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
-        <option value="FCC" selected>FCC (US 915 + 2.4 ISM)</option>
-        <option value="LBT">LBT (EU 868 + 2.4 CE)</option>
-      </select>
-    </div>
-    <div class="row"><span class="label">Resolved target:</span>
-      <span class="value" id="elrsResolved" style="font-family:monospace;font-size:11px">-</span>
-    </div>
-    <div id="catStatus" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
-    <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
-      После Fetch: прошивка лежит в PSRAM платы. Используй "Slot-targeted flash" ниже чтобы записать в app0 (0x10000) или app1 (0x1F0000).
-    </div>
-  </div>
-
-  <!-- ===== Chip detect (legacy, для быстрой single-command проверки) ===== -->
-  <div class="card">
-    <h2>Detect receiver</h2>
-    <div class="warning">
-      RX должен быть в <b>ROM DFU</b> (hold BOOT + power-cycle). Определяет
-      chip family и MAC до начала прошивки — если не отвечает, остальные
-      кнопки тоже не сработают.
-    </div>
-    <div class="row"><span class="label">Chip:</span><span class="value" id="chipName">-</span></div>
-    <div class="row"><span class="label">MAC:</span><span class="value" id="chipMac" style="font-family:monospace;font-size:11px">-</span></div>
-    <div class="row"><span class="label">Magic:</span><span class="value" id="chipMagic" style="font-family:monospace;font-size:11px">-</span></div>
-    <button onclick="detectChip()" id="chipDetectBtn" style="width:100%">Detect chip</button>
-    <div id="chipResult" style="margin-top:8px;font-family:monospace;font-size:11px"></div>
-  </div>
-
-  <!-- ===== RX flip 5-step wizard ===== -->
-  <div class="card">
-    <h2>RX vanilla-flip wizard (5 steps)</h2>
-    <div class="warning">
-      Последовательный процесс замены MILELRS → vanilla ELRS на приёмнике.
-      Каждый шаг активируется только после успеха предыдущего.
-      При ошибке — статус краснеет, кнопка Retry доступна.
-    </div>
-    <div id="rxWiz" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
-    <button onclick="rxWizReset()" style="margin-top:8px;width:100%">Reset wizard</button>
-    <div id="rxWizLog" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap;max-height:120px;overflow:auto"></div>
-  </div>
-
-  <div class="card">
-    <h2>ELRS Receiver Flasher</h2>
-    <div class="warning">
-      <b>Инструкция:</b><br>
-      1. Подключи приёмник: <b>RX приёмника → GPIO 11 (ESP TX), TX приёмника → GPIO 10 (ESP RX), GND, 5V</b><br>
-      2. Переведи приёмник в <b>DFU режим</b> (зажми кнопку на нём и подай питание)<br>
-      3. Убедись что <b>Port B</b> (System → Port B Mode) в режиме <code>UART</code><br>
-      4. Загрузи .bin файл ниже и нажми Flash
-    </div>
-    <div class="row"><span class="label">Firmware (.bin / .bin.gz / .elrs):</span></div>
-    <input type="file" id="fwFile" accept=".bin,.gz,.elrs" onchange="onFwSelect()" style="margin:8px 0; width:100%;">
-    <div class="row"><span class="label">Размер:</span><span class="value" id="fwSize">-</span></div>
-    <div class="row"><span class="label">Статус:</span><span class="value" id="flashStage">idle</span></div>
-    <div class="bar"><div class="bar-fill" id="flashBar" style="width:0%;background:#fa0"></div></div>
-    <div class="grid">
-      <button class="success" id="uploadBtn" onclick="uploadFw()" disabled>Upload</button>
-      <button id="flashBtn" onclick="startFlash()" disabled>Flash!</button>
-    </div>
-    <button class="danger" onclick="clearFw()" style="width:100%;margin-top:4px;">Clear</button>
-    <div id="flashResult" style="margin-top:10px; color:#0f0;"></div>
-  </div>
+  <!--
+    Legacy cards removed — their functionality is now in the 4 primary cards
+    at the top of the tab (RX Status / Configuration / Flash / Controls):
+      • "Detect receiver" (chip_info) → subsumed by RX Status Probe
+      • "RX vanilla-flip wizard (5 steps)" → superseded by Flash Firmware flow
+      • "ELRS Receiver Flasher" (upload+flash card) → superseded by Flash Firmware
+      • "OTADATA / Active slot" (manual Boot buttons) → Controls Boot app0/app1
+      • "RX WiFi AP" static info → Controls "Architectural limits" footer
+      • "Firmware Catalog" (legacy picker) → Flash Firmware source selector
+    Kept below: Slot-targeted flash (raw-offset power-user), hardware.json
+    helper, Dump Receiver Firmware — all have unique function.
+  -->
 
   <!-- ===== Slot-targeted flash ===== -->
   <div class="card">
@@ -916,40 +837,28 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="slotResult" style="margin-top:10px;color:#0f0;white-space:pre-wrap;font-family:monospace;font-size:11px"></div>
   </div>
 
-  <!-- ===== OTADATA / active slot ===== -->
+  <!-- ===== OTADATA raw (read sectors + danger erase) ===== -->
   <div class="card">
-    <h2>OTADATA / Active slot</h2>
+    <h2>OTADATA raw (advanced)</h2>
     <div class="warning">
-      <b>OTADATA</b> (8 KB @ 0xe000) говорит bootloader'у какой app слот грузить.
-      Кнопки ниже переписывают её, не трогая app-partition'ы.<br>
-      ⚠ MILELRS-прошивки могут <b>пересоздавать</b> OTADATA при каждом старте —
-      чтобы залочить vanilla ELRS нужно не только переписать OTADATA, но и
-      полностью стереть app1 слот.
+      Нормальный путь — Boot app0 / app1 в Controls. Эта карточка — для debug (сырые seq/state/crc из обеих секций) и DANGER erase.
     </div>
     <div class="row"><span class="label">Active slot:</span><span class="value" id="otaActiveSlot">-</span></div>
     <div class="row"><span class="label">Max ota_seq:</span><span class="value" id="otaMaxSeq">-</span></div>
     <div class="row"><span class="label">Sector 0 (@0xe000):</span><span class="value" id="otaSec0" style="font-family:monospace;font-size:11px">-</span></div>
     <div class="row"><span class="label">Sector 1 (@0xf000):</span><span class="value" id="otaSec1" style="font-family:monospace;font-size:11px">-</span></div>
-    <div class="grid">
-      <button onclick="otadataRefresh()">Refresh</button>
-      <button class="success" onclick="otadataSelect(0)">Boot app0</button>
-    </div>
-    <div class="grid">
-      <button class="success" onclick="otadataSelect(1)">Boot app1</button>
-      <button class="danger" onclick="otadataEraseRegion()">Erase OTADATA</button>
-    </div>
+    <button onclick="otadataRefresh()" style="width:100%">Refresh (RX must be in DFU)</button>
     <div style="margin-top:8px;padding:6px;background:#2a1414;border:1px solid #633;border-radius:4px">
       <b style="color:#f66">DANGER ZONE:</b>
-      <button class="danger" onclick="otadataEraseApp1()" style="margin-top:4px;width:100%">Erase app1 entirely (1.88 MB @ 0x1F0000)</button>
+      <div class="grid" style="margin-top:4px">
+        <button class="danger" onclick="otadataEraseRegion()">Erase OTADATA</button>
+        <button class="danger" onclick="otadataEraseApp1()">Erase app1 (1.88 MB)</button>
+      </div>
       <div style="color:var(--text-dim);font-size:11px;margin-top:4px">
-        Единственный способ навсегда убить MILELRS — стереть его app слот.
-        Требует typed confirmation.
+        Erase OTADATA = bootloader fallback на app0. Erase app1 = навсегда убить MILELRS слот.
       </div>
     </div>
     <div id="otadataResult" style="margin-top:10px;color:#0f0;white-space:pre-wrap;font-family:monospace;font-size:11px"></div>
-    <div style="margin-top:6px;color:var(--text-dim);font-size:11px">
-      После записи OTADATA — сними питание с RX, подай заново, смотри какой SSID появляется.
-    </div>
   </div>
 
   <!-- ===== hardware.json helper ===== -->
@@ -1471,10 +1380,10 @@ function showTab(name) {
     if (!window.ELRS_RELEASES) window.ELRS_RELEASES = ELRS_RELEASES;
     fwPopulateModels(); fwSourceChange(); fwPathUpdate();
     const tgt = document.getElementById('fwTarget'); if (tgt) tgt.onchange = fwPathUpdate;
-    rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); renderCatalog();
+    hwJsonPreviewRender();
     // Auto-probe on first open of the ELRS tab this session (or if stale >90s).
-    // Gives immediate RX Status feedback without requiring a button click. The
-    // probe itself is ~1s worst case — non-blocking to the user since it's async.
+    // Triggers otadataRefresh too so the "OTADATA raw (advanced)" card in the
+    // drawer reflects current state if the user expands it.
     const now = Date.now();
     if (!window._rxProbeLast || now - window._rxProbeLast > 90000) {
       window._rxProbeLast = now;
@@ -2589,7 +2498,7 @@ function rxApplyModeGate() {
   // Controls card: Boot app0/1 need ROM DFU (OTADATA read+write via SLIP).
   // Bind/Stub/WiFi need running app. Exit-DFU needs DFU or stub.
   const bootButtons = document.querySelectorAll('button[onclick^="ctrlBoot"]');
-  const appButtons  = document.querySelectorAll('button[onclick^="ctrlBind"], button[onclick^="ctrlWifi"], button[onclick^="ctrlStub"]');
+  const appButtons  = document.querySelectorAll('button[onclick^="ctrlBind"], button[onclick^="ctrlStub"]');
   const exitBtns    = document.querySelectorAll('button[onclick^="ctrlExitDfu"]');
   const cfgLoadBtn  = document.getElementById('rxCfgLoadBtn');
   stubButtons.forEach(b => {
@@ -2969,8 +2878,6 @@ function ctrlAutoProbe(delayMs) {
 }
 async function ctrlBind()  { try { ctrlLog(await postForm('/api/elrs/bind')); ctrlAutoProbe(2000); }
                             catch (e) { ctrlLog(e.message || e, true); } }
-async function ctrlWifi()  { try { ctrlLog(await postForm('/api/elrs/enable_wifi')); ctrlAutoProbe(4000); }
-                            catch (e) { ctrlLog(e.message || e, true); } }
 async function ctrlStub()  { try { ctrlLog(await postForm('/api/crsf/reboot_to_bl')); ctrlAutoProbe(1500); }
                             catch (e) { ctrlLog(e.message || e, true); } }
 async function ctrlExitDfu() { try { ctrlLog(await postForm('/api/flash/exit_dfu')); ctrlAutoProbe(3000); }
@@ -3096,25 +3003,6 @@ async function rxEraseSlot(slot) {
     rxScan();
   } catch (e) {
     alert('Erase failed: ' + (e.message || e));
-  }
-}
-
-// ===== WiFi force-enable =====
-async function rxForceWifi() {
-  const btn = document.getElementById('rxWifiBtn');
-  const msg = document.getElementById('rxWifiMsg');
-  btn.disabled = true;
-  const fd = new FormData();
-  fd.append('inverted', document.getElementById('rxWifiInv').checked ? '1' : '0');
-  try {
-    const txt = await postForm('/api/elrs/enable_wifi', fd);
-    msg.textContent = '✓ ' + txt;
-    msg.style.color = '#0f0';
-  } catch (e) {
-    msg.textContent = '✗ ' + (e.message || e);
-    msg.style.color = '#f66';
-  } finally {
-    btn.disabled = false;
   }
 }
 
