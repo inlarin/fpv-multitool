@@ -523,6 +523,94 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) 
     return FLASH_OK;
 }
 
+// Multi-region variant of readFlash. Syncs ONCE, reads N regions, ends ONCE.
+// Needed for `/api/elrs/identity/fast` (NVS + app-tail + partition-table)
+// and anywhere else we need to sample several flash offsets in one DFU
+// session without running into the ESP32-C3 ROM autobauder quirk.
+Result readFlashMulti(const Config &cfg, const ReadRegion *regions, size_t n) {
+    if (!cfg.uart || !regions || n == 0) return FLASH_ERR_INVALID_INPUT;
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(8192);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(100);
+
+    if (cfg.progress) cfg.progress(0, "Connecting");
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    if (cfg.progress) cfg.progress(3, "Synced");
+
+    spiAttach();
+    // Compute max offset for spiSetParams call.
+    uint32_t max_end = 0;
+    uint32_t total_bytes = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (!regions[i].dst || regions[i].size == 0) {
+            s_uart->end(); return FLASH_ERR_INVALID_INPUT;
+        }
+        uint32_t end = regions[i].offset + regions[i].size;
+        if (end > max_end) max_end = end;
+        total_bytes += regions[i].size;
+    }
+    if (max_end < 0x400000) max_end = 0x400000;
+    spiSetParams(max_end);
+
+    static const uint32_t CHUNK = 64;
+    static uint8_t resp[128];
+    uint32_t bytes_done = 0;
+
+    for (size_t ri = 0; ri < n; ri++) {
+        const ReadRegion &r = regions[ri];
+        size_t received = 0;
+        while (received < r.size) {
+            uint32_t take = (r.size - received > CHUNK) ? CHUNK : (r.size - received);
+
+            uint8_t req[8];
+            *(uint32_t*)(req + 0) = r.offset + (uint32_t)received;
+            *(uint32_t*)(req + 4) = take;
+            uint32_t ck = cksum(req, 8);
+
+            slipStart();
+            slipWriteByte(0x00);
+            slipWriteByte(CMD_READ_FLASH_SLOW);
+            slipWriteByte(8 & 0xFF);
+            slipWriteByte((8 >> 8) & 0xFF);
+            slipWriteByte(ck & 0xFF);
+            slipWriteByte((ck >> 8) & 0xFF);
+            slipWriteByte((ck >> 16) & 0xFF);
+            slipWriteByte((ck >> 24) & 0xFF);
+            slipWrite(req, 8);
+            slipEnd();
+            s_uart->flush();
+
+            int nr = slipRead(resp, sizeof(resp), 2000);
+            if (nr < 8 || resp[0] != 0x01 || resp[1] != CMD_READ_FLASH_SLOW) {
+                s_uart->end();
+                return FLASH_ERR_READ_FAILED;
+            }
+            uint16_t resp_size = resp[2] | (resp[3] << 8);
+            int data_off = 8;
+            int data_len = (int)resp_size - 2;
+            if (data_len <= 0 || data_off + data_len > nr) {
+                s_uart->end();
+                return FLASH_ERR_READ_FAILED;
+            }
+            if ((uint32_t)data_len > take) data_len = (int)take;
+            memcpy(r.dst + received, resp + data_off, data_len);
+            received += data_len;
+            bytes_done += data_len;
+
+            if (cfg.progress) {
+                int pct = 3 + (int)((int64_t)bytes_done * 92 / total_bytes);
+                cfg.progress(pct, "Reading");
+            }
+        }
+    }
+
+    if (cfg.progress) cfg.progress(100, "Done");
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Ask ROM/stub to compute MD5 over a flash region. Request layout:
 //   [offset:u32, size:u32, zero:u32, zero:u32]  (16 bytes total)
 // Response "value" field (bytes 4..7 of status reply) contains the first

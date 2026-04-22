@@ -53,6 +53,23 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
 // acks, terminated by a 16-byte MD5 trailer (ignored here).
 Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out);
 
+// Read multiple non-contiguous regions in a SINGLE ROM DFU session.
+//
+// Rationale: ESP32-C3 ROM's autobauder latches on first sync; subsequent
+// Serial1.end()+begin()+sync cycles (which plain readFlash() does per call)
+// fail with spurious FLASH_ERR_NO_SYNC on the second call. This helper
+// opens Serial1 + syncs + spiAttach/spiSetParams ONCE, then issues a
+// READ_FLASH_SLOW loop per region, then closes Serial1 once at the end.
+//
+// Same semantics as readFlash: each region filled into region.dst, CHUNK=64,
+// ROM CMD_READ_FLASH_SLOW (0x0E), PSRAM-safe.
+struct ReadRegion {
+    uint32_t offset;
+    uint32_t size;
+    uint8_t *dst;
+};
+Result readFlashMulti(const Config &cfg, const ReadRegion *regions, size_t n);
+
 // Erase `size` bytes starting at `offset` on the attached ROM bootloader.
 // Size is rounded up to the nearest 4 KB sector internally by the ROM.
 // Uses the standard CMD_FLASH_BEGIN path with a zero-body CMD_FLASH_END

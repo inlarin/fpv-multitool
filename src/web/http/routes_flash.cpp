@@ -648,6 +648,28 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 WebState::flashState.lastResult = "Upload exceeds MAX_FW_SIZE — file too large";
                 return;
             }
+            // Fork-specific format rejects — first chunk of a new upload.
+            // These headers are known non-flashable containers we've
+            // classified in research/. We reject here rather than letting
+            // ESPFlasher discover the problem 30 s into a flash.
+            //   0x11 0xE8 0xC6 0xCA — ZLRS SubGHz AES-encrypted variant
+            //   0x71 0x9F 0x96 0xE6 — Foxeer 400 MHz AES-encrypted variant
+            // Standard ESP image magic is 0xE9; neither ZLRS RX/TX nor
+            // vanilla ELRS normal flows start with these bytes.
+            if (index == 0 && len >= 4) {
+                const uint8_t b0 = data[0], b1 = data[1], b2 = data[2], b3 = data[3];
+                bool zlrs_enc = (b0 == 0x11 && b1 == 0xE8 && b2 == 0xC6 && b3 == 0xCA);
+                bool foxeer_enc = (b0 == 0x71 && b1 == 0x9F && b2 == 0x96 && b3 == 0xE6);
+                if (zlrs_enc || foxeer_enc) {
+                    WebState::Lock lock;
+                    WebState::flashState.fw_size = 0;
+                    WebState::flashState.lastResult =
+                        zlrs_enc
+                          ? "ZLRS SubGHz encrypted container — used non-ENC variant"
+                          : "ZLRS/Foxeer 400 MHz encrypted container — use non-ENC variant";
+                    return;  // quietly drop further chunks; POST handler returns 413
+                }
+            }
             memcpy(WebState::flashState.fw_data + index, data, len);
             WebState::flashState.fw_received = index + len;
             if (final) {
@@ -1014,32 +1036,39 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
         cfg.baud_rate = 115200;
 
-        // NVS + OTADATA are CONTIGUOUS on the standard ELRS layout
-        // (nvs 0x9000..0xe000, otadata 0xe000..0x10000), so we read them in
-        // ONE readFlash() pass. Separate passes fail because readFlash()
-        // ends+re-begins Serial1 between calls and the ROM autobauder has
-        // already latched — second sync returns "No sync".
-        //
-        // App-tail read (last 8 KB of active slot, for ELRSOPTS JSON
-        // wifi-ssid/wifi-password extraction) was dropped from this phase
-        // for the same reason; see docs/TODO_identity_phase_1b.md to
-        // re-enable it via a proper readFlashMulti() helper that syncs once.
-        const uint32_t NVS_OFF = 0x9000;
-        const uint32_t NVS_SZ  = 0x5000;   // 20 KB
-        const uint32_t OTA_OFF = 0xe000;   // immediately after NVS
-        const uint32_t OTA_SZ  = 0x2000;   // 8 KB
-        const uint32_t COMBINED_SZ = 0x7000;  // 28 KB contiguous from 0x9000
-        const uint32_t TAIL_SZ = 0x2000;   // 8 KB slot (unused for now, kept for
-                                            //             protocol stability)
-        (void)OTA_OFF; (void)NVS_SZ;
-        uint8_t *buf = (uint8_t *)heap_caps_malloc(COMBINED_SZ, MALLOC_CAP_SPIRAM);
+        // Phase 1b: single-session multi-region read via readFlashMulti().
+        //   Region 1: partition table @ 0x8000,  4 KB  (for Phase M1 layout decode)
+        //   Region 2: NVS + OTADATA   @ 0x9000, 28 KB  (contiguous on standard ELRS)
+        //   Region 3: active-app tail             8 KB  (for ELRSOPTS JSON + ZLRS sigs)
+        // Active slot decoded from a preliminary 8-byte peek of OTADATA sectors,
+        // but we don't have that yet — so we always read BOTH app tails. Cost:
+        // 16 KB extra, ~1.3 s at 12 KB/s. Worth it to keep the endpoint
+        // agnostic of which slot is active.
+        const uint32_t PT_OFF    = 0x8000;
+        const uint32_t PT_SZ     = 0x1000;
+        const uint32_t NVS_OFF   = 0x9000;
+        const uint32_t NVS_SZ    = 0x5000;
+        const uint32_t OTA_OFF   = 0xe000;   (void)OTA_OFF;
+        const uint32_t OTA_SZ    = 0x2000;
+        const uint32_t NVS_OTA   = 0x7000;   // 28 KB contiguous (NVS + OTADATA)
+        const uint32_t TAIL_SZ   = 0x2000;   // 8 KB
+        const uint32_t APP0_END  = 0x1f0000; // Layout A — Phase M1 will replace
+        const uint32_t APP1_END  = 0x3d0000; //            from partition table
+        const uint32_t BUF_SZ    = PT_SZ + NVS_OTA + 2 * TAIL_SZ;
+        uint8_t *buf = (uint8_t *)heap_caps_malloc(BUF_SZ, MALLOC_CAP_SPIRAM);
         if (!buf) {
             PinPort::release(PinPort::PORT_B);
             req->send(500, "text/plain", "PSRAM alloc failed");
             return;
         }
 
-        ESPFlasher::Result r = ESPFlasher::readFlash(cfg, NVS_OFF, COMBINED_SZ, buf);
+        ESPFlasher::ReadRegion regions[4] = {
+            { PT_OFF,            PT_SZ,   buf },
+            { NVS_OFF,           NVS_OTA, buf + PT_SZ },
+            { APP0_END - TAIL_SZ, TAIL_SZ, buf + PT_SZ + NVS_OTA },
+            { APP1_END - TAIL_SZ, TAIL_SZ, buf + PT_SZ + NVS_OTA + TAIL_SZ },
+        };
+        ESPFlasher::Result r = ESPFlasher::readFlashMulti(cfg, regions, 4);
         if (r != ESPFlasher::FLASH_OK) {
             heap_caps_free(buf);
             PinPort::release(PinPort::PORT_B);
@@ -1047,46 +1076,77 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 String("Flash read failed: ") + ESPFlasher::errorString(r));
             return;
         }
-        // Parse OTADATA half of the blob to report active slot back to client.
-        uint8_t *ota = buf + NVS_SZ;
+        // OTADATA slot decode (first 4 bytes of each 4 KB sector = seq u32).
+        uint8_t *ota_base = buf + PT_SZ + NVS_SZ;
         uint32_t seq0 = 0, seq1 = 0;
-        memcpy(&seq0, ota,        4);
-        memcpy(&seq1, ota + 0x1000, 4);
+        memcpy(&seq0, ota_base,          4);
+        memcpy(&seq1, ota_base + 0x1000, 4);
         int active_slot = 0;
         uint32_t max_seq = 0;
         if (seq0 != 0xFFFFFFFF) { max_seq = seq0; active_slot = (seq0 - 1) & 1; }
         if (seq1 != 0xFFFFFFFF && seq1 > max_seq) {
             max_seq = seq1; active_slot = (seq1 - 1) & 1;
         }
-        // App-tail read intentionally skipped in this phase (see above).
-        (void)TAIL_SZ;
-        uint32_t tail_off = 0;
         PinPort::release(PinPort::PORT_B);
 
-        // Build chunked text response: header line + hex per section.
-        // Current format (Phase 1a — APPTAIL omitted, see TODO):
-        //   # section=NVS off=0x9000 size=0x5000 active_slot=N
-        //   <10000 hex chars>\n
-        //   # section=OTADATA off=0xe000 size=0x2000
-        //   <4000 hex chars>\n
-        struct Ctx { uint8_t *buf; int active_slot; };
-        Ctx *ctx = new Ctx{ buf, active_slot };
-        (void)tail_off;
+        // Build chunked text response: header line + hex per section. 5 sections:
+        //   PT       @ 0x8000  — 4 KB  partition table (for Phase M1)
+        //   NVS      @ 0x9000  — 20 KB NVS partition
+        //   OTADATA  @ 0xe000  — 8 KB
+        //   APP0TAIL @ 0x1e8000 — 8 KB (for ELRSOPTS + ZLRS sigs)
+        //   APP1TAIL @ 0x3c8000 — 8 KB
+        //
+        // Chunked generator: each call emits up to max_len bytes starting at
+        // `index`. Section boundaries are computed per-call; state lives only
+        // in `index` + Ctx (the PSRAM buf). When we emit the final byte, we
+        // free the Ctx inside the generator.
+        struct Ctx { uint8_t *buf; int active_slot; uint32_t max_seq;
+                     uint32_t app0_tail_off; uint32_t app1_tail_off; };
+        Ctx *ctx = new Ctx{ buf, active_slot, max_seq,
+                            APP0_END - TAIL_SZ, APP1_END - TAIL_SZ };
         AsyncWebServerResponse *resp = req->beginChunkedResponse("text/plain",
             [ctx](uint8_t *dst, size_t max_len, size_t index) -> size_t {
-                const uint32_t NVS_SZ_L = 0x5000;
-                const uint32_t OTA_SZ_L = 0x2000;
-                char hdr0[80], hdr1[80];
-                int h0 = snprintf(hdr0, sizeof(hdr0),
-                    "# section=NVS off=0x9000 size=0x5000 active_slot=%d\n",
-                    ctx->active_slot);
-                int h1 = snprintf(hdr1, sizeof(hdr1),
+                const uint32_t PT_SZ_L   = 0x1000;
+                const uint32_t NVS_SZ_L  = 0x5000;
+                const uint32_t OTA_SZ_L  = 0x2000;
+                const uint32_t TAIL_SZ_L = 0x2000;
+                char hdr_pt[96], hdr_nvs[96], hdr_ota[96], hdr_a0[96], hdr_a1[96];
+                int hp = snprintf(hdr_pt,  sizeof(hdr_pt),
+                    "# section=PT off=0x8000 size=0x1000\n");
+                int hn = snprintf(hdr_nvs, sizeof(hdr_nvs),
+                    "\n# section=NVS off=0x9000 size=0x5000 active_slot=%d max_seq=%u\n",
+                    ctx->active_slot, (unsigned)ctx->max_seq);
+                int ho = snprintf(hdr_ota, sizeof(hdr_ota),
                     "\n# section=OTADATA off=0xe000 size=0x2000\n");
-                const size_t S0_end = h0;
-                const size_t S1_end = S0_end + NVS_SZ_L * 2;
-                const size_t S2_end = S1_end + h1;
-                const size_t S3_end = S2_end + OTA_SZ_L * 2;
-                const size_t TOTAL  = S3_end + 1;
+                int ha0 = snprintf(hdr_a0, sizeof(hdr_a0),
+                    "\n# section=APP0TAIL off=0x%x size=0x2000\n",
+                    (unsigned)ctx->app0_tail_off);
+                int ha1 = snprintf(hdr_a1, sizeof(hdr_a1),
+                    "\n# section=APP1TAIL off=0x%x size=0x2000\n",
+                    (unsigned)ctx->app1_tail_off);
+                // Running offsets through the response stream.
+                const size_t E_pt_h   = hp;
+                const size_t E_pt     = E_pt_h  + PT_SZ_L   * 2;
+                const size_t E_nvs_h  = E_pt    + hn;
+                const size_t E_nvs    = E_nvs_h + NVS_SZ_L  * 2;
+                const size_t E_ota_h  = E_nvs   + ho;
+                const size_t E_ota    = E_ota_h + OTA_SZ_L  * 2;
+                const size_t E_a0_h   = E_ota   + ha0;
+                const size_t E_a0     = E_a0_h  + TAIL_SZ_L * 2;
+                const size_t E_a1_h   = E_a0    + ha1;
+                const size_t E_a1     = E_a1_h  + TAIL_SZ_L * 2;
+                const size_t TOTAL    = E_a1 + 1;
+
+                // Buffer byte offsets per section:
+                //   PT      @ buf + 0
+                //   NVS     @ buf + PT_SZ_L
+                //   OTADATA @ buf + PT_SZ_L + NVS_SZ_L
+                //   APP0    @ buf + PT_SZ_L + NVS_SZ_L + OTA_SZ_L
+                //   APP1    @ buf + PT_SZ_L + NVS_SZ_L + OTA_SZ_L + TAIL_SZ_L
+                const size_t B_nvs = PT_SZ_L;
+                const size_t B_ota = B_nvs + NVS_SZ_L;
+                const size_t B_a0  = B_ota + OTA_SZ_L;
+                const size_t B_a1  = B_a0  + TAIL_SZ_L;
 
                 if (index >= TOTAL) {
                     heap_caps_free(ctx->buf);
@@ -1094,31 +1154,45 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                     return 0;
                 }
                 size_t out = 0;
+                static const char HEX_TAB[] = "0123456789abcdef";
                 while (out < max_len && index + out < TOTAL) {
                     size_t pos = index + out;
                     size_t remaining = max_len - out;
-                    if (pos < S0_end) {
-                        size_t take = min(S0_end - pos, remaining);
-                        memcpy(dst + out, hdr0 + pos, take);
-                        out += take;
-                    } else if (pos < S1_end) {
-                        size_t hex_pos = pos - S0_end;
-                        size_t byte_i = hex_pos / 2;
-                        bool hi = (hex_pos & 1) == 0;
-                        uint8_t b = ctx->buf[byte_i];
-                        dst[out++] = hi ? "0123456789abcdef"[b >> 4]
-                                        : "0123456789abcdef"[b & 0xf];
-                    } else if (pos < S2_end) {
-                        size_t take = min(S2_end - pos, remaining);
-                        memcpy(dst + out, hdr1 + (pos - S1_end), take);
-                        out += take;
-                    } else if (pos < S3_end) {
-                        size_t hex_pos = pos - S2_end;
-                        size_t byte_i = NVS_SZ_L + hex_pos / 2;
-                        bool hi = (hex_pos & 1) == 0;
-                        uint8_t b = ctx->buf[byte_i];
-                        dst[out++] = hi ? "0123456789abcdef"[b >> 4]
-                                        : "0123456789abcdef"[b & 0xf];
+                    if (pos < E_pt_h) {
+                        size_t take = min(E_pt_h - pos, remaining);
+                        memcpy(dst + out, hdr_pt + pos, take); out += take;
+                    } else if (pos < E_pt) {
+                        size_t hp2 = pos - E_pt_h;
+                        uint8_t b = ctx->buf[hp2/2];
+                        dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
+                    } else if (pos < E_nvs_h) {
+                        size_t take = min(E_nvs_h - pos, remaining);
+                        memcpy(dst + out, hdr_nvs + (pos - E_pt), take); out += take;
+                    } else if (pos < E_nvs) {
+                        size_t hp2 = pos - E_nvs_h;
+                        uint8_t b = ctx->buf[B_nvs + hp2/2];
+                        dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
+                    } else if (pos < E_ota_h) {
+                        size_t take = min(E_ota_h - pos, remaining);
+                        memcpy(dst + out, hdr_ota + (pos - E_nvs), take); out += take;
+                    } else if (pos < E_ota) {
+                        size_t hp2 = pos - E_ota_h;
+                        uint8_t b = ctx->buf[B_ota + hp2/2];
+                        dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
+                    } else if (pos < E_a0_h) {
+                        size_t take = min(E_a0_h - pos, remaining);
+                        memcpy(dst + out, hdr_a0 + (pos - E_ota), take); out += take;
+                    } else if (pos < E_a0) {
+                        size_t hp2 = pos - E_a0_h;
+                        uint8_t b = ctx->buf[B_a0 + hp2/2];
+                        dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
+                    } else if (pos < E_a1_h) {
+                        size_t take = min(E_a1_h - pos, remaining);
+                        memcpy(dst + out, hdr_a1 + (pos - E_a0), take); out += take;
+                    } else if (pos < E_a1) {
+                        size_t hp2 = pos - E_a1_h;
+                        uint8_t b = ctx->buf[B_a1 + hp2/2];
+                        dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
                     } else {
                         dst[out++] = '\n';
                     }

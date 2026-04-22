@@ -2590,24 +2590,70 @@ function _nvsParse(bytes) {
   return { namespaces, entries };
 }
 
+// Shared device profile (Phase M1). Populated from partition table + OTADATA
+// on successful Identity read and reused elsewhere (e.g. dynamic Flash targets,
+// dump-size presets). Kept on window so it survives across modal code paths.
+window._rxProfile = window._rxProfile || null;
+
+// ZLRS fork signature scan — runs over any rodata blob we have (app tails,
+// sometimes NVS if the SSID got persisted). Returns null for vanilla ELRS.
+//   research/ZLRS_3_36_ANALYSIS.md §6 has the full signature table.
+function _detectFork(bytes) {
+  const dec = new TextDecoder('utf-8', {fatal:false});
+  const s = dec.decode(bytes);
+  // Order matters — most specific first.
+  if (s.indexOf('zlrs24022022') >= 0) return { name: 'ZLRS 3.36', basis: 'ExpressLRS 3.6.x' };
+  if (s.indexOf('3.36 (2110c5)') >= 0) return { name: 'ZLRS 3.36', basis: 'ExpressLRS 3.6.x' };
+  if (s.indexOf('Приёмник_ZLRS') >= 0) return { name: 'ZLRS RX', basis: 'ExpressLRS' };
+  if (s.indexOf('Передатчик_НСУ') >= 0) return { name: 'ZLRS TX', basis: 'ExpressLRS' };
+  if (s.indexOf('MILELRS') >= 0) return { name: 'MILELRS', basis: 'ExpressLRS' };
+  if (s.indexOf('ExpressLRS') >= 0) return { name: 'ExpressLRS', basis: null };
+  return null;
+}
+
+// Minimal partition-table parser — ESP-IDF v1, little-endian, entries of 32 B
+// at 0x8000. Each: magic 0xAA50, type u8, subtype u8, offset u32, size u32,
+// label char[16], flags u32. We use this both for Phase M1 device profile
+// and to resolve app0/app1 end offsets when they differ from the default
+// Layout A. Invalid or all-0xFF entries stop iteration.
+function _parsePartitionTable(bytes) {
+  const parts = [];
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i + 32 <= bytes.length; i += 32) {
+    if (bytes[i] !== 0xAA || bytes[i+1] !== 0x50) break;
+    const type = bytes[i+2];
+    const subtype = bytes[i+3];
+    const off = dv.getUint32(i+4, true);
+    const sz  = dv.getUint32(i+8, true);
+    const labelEnd = bytes.subarray(i+12, i+28).indexOf(0);
+    const label = new TextDecoder().decode(
+        bytes.subarray(i+12, i+12 + (labelEnd < 0 ? 16 : labelEnd)));
+    parts.push({ type, subtype, offset: off, size: sz, label });
+  }
+  return parts;
+}
+
 async function identRead() {
   const btn = document.getElementById('identReadBtn');
   const st = document.getElementById('identStatus');
-  btn.disabled = true; btn.textContent = '⏳ Reading (~5 s)…';
-  st.textContent = 'Requesting NVS + OTADATA + app tail via ROM DFU…';
+  btn.disabled = true; btn.textContent = '⏳ Reading (~8 s)…';
+  st.textContent = 'Requesting partition table + NVS + OTADATA + both app tails via ROM DFU…';
   try {
     const r = await fetch('/api/elrs/identity/fast', {method:'POST'});
     const txt = await r.text();
     if (!r.ok) throw new Error(txt || ('HTTP ' + r.status));
-    // Parse sectional response: lines starting with "# section=NAME off=... size=..."
-    // followed by one line of hex (the binary as hex). There are 3 sections.
+    // Parse sectional response: header "# section=NAME off=... size=..." then
+    // one line of hex. Up to 5 sections: PT, NVS, OTADATA, APP0TAIL, APP1TAIL.
     const sections = {};
+    let activeSlot = 0, maxSeq = 0;
     const lines = txt.split('\n');
     let i = 0;
     while (i < lines.length) {
-      const m = lines[i].match(/^# section=(\w+) off=(0x[0-9a-f]+) size=(0x[0-9a-f]+)/i);
+      const m = lines[i].match(/^# section=(\w+) off=(0x[0-9a-f]+) size=(0x[0-9a-f]+)(?: active_slot=(\d+))?(?: max_seq=(\d+))?/i);
       if (m && i + 1 < lines.length) {
         const name = m[1]; const off = parseInt(m[2]); const size = parseInt(m[3]);
+        if (m[4] !== undefined) activeSlot = +m[4];
+        if (m[5] !== undefined) maxSeq = +m[5];
         const hex = lines[i + 1].trim();
         const u8 = new Uint8Array(size);
         for (let j = 0; j < size && j * 2 + 1 < hex.length; j++) {
@@ -2620,49 +2666,65 @@ async function identRead() {
       }
     }
 
-    // Parse NVS
+    // Phase M1: decode partition table, build shared profile.
+    let parts = [];
+    if (sections.PT) {
+      parts = _parsePartitionTable(sections.PT.bytes);
+      const app0 = parts.find(p => p.type === 0 && p.subtype === 0x10);
+      const app1 = parts.find(p => p.type === 0 && p.subtype === 0x11);
+      const nvs  = parts.find(p => p.type === 1 && p.subtype === 0x02);
+      const spiffs = parts.find(p => p.type === 1 && (p.subtype === 0x82 || p.label === 'spiffs'));
+      window._rxProfile = {
+        partitions: parts,
+        app0, app1, nvs, spiffs,
+        active_slot: activeSlot, max_seq: maxSeq,
+        has_dual_slot: !!(app0 && app1),
+        flash_end: parts.length
+          ? Math.max(...parts.map(p => p.offset + p.size))
+          : 0x400000,
+      };
+    }
+
+    // Parse NVS: the RxConfig blob lives in namespace "eeprom", key "eeprom".
+    // rx_config_t layout:
+    //   0..3   version (u32 LE)
+    //   4..9   uid[6]
+    //   10     unused_padding
+    //   11     serial1Protocol packed
+    //   12..15 flash_discriminator (u32 LE)
     let uid = null, flashDisc = null, bound = null;
     let ssid = null, password = null;
     if (sections.NVS) {
       const nvs = _nvsParse(sections.NVS.bytes);
-      // Look for eeprom.eeprom blob — that's the RX config struct (v8+)
       const blob = nvs.entries?.eeprom?.eeprom;
       if (blob && blob.value_hex) {
         const hex = blob.value_hex;
-        // rx_config_t layout:
-        //   offset 0..3: version (u32 LE)
-        //   offset 4..9: uid[6]
-        //   offset 10:    unused_padding
-        //   offset 11:    serial1Protocol packed
-        //   offset 12..15: flash_discriminator (u32 LE)
         uid = Array.from({length:6}, (_,k) =>
           hex.substr((4+k)*2, 2).toUpperCase()).join(':');
-        bound = (uid === '00:00:00:00:00:00') ? 'no (zero UID)' : 'yes (NVS)';
+        bound = (uid === '00:00:00:00:00:00') ? 'no (zero UID)' : 'yes (NVS, runtime)';
         const d0 = parseInt(hex.substr(24,2),16), d1 = parseInt(hex.substr(26,2),16);
         const d2 = parseInt(hex.substr(28,2),16), d3 = parseInt(hex.substr(30,2),16);
         flashDisc = '0x' + ((d3<<24)|(d2<<16)|(d1<<8)|d0).toString(16).padStart(8,'0');
       }
-      // Also check for TX-side UID storage (scattered keys in namespace "ELRS")
       const elrsNs = nvs.entries?.ELRS;
       if (!uid && elrsNs) {
         if (elrsNs.tx_version) bound = 'TX config present (UID in SPIFFS /options.json — needs full dump)';
       }
     }
-    // Parse ELRSOPTS JSON from app-tail. The block is at known offsets relative
-    // to end of app partition: 2704 bytes back = PRODUCTNAME+DEVICENAME+OPTIONS+HARDWARE.
-    // OPTIONS starts at (end - 2704) + 128 + 16 = (end - 2560). Size up to 512.
-    if (sections.APPTAIL) {
-      const tail = sections.APPTAIL.bytes;
-      // Scan the whole tail for a JSON block starting with `{"` that contains
-      // known keys — ELRSOPTS has these literally.
+
+    // Parse ELRSOPTS JSON from the ACTIVE app tail. Phase 1b: we got both
+    // tails, pick the one matching OTADATA's active slot.
+    const tailKey = activeSlot === 1 ? 'APP1TAIL' : 'APP0TAIL';
+    let tailBytes = sections[tailKey]?.bytes || sections.APP0TAIL?.bytes;
+    if (tailBytes) {
       const dec = new TextDecoder('utf-8', {fatal:false});
-      const txtBlob = dec.decode(tail);
+      const txtBlob = dec.decode(tailBytes);
       const markers = ['"wifi-ssid"','"wifi-password"','"flash-discriminator"','"uid"'];
       for (const m of markers) {
         const mi = txtBlob.indexOf(m);
         if (mi < 0) continue;
         let j = mi;
-        while (j > 0 && txtBlob.charCodeAt(j) !== 123) j--;  // '{'
+        while (j > 0 && txtBlob.charCodeAt(j) !== 123) j--;
         let depth = 0, end = -1;
         for (let k = j; k < Math.min(j + 4096, txtBlob.length); k++) {
           const c = txtBlob.charCodeAt(k);
@@ -2685,12 +2747,53 @@ async function identRead() {
       }
     }
 
+    // Fork detection — scan ALL tails, not just active (fork strings may be
+    // in rodata of a vanilla image too if fork upgraded from it).
+    let fork = null;
+    for (const key of ['APP0TAIL', 'APP1TAIL']) {
+      if (sections[key]) {
+        const f = _detectFork(sections[key].bytes);
+        if (f && (!fork || f.name.startsWith('ZLRS') || f.name.startsWith('MILELRS'))) fork = f;
+      }
+    }
+    if (fork && window._rxProfile) window._rxProfile.fork = fork;
+
     document.getElementById('identUid').textContent  = uid || '— (not bound / not found in NVS)';
     document.getElementById('identBound').textContent = bound || 'unknown';
     document.getElementById('identSsid').textContent = ssid || 'ExpressLRS RX  (compile-time default)';
     document.getElementById('identPass').textContent = password || 'expresslrs  (compile-time default)';
     document.getElementById('identDisc').textContent = flashDisc || '—';
-    st.textContent = '✓ Identity read complete';
+
+    // Fork badge — create on-demand after first identity read.
+    let forkRow = document.getElementById('identForkRow');
+    if (fork) {
+      if (!forkRow) {
+        const card = document.getElementById('identCard');
+        forkRow = document.createElement('div');
+        forkRow.id = 'identForkRow';
+        forkRow.className = 'row';
+        forkRow.innerHTML = '<span class="label">Firmware fork:</span><span class="value" id="identFork" style="color:var(--accent)">—</span>';
+        // Insert before the read button (which is the last non-details child).
+        const btnEl = document.getElementById('identReadBtn');
+        card.insertBefore(forkRow, btnEl);
+      }
+      const label = fork.name + (fork.basis ? '  (based on ' + fork.basis + ')' : '');
+      document.getElementById('identFork').textContent = label;
+    } else if (forkRow) {
+      forkRow.remove();
+    }
+
+    // Invalidate Flash Firmware target dropdown so it picks up profile offsets.
+    const fwTarget = document.getElementById('fwTarget');
+    if (fwTarget) { fwTarget._profileApplied = false; fwPathUpdate(); }
+
+    let msg = '✓ Identity read complete';
+    if (window._rxProfile && parts.length) {
+      msg += `  (partition table: ${parts.length} entries, `
+          + `flash ${(window._rxProfile.flash_end/1048576).toFixed(1)} MB, `
+          + `active slot: app${activeSlot})`;
+    }
+    st.textContent = msg;
     st.style.color = '#0f0';
   } catch (e) {
     st.textContent = '✗ ' + (e.message || e);
@@ -2866,6 +2969,24 @@ async function rxProbeMode() {
       document.getElementById('rxVer').textContent = verStr + '  (raw 0x' + sv.toString(16).padStart(8, '0') + ')';
       document.getElementById('rxIds').textContent = 'serial=' + d.app.serial_no + '  hw=0x' + d.app.hw_id.toString(16);
       document.getElementById('rxFields').textContent = d.app.field_count + ' (param_ver ' + d.app.parameter_version + ')';
+    } else if (d.mode === 'dfu' || d.mode === 'stub') {
+      // BUG-ID2 fix: CRSF DEVICE_PING only works when RX is in app mode, so
+      // the identity fields stay empty in DFU/stub. Previously users saw
+      // unexplained "—" rows. Add an explicit hint + pull from Identity /
+      // Scan cache if available.
+      const profile = window._rxProfile;
+      if (profile && profile.partitions && profile.partitions.length) {
+        document.getElementById('rxName').textContent =
+            (profile.fork?.name || 'ELRS-family') +
+            '  (from Identity read)';
+        document.getElementById('rxIds').textContent =
+            `flash ${(profile.flash_end/1048576).toFixed(1)} MB, ` +
+            `${profile.partitions.length} partitions, ` +
+            `slot app${profile.active_slot} active`;
+      }
+      hint.textContent = (d.hint || '') +
+          '  ℹ Firmware name/version need RX in app mode (CRSF DEVICE_PING). ' +
+          (profile ? 'Profile loaded from Identity — use Flash or exit DFU to refresh.' : 'Read identity below or exit DFU to populate.');
     }
     rxApplyModeGate();
     fwPathUpdate();
@@ -2902,6 +3023,40 @@ function fwPopulateModels() {
 }
 function fwPathUpdate() {
   const targetSel = document.getElementById('fwTarget');
+
+  // Phase M1: if we have a device profile (from Identity read), rebuild the
+  // target options with REAL partition offsets + sizes. Before: hardcoded
+  // 0x10000/0x1F0000 labels that lied on S3 TX modules with different layouts.
+  const profile = window._rxProfile;
+  if (profile && profile.partitions && profile.partitions.length && !targetSel._profileApplied) {
+    const prevValue = targetSel.value;
+    targetSel.innerHTML = '';
+    const mkOpt = (val, label) => {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = label;
+      targetSel.appendChild(o);
+      return o;
+    };
+    if (profile.app0) {
+      const mb = (profile.app0.size / 1048576).toFixed(2);
+      mkOpt('0x' + profile.app0.offset.toString(16),
+            `app0 @0x${profile.app0.offset.toString(16)} (${mb} MB) ${profile.active_slot === 0 ? '✓ active' : ''}`);
+    }
+    if (profile.app1) {
+      const mb = (profile.app1.size / 1048576).toFixed(2);
+      mkOpt('0x' + profile.app1.offset.toString(16),
+            `app1 @0x${profile.app1.offset.toString(16)} (${mb} MB) ${profile.active_slot === 1 ? '✓ active' : ''}`);
+    }
+    mkOpt('0x0', 'full image @0x0 (incl. bootloader — ROM DFU only)');
+    // Restore prior selection if still valid; else pick active slot.
+    if (Array.from(targetSel.options).some(o => o.value === prevValue)) {
+      targetSel.value = prevValue;
+    } else if (profile.app0 && profile.active_slot === 0) {
+      targetSel.value = '0x' + profile.app0.offset.toString(16);
+    }
+    targetSel._profileApplied = true;
+  }
+
   const target = parseInt(targetSel.value, 16);
   const path = document.getElementById('fwPath');
   const btn  = document.getElementById('fwFlashBtn');
@@ -2912,12 +3067,17 @@ function fwPathUpdate() {
   const fullOpt = targetSel.querySelector('option[value="0x0"]');
   if (fullOpt) fullOpt.disabled = (_rxMode !== 'dfu');
   if (target === 0 && _rxMode !== 'dfu' && _rxMode !== 'unknown') {
-    targetSel.value = '0x10000';
+    const app0Val = profile?.app0 ? '0x' + profile.app0.offset.toString(16) : '0x10000';
+    targetSel.value = app0Val;
   }
 
-  // Hide "flip OTADATA after flash" for full-image target (whole chain rewritten).
+  // Hide "flip OTADATA after flash" for full-image target. Slot target = any
+  // non-zero offset that matches a detected app partition.
   if (bootLabel) {
-    const isSlotTarget = (target === 0x10000 || target === 0x1f0000);
+    const app0Off = profile?.app0?.offset;
+    const app1Off = profile?.app1?.offset;
+    const isSlotTarget = (target === app0Off || target === app1Off ||
+                          target === 0x10000 || target === 0x1f0000);
     bootLabel.closest('.row').style.display = isSlotTarget ? '' : 'none';
   }
 
