@@ -2581,6 +2581,12 @@ function rxApplyModeGate() {
   // Enable/disable the per-slot flash buttons based on mode.
   const stubButtons = document.querySelectorAll('button[onclick^="rxFlashStub"]');
   const dfuButtons  = document.querySelectorAll('button[onclick^="rxFlashToSlot"]');
+  // Controls card: Boot app0/1 need ROM DFU (OTADATA read+write via SLIP).
+  // Bind/Stub/WiFi need running app. Exit-DFU needs DFU or stub.
+  const bootButtons = document.querySelectorAll('button[onclick^="ctrlBoot"]');
+  const appButtons  = document.querySelectorAll('button[onclick^="ctrlBind"], button[onclick^="ctrlWifi"], button[onclick^="ctrlStub"]');
+  const exitBtns    = document.querySelectorAll('button[onclick^="ctrlExitDfu"]');
+  const cfgLoadBtn  = document.getElementById('rxCfgLoadBtn');
   stubButtons.forEach(b => {
     b.disabled = (_rxMode !== 'app' && _rxMode !== 'stub');
     b.title = b.disabled
@@ -2593,6 +2599,30 @@ function rxApplyModeGate() {
       ? 'Flash (DFU) requires RX in ROM DFU (hold BOOT + power-cycle) — current mode: ' + _rxMode
       : 'ROM DFU flash @115200';
   });
+  bootButtons.forEach(b => {
+    b.disabled = (_rxMode !== 'dfu');
+    b.title = b.disabled
+      ? 'Boot-slot switch writes OTADATA via ROM DFU — need mode=dfu (current: ' + _rxMode + '). Hold BOOT on RX + power-cycle.'
+      : 'Flip OTADATA on next reboot';
+  });
+  appButtons.forEach(b => {
+    b.disabled = (_rxMode !== 'app');
+    b.title = b.disabled
+      ? 'CRSF command requires RX in app — current mode: ' + _rxMode
+      : 'Runtime CRSF command';
+  });
+  exitBtns.forEach(b => {
+    b.disabled = (_rxMode !== 'dfu' && _rxMode !== 'stub');
+    b.title = b.disabled
+      ? 'RUN_USER_CODE requires RX in DFU or stub (current: ' + _rxMode + ')'
+      : 'Exit flasher → boot OTADATA-selected app';
+  });
+  if (cfgLoadBtn) {
+    cfgLoadBtn.disabled = (_rxMode !== 'app');
+    cfgLoadBtn.title = cfgLoadBtn.disabled
+      ? 'LUA params require RX in app (DEVICE_PING) — current: ' + _rxMode
+      : 'Read all ~40 LUA parameters via CRSF';
+  }
 }
 async function rxProbeMode() {
   const btn = document.getElementById('rxProbeBtn');

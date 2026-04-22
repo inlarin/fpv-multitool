@@ -1277,23 +1277,21 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
         cfg.baud_rate = 115200;
 
-        // 1) Read both OTADATA sectors (32 B records at 0xe000 and 0xf000)
-        uint8_t sec[2][32];
-        bool read_ok[2] = {false, false};
-        for (int i = 0; i < 2; i++) {
-            ESPFlasher::Result r = ESPFlasher::readFlash(cfg, 0xe000 + i * 0x1000, 32, sec[i]);
-            read_ok[i] = (r == ESPFlasher::FLASH_OK);
-        }
-        if (!read_ok[0] && !read_ok[1]) {
+        // 1) Read both OTADATA sectors in ONE Serial1 session via receiverInfo().
+        // Two separate readFlash() calls here used to glitch the ROM's autobaud
+        // lock between begin()/end() cycles — producing "readFlash failed both
+        // sectors" even when the RX was clearly in DFU. receiverInfo() does a
+        // single sync + spi_attach + spi_set_params + two readFlashInSession
+        // calls, which survives the inter-read interval.
+        ESPFlasher::ReceiverInfo rinfo;
+        if (ESPFlasher::receiverInfo(cfg, &rinfo) != ESPFlasher::FLASH_OK || !rinfo.otadata_ok) {
             PinPort::release(PinPort::PORT_B);
             req->send(500, "text/plain",
                 "readFlash failed both sectors — is RX in DFU? (hold BOOT, power-cycle)");
             return;
         }
-
-        // Parse seq from each sector (0xFFFFFFFF if blank/unreadable)
-        uint32_t seq0 = read_ok[0] ? *(uint32_t*)&sec[0][0] : 0xFFFFFFFF;
-        uint32_t seq1 = read_ok[1] ? *(uint32_t*)&sec[1][0] : 0xFFFFFFFF;
+        uint32_t seq0 = rinfo.otadata[0].read_ok ? rinfo.otadata[0].seq : 0xFFFFFFFF;
+        uint32_t seq1 = rinfo.otadata[1].read_ok ? rinfo.otadata[1].seq : 0xFFFFFFFF;
         uint32_t max_seq = 0;
         if (seq0 != 0xFFFFFFFF) max_seq = seq0;
         if (seq1 != 0xFFFFFFFF && seq1 > max_seq) max_seq = seq1;
@@ -1359,39 +1357,33 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
         cfg.baud_rate = 115200;
 
-        uint8_t sec[2][32];
-        bool ok[2] = {false, false};
-        for (int i = 0; i < 2; i++) {
-            ok[i] = (ESPFlasher::readFlash(cfg, 0xe000 + i * 0x1000, 32, sec[i])
-                     == ESPFlasher::FLASH_OK);
-        }
+        // Same fix as /api/otadata/select — read via one-session receiverInfo.
+        // Avoids the inter-readFlash Serial1.end/begin glitch that desyncs the
+        // ROM autobauder and falsely reports "both sectors failed".
+        ESPFlasher::ReceiverInfo rinfo;
+        ESPFlasher::Result r = ESPFlasher::receiverInfo(cfg, &rinfo);
         PinPort::release(PinPort::PORT_B);
-        if (!ok[0] && !ok[1]) {
+        if (r != ESPFlasher::FLASH_OK || !rinfo.otadata_ok) {
             req->send(500, "text/plain",
                 "readFlash failed — RX must be in DFU (hold BOOT, power-cycle)");
             return;
         }
 
         JsonDocument d;
-        uint32_t max_seq = 0; int slot = -1;
         for (int i = 0; i < 2; i++) {
             JsonObject s = d["sectors"][i].to<JsonObject>();
-            s["sector"] = i;
-            s["offset"] = 0xe000 + i * 0x1000;
-            s["read_ok"] = ok[i];
-            if (ok[i]) {
-                uint32_t seq = *(uint32_t*)&sec[i][0];
-                uint32_t state = *(uint32_t*)&sec[i][24];
-                uint32_t crc = *(uint32_t*)&sec[i][28];
-                s["seq"] = seq;
-                s["state"] = state;
-                s["crc"] = crc;
-                s["blank"] = (seq == 0xFFFFFFFF);
-                if (seq != 0xFFFFFFFF && seq > max_seq) { max_seq = seq; }
+            s["sector"]  = i;
+            s["offset"]  = 0xe000 + i * 0x1000;
+            s["read_ok"] = rinfo.otadata[i].read_ok;
+            if (rinfo.otadata[i].read_ok) {
+                s["seq"]   = rinfo.otadata[i].seq;
+                s["state"] = rinfo.otadata[i].state;
+                s["crc"]   = rinfo.otadata[i].crc;
+                s["blank"] = rinfo.otadata[i].blank;
             }
         }
-        d["max_seq"] = max_seq;
-        d["active_slot"] = (max_seq == 0) ? 0 : ((max_seq - 1) & 1);
+        d["max_seq"]     = rinfo.max_seq;
+        d["active_slot"] = rinfo.active_slot;
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
     });
