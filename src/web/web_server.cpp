@@ -769,6 +769,10 @@ void WebServer::start() {
 
     s_server->on("/api/crsf/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
         CRSFService::end();
+        // Flush the cached parameter table — previously cached params from
+        // the just-stopped RX would otherwise survive a subsequent /start
+        // against a different RX and leak into the new session's UI.
+        CRSFConfig::reset();
         WebState::crsf.enabled = false;
         PinPort::release(PinPort::PORT_B);
         req->send(200, "text/plain", "CRSF stopped");
@@ -793,8 +797,11 @@ void WebServer::start() {
     // cached in CRSFConfig.
     s_server->on("/api/crsf/read_params_blind", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!CRSFService::isRunning()) { req->send(400, "text/plain", "CRSF not running"); return; }
+        // Default 50 covers all modern ELRS RX fw (vanilla 3.6 has ~40 params,
+        // 4.0 a few more; forks add VTX/backpack fields). Cap 80 keeps the
+        // worst-case sweep under ~3.3 s at 40 ms spacing.
         int maxId = req->hasParam("max", true)
-            ? req->getParam("max", true)->value().toInt() : 30;
+            ? req->getParam("max", true)->value().toInt() : 50;
         if (maxId < 1) maxId = 1;
         if (maxId > 80) maxId = 80;
         // Space the reads 40 ms apart so we don't overrun the RX

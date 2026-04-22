@@ -630,6 +630,12 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 <!-- ===== ELRS FLASH ===== -->
 <div id="tab-elrs" class="tab-content" style="display:none">
 
+  <div id="elrsCrsfBanner" style="display:none;padding:8px;margin-bottom:6px;background:#c60;color:#fff;border-radius:4px;font-size:13px">
+    ⚠ <b>CRSF telemetry service is running</b> — Port B locked, ELRS flash/probe actions will fail with 409.
+    <button onclick="crsfStop()" style="float:right;padding:2px 8px;font-size:12px">Stop CRSF</button>
+    <span style="color:#ffd">Flash Firmware auto-pauses CRSF; standalone probes/controls don't.</span>
+  </div>
+
   <!-- ===== 1. RX Status (consolidated: mode + identity from DEVICE_PING) ===== -->
   <div class="card">
     <h2>RX Status</h2>
@@ -925,6 +931,15 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 
 <!-- ===== CRSF ===== -->
 <div id="tab-crsf" class="tab-content" style="display:none">
+
+  <div id="crsfFlashBanner" style="display:none;padding:8px;margin-bottom:6px;background:#c60;color:#fff;border-radius:4px;font-size:13px">
+    ⚠ <b>Flash operation in progress on ELRS tab</b> — CRSF service auto-stopped, Port B held by flasher. Restart CRSF after flash completes.
+  </div>
+
+  <div id="crsfNoLinkHint" style="display:none;padding:8px;margin-bottom:6px;background:#335;color:#ccf;border-radius:4px;font-size:12px">
+    ℹ <b>No TX link detected</b> — Link Stats / Channels / FC Telemetry require a paired handset TX actively transmitting to this RX. Plate+RX-only mode shows only Device Info + Parameters + Commands (CRSF-over-UART).
+  </div>
+
   <div class="card">
     <h2>CRSF / ELRS Telemetry</h2>
     <div class="warning">
@@ -4462,6 +4477,12 @@ function handleMsg(m) {
     document.getElementById('armBtn').textContent = armed ? 'Re-arm' : 'ARM';
   }
   else if (m.type === 'crsf') {
+    // Drive cross-tab Port B contention banner: if CRSF is running and user
+    // is on ELRS tab, warn. Standalone probes/controls in ELRS tab don't
+    // auto-pause CRSF (only the Flash button does, server-side).
+    const elrsBn = document.getElementById('elrsCrsfBanner');
+    if (elrsBn) elrsBn.style.display = (m.enabled ? '' : 'none');
+
     // Status badges
     const st = document.getElementById('crsfStatus');
     st.textContent = m.enabled ? 'ON' : 'OFF';
@@ -4469,6 +4490,17 @@ function handleMsg(m) {
     const co = document.getElementById('crsfConnected');
     co.textContent = m.connected ? 'LINK' : 'NO LINK';
     co.className = 'status ' + (m.connected ? 'on' : 'off');
+
+    // "No TX link" hint — show after running >3 s with no link validated.
+    // Avoids a flash-of-warning immediately after Start.
+    const nlHint = document.getElementById('crsfNoLinkHint');
+    if (nlHint) {
+      const shouldShow = m.enabled && !m.connected && !(m.link && m.link.lq !== undefined);
+      if (shouldShow && !window._crsfNoLinkSince) window._crsfNoLinkSince = Date.now();
+      if (!shouldShow) window._crsfNoLinkSince = 0;
+      const stable = window._crsfNoLinkSince && (Date.now() - window._crsfNoLinkSince > 3000);
+      nlHint.style.display = stable ? '' : 'none';
+    }
 
     document.getElementById('crsfFrames').textContent = (m.frames || 0) + ' / ' + (m.badCrc || 0);
 
@@ -4525,17 +4557,13 @@ function handleMsg(m) {
     }
   }
   else if (m.type === 'flash') {
-    if (m.size > 0) {
-      document.getElementById('fwSize').textContent = (m.size/1024).toFixed(1) + ' KB';
-    }
-    if (m.in_progress || m.progress > 0) {
-      document.getElementById('flashStage').textContent = m.stage + ' (' + m.progress + '%)';
-      document.getElementById('flashBar').style.width = m.progress + '%';
-    }
-    if (m.result && m.result !== '' && !m.in_progress) {
-      document.getElementById('flashResult').textContent = 'Result: ' + m.result;
-      document.getElementById('flashBtn').disabled = (m.size === 0);
-    }
+    // Legacy "ELRS Receiver Flasher" card is gone (commit 7d965f6) — primary
+    // Flash card polls /api/flash/status via HTTP instead of consuming the WS
+    // broadcast. But we do use this message to drive the CRSF-tab banner:
+    // during a flash, CRSFService is auto-paused server-side, so the tab user
+    // should see the warning until Start is clicked again.
+    const crsfFb = document.getElementById('crsfFlashBanner');
+    if (crsfFb) crsfFb.style.display = (m.in_progress ? '' : 'none');
   }
 }
 

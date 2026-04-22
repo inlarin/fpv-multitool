@@ -13,6 +13,8 @@
 #include "../../bridge/esp_rom_flasher.h"
 #include "../../bridge/firmware_unpack.h"
 #include "../../core/pin_port.h"
+#include "../../crsf/crsf_service.h"
+#include "../../crsf/crsf_config.h"
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
@@ -89,6 +91,21 @@ void executeFlash() {
 
     Serial.printf("[Flash] Flashing %u bytes\n", fw_size);
     WebState::flashState.stage = "Starting";
+
+    // Auto-pause CRSF telemetry service if it was running — otherwise it
+    // holds Port B and we'd fail acquire below. User must manually Start
+    // again from the CRSF tab after the flash operation completes; we don't
+    // auto-restart because the RX is likely in a different state afterwards
+    // (rebooting into new firmware, etc).
+    bool crsf_was_running = CRSFService::isRunning();
+    if (crsf_was_running) {
+        Serial.println("[Flash] CRSF service was running — pausing for Port B");
+        CRSFService::end();
+        CRSFConfig::reset();
+        WebState::crsf.enabled = false;
+        PinPort::release(PinPort::PORT_B);
+        delay(50);  // settle
+    }
 
     if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
         WebState::flashState.stage = "Failed";
