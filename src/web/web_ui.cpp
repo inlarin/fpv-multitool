@@ -639,7 +639,8 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="row"><span class="label">Mode:</span>
       <span class="value">
         <span id="rxModeBadge" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px">—</span>
-        <small id="rxModeHint" style="color:var(--text-dim);margin-left:8px"></small>
+        <small id="rxModeAge" style="color:var(--text-dim);margin-left:6px"></small>
+        <small id="rxModeHint" style="color:var(--text-dim);margin-left:8px;display:block;margin-top:4px"></small>
       </span>
     </div>
     <div class="row"><span class="label">Firmware:</span><span class="value" id="rxName">—</span></div>
@@ -723,6 +724,10 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <!-- Step 3: Path (auto) -->
     <div class="row"><span class="label">3. Path:</span>
       <span class="value" id="fwPath" style="font-family:monospace;font-size:11px">—</span>
+    </div>
+
+    <div class="row"><span class="label">After flash:</span>
+      <span><label><input type="checkbox" id="fwBootAfter" checked> <small style="color:var(--text-dim)">flip OTADATA to this slot (boot it on reboot)</small></label></span>
     </div>
 
     <button onclick="fwFlash()" id="fwFlashBtn" style="width:100%;background:#0a3;margin-top:6px" disabled>🔥 Flash</button>
@@ -2624,6 +2629,15 @@ function rxApplyModeGate() {
       : 'Read all ~40 LUA parameters via CRSF';
   }
 }
+let _rxProbeAt = 0;
+function rxAgeTick() {
+  const el = document.getElementById('rxModeAge');
+  if (!el || !_rxProbeAt) return;
+  const age = Math.floor((Date.now() - _rxProbeAt) / 1000);
+  el.textContent = age < 5 ? '' : ('probed ' + age + 's ago' + (age > 45 ? ' — stale' : ''));
+  el.style.color = age > 45 ? '#f80' : 'var(--text-dim)';
+}
+if (!window._rxAgeTimer) window._rxAgeTimer = setInterval(rxAgeTick, 3000);
 async function rxProbeMode() {
   const btn = document.getElementById('rxProbeBtn');
   const badge = document.getElementById('rxModeBadge');
@@ -2640,6 +2654,7 @@ async function rxProbeMode() {
     const txt = await postForm('/api/elrs/rx_mode');
     const d = JSON.parse(txt);
     _rxMode = d.mode;
+    _rxProbeAt = Date.now();
     const colors = {
       'dfu':    {bg:'#c60',   fg:'#fff', lbl:'DFU (ROM @115200)'},
       'stub':   {bg:'#06c',   fg:'#fff', lbl:'STUB (@420000)'},
@@ -2651,6 +2666,7 @@ async function rxProbeMode() {
     badge.style.background = c.bg;
     badge.style.color = c.fg;
     hint.textContent = d.hint || '';
+    rxAgeTick();
     if (d.app_ok && d.app) {
       document.getElementById('rxName').textContent = d.app.name || '—';
       const sv = d.app.sw_version || 0;
@@ -2693,9 +2709,26 @@ function fwPopulateModels() {
   m.value = 'bayck.rx_dual.dualc3';
 }
 function fwPathUpdate() {
-  const target = parseInt(document.getElementById('fwTarget').value, 16);
+  const targetSel = document.getElementById('fwTarget');
+  const target = parseInt(targetSel.value, 16);
   const path = document.getElementById('fwPath');
   const btn  = document.getElementById('fwFlashBtn');
+  const bootLabel = document.getElementById('fwBootAfter')?.parentElement?.parentElement;
+
+  // Gate: "full image @0x0" only makes sense in ROM DFU (stub can't touch bootloader).
+  // If mode != dfu and user had full-image selected, auto-switch to app0.
+  const fullOpt = targetSel.querySelector('option[value="0x0"]');
+  if (fullOpt) fullOpt.disabled = (_rxMode !== 'dfu');
+  if (target === 0 && _rxMode !== 'dfu' && _rxMode !== 'unknown') {
+    targetSel.value = '0x10000';
+  }
+
+  // Hide "flip OTADATA after flash" for full-image target (whole chain rewritten).
+  if (bootLabel) {
+    const isSlotTarget = (target === 0x10000 || target === 0x1f0000);
+    bootLabel.closest('.row').style.display = isSlotTarget ? '' : 'none';
+  }
+
   let pathText = '', pathOk = false;
   if (target === 0) {
     if (_rxMode === 'dfu') { pathText = 'ROM DFU @115200 — full flash (bootloader + partitions + app)'; pathOk = true; }
@@ -2788,17 +2821,22 @@ async function fwFlash() {
   const bar    = document.getElementById('fwBar');
   const btn    = document.getElementById('fwFlashBtn');
   const target = document.getElementById('fwTarget').value;
+  const bootAfter = document.getElementById('fwBootAfter').checked;
   if (!_fwCached) { alert('Cache firmware first'); return; }
   // Path selection from current RX mode.
   const via = (target !== '0x0' && (_rxMode === 'app' || _rxMode === 'stub')) ? 'stub' : '';
-  if (!confirm('Flash ' + _fwCached.name + ' to ' + target + (via ? ' via in-app stub (no BOOT required)' : ' via ROM DFU (RX must be in DFU)'))) return;
+  const pathMsg = via ? 'via in-app stub (no BOOT required)' : 'via ROM DFU (RX must be in DFU)';
+  const slotName = (target === '0x10000') ? 'app0' : (target === '0x1f0000') ? 'app1' : null;
+  const bootMsg = (bootAfter && slotName) ? (' + flip OTADATA to ' + slotName) : '';
+  if (!confirm('Flash ' + _fwCached.name + ' to ' + target + ' ' + pathMsg + bootMsg)) return;
   btn.disabled = true;
   status.textContent = '';
+  let flashOk = false;
   try {
     const fd = new FormData();
     fd.append('offset', target);
     if (via) fd.append('via', via);
-    fd.append('stay', target === '0x0' ? '0' : '0');
+    fd.append('stay', bootAfter && slotName ? '1' : '0');  // keep DFU open if we'll flip OTADATA next
     const reply = await postForm('/api/flash/start', fd);
     status.textContent = reply;
     // Poll /api/flash/status
@@ -2808,11 +2846,29 @@ async function fwFlash() {
       stage.textContent = s.stage || '-';
       bar.style.width = (s.progress || 0) + '%';
       if (!s.in_progress && s.lastResult) {
-        status.textContent = (s.lastResult.startsWith('OK') ? '✓ ' : '✗ ') + s.lastResult;
-        status.style.color = s.lastResult.startsWith('OK') ? '#0f0' : '#f66';
+        flashOk = s.lastResult.startsWith('OK');
+        status.textContent = (flashOk ? '✓ ' : '✗ ') + s.lastResult;
+        status.style.color = flashOk ? '#0f0' : '#f66';
         break;
       }
     }
+
+    // Auto-flip OTADATA to the newly-flashed slot if requested + successful.
+    if (flashOk && bootAfter && slotName) {
+      try {
+        const fd2 = new FormData(); fd2.append('slot', slotName === 'app0' ? '0' : '1');
+        const otaReply = await postForm('/api/otadata/select', fd2);
+        status.textContent += '\n✓ ' + otaReply;
+      } catch (e) {
+        status.textContent += '\n✗ OTADATA flip failed: ' + (e.message || e);
+      }
+    }
+    // Cached buffer gets freed server-side on flash completion — reflect that.
+    _fwCached = null;
+    document.getElementById('fwCached').textContent = '—';
+    fwPathUpdate();
+    // Auto-probe once RX has time to reboot.
+    if (flashOk) setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, 4500);
   } catch (e) {
     status.textContent = '✗ ' + (e.message || e);
     status.style.color = '#f66';
