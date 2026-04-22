@@ -649,7 +649,27 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <button onclick="rxProbeMode()" id="rxProbeBtn" style="width:100%">🔍 Probe RX</button>
   </div>
 
-  <!-- ===== 2. Flash Firmware (unified flow) ===== -->
+  <!-- ===== 2. RX Configuration (LUA params via CRSF) ===== -->
+  <div class="card" id="rxConfigCard">
+    <h2>RX Configuration</h2>
+    <div class="warning">
+      Читает LUA-параметры через CRSF PARAMETER_READ (~2 с на ~40 полей). Требует RX в app. Клик по value редактирует. Hidden-параметры скрыты чекбоксом ниже.
+    </div>
+    <div class="row">
+      <span class="label">Show hidden:</span>
+      <span><input type="checkbox" id="rxCfgShowHidden" onchange="rxCfgRender()"> <small style="color:var(--text-dim)">debug-only params</small></span>
+    </div>
+    <button onclick="rxCfgLoad()" id="rxCfgLoadBtn" style="width:100%">🔄 Load parameters</button>
+    <div id="rxCfgStatus" style="margin-top:6px;font-size:11px;color:var(--text-dim)"></div>
+    <table id="rxCfgTable" style="width:100%;margin-top:8px;font-size:11px;display:none">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--border)">
+        <th style="padding:3px">#</th><th>Name</th><th>Type</th><th>Value</th><th>Range</th>
+      </tr></thead>
+      <tbody id="rxCfgBody"></tbody>
+    </table>
+  </div>
+
+  <!-- ===== 3. Flash Firmware (unified flow) ===== -->
   <div class="card">
     <h2>Flash Firmware</h2>
     <div class="warning">
@@ -1442,13 +1462,19 @@ function showTab(name) {
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
   if (name === 'elrs') {
-    // Expose top-level consts on window so new fw*/ctrl* helpers can reach them
     if (!window.ELRS_MODELS)   window.ELRS_MODELS = ELRS_MODELS;
     if (!window.ELRS_RELEASES) window.ELRS_RELEASES = ELRS_RELEASES;
     fwPopulateModels(); fwSourceChange(); fwPathUpdate();
-    // Hook onchange → path auto-update
     const tgt = document.getElementById('fwTarget'); if (tgt) tgt.onchange = fwPathUpdate;
     rxWizRender(); hwJsonPreviewRender(); otadataRefresh(); renderCatalog();
+    // Auto-probe on first open of the ELRS tab this session (or if stale >90s).
+    // Gives immediate RX Status feedback without requiring a button click. The
+    // probe itself is ~1s worst case — non-blocking to the user since it's async.
+    const now = Date.now();
+    if (!window._rxProbeLast || now - window._rxProbeLast > 90000) {
+      window._rxProbeLast = now;
+      setTimeout(() => { try { rxProbeMode(); } catch (_) {} }, 300);
+    }
   }
 }
 
@@ -2762,6 +2788,86 @@ async function fwFlash() {
     status.style.color = '#f66';
   } finally {
     btn.disabled = false;
+  }
+}
+
+// ===== RX Configuration (LUA params) =====
+let _rxCfgData = null;
+const CRSF_TYPE_NAMES = { 0:'uint8', 1:'int8', 2:'uint16', 3:'int16', 4:'uint32', 5:'int32',
+                          8:'float', 9:'select', 10:'string', 11:'folder', 12:'info', 13:'command' };
+async function rxCfgLoad() {
+  const btn = document.getElementById('rxCfgLoadBtn');
+  const status = document.getElementById('rxCfgStatus');
+  btn.disabled = true; btn.textContent = '⏳ Reading params (~2s)…';
+  status.textContent = '';
+  try {
+    const d = await getJson('/api/elrs/params');
+    _rxCfgData = d;
+    status.textContent = 'Device "' + (d.device?.name || '?') + '" — ' + (d.params?.length || 0) + ' / ' + (d.device?.field_count || 0) + ' params';
+    rxCfgRender();
+  } catch (e) {
+    status.textContent = '✗ ' + (e.message || e);
+    status.style.color = '#f66';
+  } finally {
+    btn.disabled = false; btn.textContent = '🔄 Load parameters';
+  }
+}
+function rxCfgRender() {
+  if (!_rxCfgData) return;
+  const showHidden = document.getElementById('rxCfgShowHidden').checked;
+  const body = document.getElementById('rxCfgBody');
+  const tbl  = document.getElementById('rxCfgTable');
+  body.innerHTML = '';
+  for (const p of _rxCfgData.params) {
+    if (p.hidden && !showHidden) continue;
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid var(--border-soft)';
+    tr.style.color = p.hidden ? 'var(--text-dim)' : '';
+    let valueCell = '—';
+    const tn = CRSF_TYPE_NAMES[p.type] || ('t' + p.type);
+    if (p.type === 9) {
+      // TEXT_SELECTION — dropdown
+      const opts = (p.options || '').split(';');
+      valueCell = '<select onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)">' +
+        opts.map((o, i) => '<option value="' + i + '"' + (i === p.value ? ' selected' : '') + '>' + o + '</option>').join('') +
+      '</select>';
+    } else if (p.type === 0 || p.type === 1 || p.type === 2 || p.type === 3) {
+      // Numeric — inline input
+      valueCell = '<input type="number" value="' + p.value + '" min="' + p.min + '" max="' + p.max +
+        '" onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" style="width:80px;padding:2px">';
+    } else if (p.type === 10) {
+      // STRING
+      valueCell = '<input type="text" value="' + (p.value || '') + '" onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" style="width:160px;padding:2px">';
+    } else if (p.type === 11) {
+      valueCell = '<em>(folder)</em>';
+    } else if (p.type === 12) {
+      valueCell = '<em>' + (p.value || '') + '</em>';
+    } else if (p.type === 13) {
+      valueCell = '<button onclick="rxCfgWrite(' + p.id + ',' + p.type + ',1)" style="padding:2px 8px">Execute</button>';
+    }
+    const range = (p.min !== undefined) ? ('[' + p.min + '..' + p.max + '] def=' + p.default) : '';
+    tr.innerHTML =
+      '<td style="padding:3px">' + p.id + (p.hidden ? ' ¬' : '') + '</td>' +
+      '<td>' + p.name + '</td>' +
+      '<td>' + tn + '</td>' +
+      '<td>' + valueCell + '</td>' +
+      '<td>' + range + '</td>';
+    body.appendChild(tr);
+  }
+  tbl.style.display = body.childElementCount ? 'table' : 'none';
+}
+async function rxCfgWrite(id, type, value) {
+  try {
+    const fd = new FormData();
+    fd.append('id', id); fd.append('type', type); fd.append('value', value);
+    const txt = await postForm('/api/elrs/params/write', fd);
+    const s = document.getElementById('rxCfgStatus');
+    s.textContent = '✓ ' + txt;
+    s.style.color = '#0f0';
+    // Re-read after short delay to verify
+    setTimeout(rxCfgLoad, 500);
+  } catch (e) {
+    alert('Write failed: ' + (e.message || e));
   }
 }
 

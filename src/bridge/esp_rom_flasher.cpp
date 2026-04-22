@@ -976,6 +976,90 @@ Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *ou
     return FLASH_OK;
 }
 
+// LUA parameter read — single chunk.
+// Frame layout:
+//   TX: EC 06 2C EC EA <field_id> <chunk> <crc>   (8 bytes)
+//   RX: <addr> <len> 2B <dest=EC> <orig=EC> <field_id> <chunks_remaining>
+//       <parent> <type> <name\0> <type-specific> <crc>
+// We return out_buf[] starting at <parent> (skipping field_id+chunks_remaining).
+Result crsfParamRead(const Config &cfg, uint8_t field_id, uint8_t chunk,
+                     uint8_t *out_buf, size_t max_bytes, size_t *out_len,
+                     uint8_t *chunks_remaining) {
+    if (!cfg.uart || !out_buf || !out_len) return FLASH_ERR_INVALID_INPUT;
+    *out_len = 0;
+    if (chunks_remaining) *chunks_remaining = 0;
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(1024);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(15);
+    while (s_uart->available()) s_uart->read();
+
+    uint8_t req[8] = {0xEC, 0x06, 0x2C, 0xEC, 0xEA, field_id, chunk, 0x00};
+    req[7] = crsfCrc8(req + 2, 5);
+    s_uart->write(req, 8);
+    s_uart->flush();
+
+    // Collect up to 256 bytes from wire — enough for 60-byte frame + safety.
+    uint8_t buf[256];
+    size_t got = 0;
+    uint32_t deadline = millis() + 250;
+    while (millis() < deadline && got < sizeof(buf)) {
+        while (s_uart->available() && got < sizeof(buf)) buf[got++] = s_uart->read();
+        delay(2);
+    }
+    s_uart->end();
+
+    // Scan for: <addr> <len> 0x2B <...> — first 0x2B frame.
+    for (size_t i = 0; i + 4 < got; i++) {
+        uint8_t len = buf[i + 1];
+        if (buf[i + 2] != 0x2B) continue;
+        if (len < 6 || i + 2 + len > got) continue;
+        // body starts at buf[i+3]: [dest][orig][field_id][chunks_rem][parent][type][name...]
+        // skip [dest=i+3] [orig=i+4]
+        uint8_t reply_field = buf[i + 5];
+        if (reply_field != field_id) continue;
+        if (chunks_remaining) *chunks_remaining = buf[i + 6];
+        // body after field_id+chunks_rem: buf[i+7..i+2+len-1] (last byte is crc).
+        int body_start = i + 7;
+        int body_end = i + 2 + len - 1;  // excl. crc
+        if (body_end <= body_start) return FLASH_ERR_READ_FAILED;
+        size_t copy_n = body_end - body_start;
+        if (copy_n > max_bytes) copy_n = max_bytes;
+        memcpy(out_buf, buf + body_start, copy_n);
+        *out_len = copy_n;
+        return FLASH_OK;
+    }
+    return FLASH_ERR_READ_FAILED;
+}
+
+// LUA parameter write — no reply expected. Frame:
+//   EC <len> 2D EC EA <field_id> <data...> <crc>
+//   len = 1(type) + 1(dest) + 1(orig) + 1(field) + data_len + 1(crc) = 5 + data_len
+Result crsfParamWrite(const Config &cfg, uint8_t field_id, const uint8_t *data, uint8_t data_len) {
+    if (!cfg.uart || data_len > 32) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(256);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(15);
+
+    uint8_t frame[48];
+    frame[0] = 0xEC;
+    frame[1] = 5 + data_len;    // type+dest+orig+field_id+data+crc
+    frame[2] = 0x2D;
+    frame[3] = 0xEC;
+    frame[4] = 0xEA;
+    frame[5] = field_id;
+    if (data && data_len) memcpy(frame + 6, data, data_len);
+    size_t total = 6 + data_len;
+    frame[total] = crsfCrc8(frame + 2, total - 2);
+    s_uart->write(frame, total + 1);
+    s_uart->flush();
+    delay(80);
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // CRSF "enter binding" — EC 04 32 62 64 <crc> at cfg.baud_rate.
 Result sendCrsfBind(const Config &cfg) {
     if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;

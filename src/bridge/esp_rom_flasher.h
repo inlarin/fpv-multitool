@@ -121,6 +121,24 @@ Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *ou
 // puts RX into bind mode for 60 s. TX-only, no ack expected.
 Result sendCrsfBind(const Config &cfg);
 
+// LUA parameter read (CRSF PARAMETER_READ 0x2C). Sends the 8-byte request
+// frame for (field_id, chunk=0) and captures up to max_bytes of the
+// PARAMETER_SETTINGS_ENTRY (0x2B) reply starting from the body of the first
+// chunk (i.e. starting right after field_id + chunks_remaining — so
+// out_buf[0]=parent, out_buf[1]=type, out_buf[2..]=name\0+typedata).
+// *out_len = bytes written, *chunks_remaining = chunks still to fetch.
+// Timeout ~200 ms. Returns FLASH_OK if reply matched, FLASH_ERR_READ_FAILED
+// otherwise.
+Result crsfParamRead(const Config &cfg, uint8_t field_id, uint8_t chunk,
+                     uint8_t *out_buf, size_t max_bytes, size_t *out_len,
+                     uint8_t *chunks_remaining);
+
+// LUA parameter write (CRSF PARAMETER_WRITE 0x2D). Sends the field_id +
+// data_len payload bytes, no reply expected. For numeric fields data is
+// 1-4 bytes big-endian; for TEXT_SELECTION 1 byte index; for COMMAND 1
+// byte (lcsClick=1 fires the action).
+Result crsfParamWrite(const Config &cfg, uint8_t field_id, const uint8_t *data, uint8_t data_len);
+
 // Full dual-slot identity read + OTADATA in one Serial1 session. RX must be
 // in DFU. Reads OTADATA sectors, then the first 16 KB of app0 (@0x10000) and
 // app1 (@0x1f0000) to extract target/version/git/etc baked into seg0 rodata.

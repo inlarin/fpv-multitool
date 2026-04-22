@@ -336,6 +336,208 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(200, "application/json", out);
     });
 
+    // List all LUA parameters. Iterates field_id=1..N from DEVICE_INFO,
+    // reads chunk 0 per field via PARAMETER_READ (0x2C). Parses the
+    // PARAMETER_SETTINGS_ENTRY (0x2B) body into JSON. ~50 ms per field
+    // (~2 s total for a typical 40-field RX), so frontend should show a
+    // spinner. Multi-chunk params (rare — only very long TEXT_SELECTION
+    // option lists) return their first chunk only.
+    //
+    //   GET /api/elrs/params
+    s_server->on("/api/elrs/params", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress");
+            return;
+        }
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_params")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+
+        // First probe device to get field count.
+        ESPFlasher::ElrsDeviceInfo di;
+        if (ESPFlasher::crsfDevicePing(cfg, 250, &di) != ESPFlasher::FLASH_OK || !di.ok) {
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain",
+                "DEVICE_PING failed — RX must be running the app (not DFU/WiFi)");
+            return;
+        }
+
+        AsyncResponseStream *rs = req->beginResponseStream("application/json");
+        rs->print("{\"device\":{\"name\":\"");
+        rs->print(di.name);
+        rs->printf("\",\"field_count\":%u},\"params\":[", (unsigned)di.field_count);
+
+        uint8_t buf[192];
+        size_t n = 0;
+        uint8_t chunks_left = 0;
+        bool first = true;
+        for (uint8_t id = 1; id <= di.field_count; id++) {
+            if (ESPFlasher::crsfParamRead(cfg, id, 0, buf, sizeof(buf), &n, &chunks_left)
+                != ESPFlasher::FLASH_OK || n < 2) continue;
+            uint8_t parent = buf[0];
+            uint8_t raw_type = buf[1];
+            uint8_t type = raw_type & 0x3F;                     // mask hidden bits
+            bool hidden = (raw_type & 0xC0) != 0;
+            // Name null-terminated starting at buf[2]
+            size_t ni = 2;
+            while (ni < n && buf[ni] != 0) ni++;
+            if (ni >= n) continue;  // malformed
+
+            if (!first) rs->print(",");
+            first = false;
+            rs->printf("{\"id\":%u,\"parent\":%u,\"type\":%u,\"hidden\":%s,\"chunks_left\":%u,\"name\":\"",
+                       id, parent, type, hidden ? "true" : "false", chunks_left);
+            for (size_t i = 2; i < ni; i++) {
+                char c = (char)buf[i];
+                if (c == '"' || c == '\\') rs->print("\\");
+                rs->print(c);
+            }
+            rs->print("\"");
+
+            // Type-specific payload starts at buf[ni+1]
+            size_t p = ni + 1;
+            switch (type) {
+                case 0: case 1:  // UINT8 / INT8
+                    if (p + 4 <= n) {
+                        int val = (int8_t)buf[p]; if (type == 0) val = buf[p];
+                        int mn  = (int8_t)buf[p+1]; if (type == 0) mn = buf[p+1];
+                        int mx  = (int8_t)buf[p+2]; if (type == 0) mx = buf[p+2];
+                        int def = (int8_t)buf[p+3]; if (type == 0) def = buf[p+3];
+                        rs->printf(",\"value\":%d,\"min\":%d,\"max\":%d,\"default\":%d", val, mn, mx, def);
+                    }
+                    break;
+                case 2: case 3: {  // UINT16 / INT16 (big-endian)
+                    auto be16 = [](const uint8_t *p) { return (int16_t)(((uint16_t)p[0] << 8) | p[1]); };
+                    if (p + 8 <= n) {
+                        int val = (type == 2) ? (uint16_t)((buf[p]<<8)|buf[p+1]) : be16(buf + p);
+                        int mn  = (type == 2) ? (uint16_t)((buf[p+2]<<8)|buf[p+3]) : be16(buf + p + 2);
+                        int mx  = (type == 2) ? (uint16_t)((buf[p+4]<<8)|buf[p+5]) : be16(buf + p + 4);
+                        int def = (type == 2) ? (uint16_t)((buf[p+6]<<8)|buf[p+7]) : be16(buf + p + 6);
+                        rs->printf(",\"value\":%d,\"min\":%d,\"max\":%d,\"default\":%d", val, mn, mx, def);
+                    }
+                    break;
+                }
+                case 9: {  // TEXT_SELECTION
+                    // [options-string null-separated? actually semicolon-separated ending with \0]
+                    // Current value = 1 byte after options string. Then min/max/default bytes + unit-string.
+                    size_t opts_start = p;
+                    size_t opts_end = opts_start;
+                    while (opts_end < n && buf[opts_end] != 0) opts_end++;
+                    rs->print(",\"options\":\"");
+                    for (size_t i = opts_start; i < opts_end; i++) {
+                        char c = (char)buf[i];
+                        if (c == '"' || c == '\\') rs->print("\\");
+                        rs->print(c);
+                    }
+                    rs->print("\"");
+                    if (opts_end + 4 <= n) {
+                        rs->printf(",\"value\":%u,\"min\":%u,\"max\":%u,\"default\":%u",
+                                   buf[opts_end + 1], buf[opts_end + 2],
+                                   buf[opts_end + 3], buf[opts_end + 4]);
+                    }
+                    break;
+                }
+                case 10: case 12: {  // STRING / INFO — null-terminated
+                    size_t se = p;
+                    while (se < n && buf[se] != 0) se++;
+                    rs->print(",\"value\":\"");
+                    for (size_t i = p; i < se; i++) {
+                        char c = (char)buf[i];
+                        if (c == '"' || c == '\\') rs->print("\\");
+                        else if (c < 0x20 || c > 0x7e) c = '?';
+                        rs->print(c);
+                    }
+                    rs->print("\"");
+                    break;
+                }
+                case 11:  // FOLDER — name is enough, no value
+                    break;
+                case 13:  // COMMAND
+                    if (p < n) rs->printf(",\"command_state\":%u", buf[p]);
+                    break;
+                default: break;
+            }
+            rs->print("}");
+            // Small gap between reads — RX needs time to queue the next reply
+            // after previous UART burst. 10 ms suffices.
+            delay(10);
+        }
+        rs->print("]}");
+        req->send(rs);
+        PinPort::release(PinPort::PORT_B);
+    });
+
+    // Write one LUA parameter. Value encoded per type:
+    //   UINT8/INT8/TEXT_SELECTION/COMMAND: form field 'value' as int, 1 byte
+    //   UINT16/INT16: 'value' int, 2 bytes big-endian
+    //   STRING: 'value' as UTF-8 text (up to 32 bytes including null)
+    //
+    //   POST /api/elrs/params/write  form: id=N&type=T&value=V
+    s_server->on("/api/elrs/params/write", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress");
+            return;
+        }
+        if (!req->hasParam("id", true) || !req->hasParam("type", true) || !req->hasParam("value", true)) {
+            req->send(400, "text/plain", "need id + type + value");
+            return;
+        }
+        uint8_t id   = (uint8_t)req->getParam("id",   true)->value().toInt();
+        uint8_t type = (uint8_t)req->getParam("type", true)->value().toInt();
+        String  vraw =          req->getParam("value",true)->value();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_param_w")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+
+        uint8_t payload[34];
+        uint8_t payload_len = 0;
+        switch (type) {
+            case 0: case 1: case 9: case 13: {
+                int v = vraw.toInt();
+                payload[0] = (uint8_t)(v & 0xff);
+                payload_len = 1;
+                break;
+            }
+            case 2: case 3: {
+                int v = vraw.toInt();
+                payload[0] = (uint8_t)((v >> 8) & 0xff);
+                payload[1] = (uint8_t)(v & 0xff);
+                payload_len = 2;
+                break;
+            }
+            case 10: {  // STRING — write raw UTF-8 up to 32 B including null
+                size_t L = vraw.length();
+                if (L > 31) L = 31;
+                memcpy(payload, vraw.c_str(), L);
+                payload[L] = 0;
+                payload_len = L + 1;
+                break;
+            }
+            default:
+                PinPort::release(PinPort::PORT_B);
+                req->send(400, "text/plain", "unsupported param type for write");
+                return;
+        }
+        ESPFlasher::crsfParamWrite(cfg, id, payload, payload_len);
+        PinPort::release(PinPort::PORT_B);
+        char msg[96];
+        snprintf(msg, sizeof(msg), "WRITE id=%u type=%u len=%u value=%s",
+                 id, type, payload_len, vraw.c_str());
+        req->send(200, "text/plain", msg);
+    });
+
     // CRSF "enter binding" — puts RX into 60s bind-wait. Safe runtime op,
     // no flash destruction. Useful for pairing to a new handset without phones.
     //   POST /api/elrs/bind
