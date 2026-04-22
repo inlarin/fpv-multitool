@@ -919,19 +919,31 @@ Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *ou
     delay(20);
     while (s_uart->available()) s_uart->read();
 
-    // TX ping.
-    uint8_t ping[6] = {0xEC, 0x04, 0x28, 0x00, 0xEC, 0x00};
-    ping[5] = crsfCrc8(ping + 2, 3);  // type + dest + orig
-    s_uart->write(ping, 6);
-    s_uart->flush();
+    // TX ping. orig=0xEA matches elrsV3.lua handset-to-receiver convention
+    // (line 386: handsetId = 0xEA for non-TX devices). Was 0xEC earlier —
+    // the RX's dispatch path didn't care about orig, but its DEVICE_INFO
+    // reply chain may: fix now to match reference.
+    auto sendPing = [&]() {
+        uint8_t ping[6] = {0xEC, 0x04, 0x28, 0x00, 0xEA, 0x00};
+        ping[5] = crsfCrc8(ping + 2, 3);
+        while (s_uart->available()) s_uart->read();
+        s_uart->write(ping, 6);
+        s_uart->flush();
+    };
+    sendPing();
 
     // RX: scan incoming bytes for `<addr> <len> 29 …<crc>` within timeout.
-    // Simpler: accumulate up to 128 bytes, then search pattern.
+    // If nothing arrives by timeout/2, re-send ping (LUA does this at ~100 ms
+    // cadence during device discovery). Triples our chance of hitting a
+    // receiver that was mid-something when the first frame arrived.
     uint8_t buf[128];
     size_t got = 0;
     uint32_t deadline = millis() + timeout_ms;
+    uint32_t half = millis() + timeout_ms / 2;
+    bool resent = false;
     while (millis() < deadline && got < sizeof(buf)) {
         while (s_uart->available() && got < sizeof(buf)) buf[got++] = s_uart->read();
+        if (!resent && got == 0 && millis() >= half) { sendPing(); resent = true; }
         delay(2);
     }
     s_uart->end();
@@ -995,17 +1007,27 @@ Result crsfParamRead(const Config &cfg, uint8_t field_id, uint8_t chunk,
     delay(15);
     while (s_uart->available()) s_uart->read();
 
-    uint8_t req[8] = {0xEC, 0x06, 0x2C, 0xEC, 0xEA, field_id, chunk, 0x00};
-    req[7] = crsfCrc8(req + 2, 5);
-    s_uart->write(req, 8);
-    s_uart->flush();
+    // Send request. elrsV3.lua uses handsetId=0xEA for non-TX devices (line 386)
+    // and sends at a 500 ms cadence per param for remote devices (line 575). So
+    // our 400 ms window with one mid-deadline resend tracks that pattern.
+    auto sendReq = [&]() {
+        uint8_t req[8] = {0xEC, 0x06, 0x2C, 0xEC, 0xEA, field_id, chunk, 0x00};
+        req[7] = crsfCrc8(req + 2, 5);
+        while (s_uart->available()) s_uart->read();
+        s_uart->write(req, 8);
+        s_uart->flush();
+    };
+    sendReq();
 
     // Collect up to 256 bytes from wire — enough for 60-byte frame + safety.
     uint8_t buf[256];
     size_t got = 0;
-    uint32_t deadline = millis() + 250;
+    uint32_t deadline = millis() + 400;
+    uint32_t half     = millis() + 200;
+    bool resent = false;
     while (millis() < deadline && got < sizeof(buf)) {
         while (s_uart->available() && got < sizeof(buf)) buf[got++] = s_uart->read();
+        if (!resent && got == 0 && millis() >= half) { sendReq(); resent = true; }
         delay(2);
     }
     s_uart->end();
