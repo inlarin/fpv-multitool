@@ -179,7 +179,7 @@ Nothing sendable over CRSF can brick an RX — the stub flasher is bounded to in
 
 - **Probe app alive** — `DEVICE_PING` → 50 ms wait for DEVICE_INFO 0x29. Distinguishes "app running CRSF" from "everything else".
 - **Force into stub flasher** — `EC 04 32 62 6C 0A`. Then talk ESP-SLIP @420 000 (NOT 115 200) to write ota_0/ota_1.
-- **Force into WiFi AP** — MSP-over-CRSF `0x0E` (wrapped frame in memory doc), ~700 ms settle.
+- **Force into WiFi AP** — **NOT POSSIBLE via UART CRSF/MSP.** MSP-over-CRSF `0x0E` is architecturally off-limits: on the RX, UART-received CRSF goes through `SerialCRSF::processBytes` → `telemetry.RXhandleUARTin()` which only dispatches 'bl'/'bd'/'mm'/DEVICE_PING commands. MSP_WRITE (0x7A) frames are parked in `CRSF::MspDataLength` for **forwarding back to the handset via radio**, not for local execution. `MspReceiveComplete()` in `rx_main.cpp:2170` is only fired by `MspReceiver.HasFinishedData()` which reads radio-link MSP, not UART MSP. So sending MSP 0x0E over our UART wire looks like it worked (no error) but the RX silently ignores it. The endpoint `/api/elrs/enable_wifi` remains for completeness (and may work on MILELRS forks that patch this path) but users should not expect reliable behaviour.
 - **Enter binding / set model-match** — `bd`/`mm` bytes or MSP 0x09/0x0A.
 - **Read firmware name + version u32** — from DEVICE_INFO reply.
 - **Enumerate & write LUA params** — PARAMETER_READ/WRITE chunked protocol; covers every RX-exposed config field.
@@ -190,6 +190,7 @@ Nothing sendable over CRSF can brick an RX — the stub flasher is bounded to in
 
 - **Force ROM DFU from app side** — no RESET wire, only BOOT (GPIO3→RX GPIO9). User must physically press BOOT + power-cycle. No persistent "re-enter BL" flag on ESP32-C3 to work around this.
 - **Return from wifiUpdate via CRSF** — no exit-wifi opcode. Only paths: user's phone hits `/reboot` on 10.0.0.1, user power-cycles, or auto-wifi timer expires — which it never does once wifi started.
+- **Inject any MSP command over UART** — MSP_WRITE frames on UART are forwarded to handset via radio, not executed on the RX. Only 'bl'/'bd'/'mm'/DEVICE_PING CRSF COMMAND frames are dispatched locally. MSP_ELRS_SET_RX_WIFI_MODE, MSP_ELRS_BIND, MSP_ELRS_MODEL_ID, MSP_VTX, MSP_SET_RX_CONFIG — all NON-functional from plate via UART wire. Confirmed in `SerialCRSF.cpp:123-148`: UART-path only checks `telemetry.ShouldCallBootloader / EnterBind / UpdateModelMatch / SendDeviceFrame`. No MSP dispatch.
 - **Read/write LR1121 FW over CRSF** — HTTP only, wifi-mode only.
 - **HTTP-probe 10.0.0.1 directly** — our plate is an AP our phone connects to, not a STA joined to RX. Changing that requires a firmware redesign (STA-join mode) and UI flow.
 - **Know the exact `connectionState`** — DEVICE_PING reply only tells "app CRSF alive"; `serialUpdate`/`wifiUpdate`/`radioFailed` all look identical (no reply).

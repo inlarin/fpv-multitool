@@ -720,7 +720,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     </div>
     <div class="grid">
       <button onclick="ctrlBind()" title="CRSF 'bd' frame → RX entering 60s bind window">🔗 Enter binding</button>
-      <button onclick="ctrlWifi()" title="MSP 0x0E → RX raises ExpressLRS RX AP (10.0.0.1 / expresslrs)">📡 Force WiFi</button>
+      <button onclick="ctrlWifi()" title="MSP 0x0E via UART — vanilla ELRS does NOT execute UART-MSP locally (forwards to handset via radio instead). Endpoint kept for MILELRS forks that may patch this. Reliable path: 3× rapid BOOT button-press on RX.">📡 Force WiFi (see note)</button>
     </div>
     <div class="grid" style="margin-top:4px">
       <button onclick="ctrlStub()" title="CRSF 'bl' frame → RX enters in-app stub flasher @420000">⚡ Enter stub flasher</button>
@@ -731,8 +731,11 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       <button onclick="ctrlBoot(1)" class="success" title="Flip OTADATA → app1 on next reboot (requires DFU)">🅱 Boot app1</button>
     </div>
     <div id="ctrlMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
-    <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
-      <b>Cannot</b>: exit WiFi via CRSF (нужен HTTP POST на 10.0.0.1 через телефон или физ. power-cycle). Force ROM DFU (нет RESET-провода на плате — только BOOT, нужно физически держать).
+    <div style="margin-top:6px;font-size:11px;color:var(--text-dim);line-height:1.5">
+      <b>Architectural limits (vanilla ELRS):</b><br>
+      • <b>Force WiFi via UART</b> не работает — vanilla ELRS пересылает MSP на handset через радио, не выполняет локально. Rely on 3× BOOT-press на RX, или 60s-auto-wifi timer, или через handset.<br>
+      • <b>Exit WiFi via CRSF</b> нет opcode'а — HTTP POST на <code>10.0.0.1/reboot</code> через телефон или power-cycle RX.<br>
+      • <b>ROM DFU programmatic</b> невозможен — на плате только BOOT-провод (GPIO3), нет RESET. Требует физ. BOOT+power-cycle.
     </div>
   </div>
 
