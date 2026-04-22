@@ -62,7 +62,6 @@ static uint32_t s_lastBroadcast = 0;
 // Arduino String class is not thread-safe — a background FreeRTOS task
 // appends while the HTTP status handler reads .c_str(), so we need a lock
 // to avoid use-after-free if the producer reallocates mid-read.
-    // [extracted to src/web/http/routes_battery.cpp]
 
 static void handleWsMsg(AsyncWebSocketClient *client, uint8_t *data, size_t len) {
     JsonDocument doc;
@@ -405,15 +404,11 @@ static void broadcastTelemetry() {
 }
 
 // Flash progress callback (called from flasher)
-    // [extracted to src/web/http/routes_flash.cpp]
 
 // Execute flashing (called from main loop when flash_request = true)
-    // [extracted to src/web/http/routes_flash.cpp]
 
 void WebServer::start() {
     if (s_running) return;
-
-    // [extracted to src/web/http/routes_battery.cpp]
 
     s_server = new AsyncWebServer(80);
     RoutesFlash::registerRoutesFlash(s_server);
@@ -434,13 +429,11 @@ void WebServer::start() {
     });
 
     // Battery service actions
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // ===== Clone Explorer =====
     // Batch scan of SBS register space — reports which registers respond and what they return.
     // Runs mostly 0xFF-returning reads for sealed/non-existent regs; useful to find
     // vendor-specific regs on clone chips that don't implement TI MAC commands.
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // ===== Clone Deep Probe =====
 
@@ -448,18 +441,15 @@ void WebServer::start() {
     // For studying pseudo-random challenge generators (e.g. reg 0xEE on PTL clone).
     //   GET /api/batt/clone/harvest?reg=0xEE&writeVal=0x0000&count=100&readLen=16
     // Returns compact JSON: [{"w":"0xNNNN","r":"hex"}, ...]
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // Raw block-write to any SBS register (bypasses the standard SMBus block format
     // which prepends a length byte). Use for clones that expect raw payload.
     //   POST reg=0xNN&data=HEX&len=N
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // PEC-enabled variant of SBS writes — some strict SMBus devices/clones
     // silently drop non-PEC writes. Retry unseal keys + anything else with PEC.
     //   POST reg=0xNN&type=word&value=0xNNNN
     //   POST reg=0xNN&type=block&data=HEX
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // =====================================================================
     // MAC Response Brute — different angle: TI-standard flow is
@@ -469,7 +459,6 @@ void WebServer::start() {
     // Default response is what we get with MAC 0x0000 (reading current cmd latch).
     // Any MAC returning DIFFERENT data = a real command that returns something.
     // =====================================================================
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // MAC Transition Brute — writes MAC_A, then MAC_B, reads between them.
     // Hypothesis: clone's "publish cell voltage" response only appears after
@@ -477,7 +466,6 @@ void WebServer::start() {
     //   GET /api/batt/clone/trans_brute?macA=0x0000&from=0x0000&to=0x00FF
     //       For each B in [from..to], sequence: write(A), read#1, write(B), read#2.
     //       Report only responses where bytes 2+ are non-0xFF.
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // Read reg 0x00 rapidly N times onboard, return only unique non-echo responses.
     //   GET /api/batt/clone/async_catch?count=1000&intervalUs=0
@@ -485,13 +473,11 @@ void WebServer::start() {
     // macA varies in small range while macB does full sweep. Logs every
     // distinct publish packet (by first 4 bytes after 81 F0 marker).
     //   GET /api/batt/clone/broad_brute?macA_from=0x0000&macA_to=0x0100&macA_step=0x10&macB_to=0x03FF
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // Inject frame test — write a 81F0-formatted frame to reg 0x44 (ManufacturerBlockAccess)
     // or arbitrary reg, then read back from 0x44 and 0x00 to see if the chip
     // interpreted it as a valid command.
     //   POST reg=0x44&frame=81F00001000012345678AABB
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // Persistent background publish logger — runs a low-priority task that
     // does a small transition-brute every pollSec seconds, captures any new
@@ -499,40 +485,33 @@ void WebServer::start() {
     //   POST /api/batt/clone/logger_start?pollSec=30
     //   GET  /api/batt/clone/logger_dump
     //   POST /api/batt/clone/logger_stop
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // DataFlash dump: sweep all DF addresses 0x4000-0x7FFF in ranges, try to read
     // each via MAC 0x44 (ManufacturerBlockAccess). Even if sealed, some DF areas
     // may be readable on clone chips (PTL may have incomplete seal enforcement).
     //   GET /api/batt/clone/dfdump?from=0x4000&to=0x40FF
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // SH366000 family commands test — PTL clone may use SH366000 silicon which
     // mimicks BQ40Z307 surface. These are non-TI MAC subcommands specific to SH.
     //   GET /api/batt/clone/sh366000_test
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // HMAC timing attack — measure response time for MAC 0x0000 challenge + HMAC.
     // If chip does non-constant-time HMAC verify, first-byte-wrong vs last-byte-wrong
     // will differ in timing. Report median and stddev of response delay per key.
     //   POST /api/batt/clone/timing_attack?samples=100
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // Periodic-publish watcher — poll reg 0x00 every intervalMs for count samples,
     // log any distinct packet seen. Good for catching time-based publishes.
     //   GET /api/batt/clone/watch?count=500&intervalMs=50
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // (Original synchronous brute retained for small ranges)
     // Brute-force writes to reg 0x00 (ManufacturerAccess) and monitor for
     // state changes in vendor regs.
     //   GET /api/batt/clone/mac_brute?from=0x0000&to=0x0010&probe=0xEE,0xF0
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // HMAC-SHA1 challenge-response unseal (newer bq40z30x firmware).
     // POST ?key=<64-hex-chars> (32 bytes)
     // Returns: {ok, challenge:hex, result:"Unsealed OK"/"Rejected"/...}
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // Diagnostic endpoint — raw SBS / MAC reads + arbitrary unseal keys.
     // Examples:
@@ -639,15 +618,11 @@ void WebServer::start() {
         req->send(200, "application/json", out);
     });
 
-    // [extracted to src/web/http/routes_flash.cpp]
-
     // Start flashing (after upload)
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // GET /api/flash/status — lets the UI poll progress over HTTP without
     // relying on the WebSocket broadcast (which only runs every second and
     // only updates the main flash card's DOM ids).
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // ===== Receiver firmware DUMP (READ_FLASH via ROM bootloader) =====
     // Reads the attached ESP32-C3 / S2 / S3 receiver's SPI flash over UART1
@@ -655,13 +630,11 @@ void WebServer::start() {
     // User must have the receiver in DFU/bootloader mode (hold BOOT + power
     // cycle). Runs in a background task; poll status and then GET the
     // binary.
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Erase a flash region on the attached RX (RX must be in ROM bootloader).
     // Intended use: wipe OTA-select sector to force boot into secondary app,
     // wipe NVS to factory-reset, etc. Caller MUST power-cycle the RX afterwards
     // (we leave the ROM in a "ready to reboot" state but don't send the reboot).
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Fast flash-region integrity check. ROM computes MD5 over the
     // requested range and returns 16 raw bytes (or 32 ASCII hex from
@@ -682,25 +655,21 @@ void WebServer::start() {
     // on ESP32-C3) or ELRS app-level output. Does NOT transmit — so RX is
     // undisturbed, user just power-cycles RX while we listen.
     //   POST /api/bridge/listen  form: baud=<int>&ms=<int, max 8000>
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Erase a full partition by looping erase_region chunks. Use to wipe
     // the entire app1 (MILELRS) partition which is 1.88 MB — exceeds
     // the single-call 64 KB cap. Blocking, ~5-10 s total.
     //
     //  POST /api/flash/erase_partition  form: offset=<hex>&size=<hex>&chunk=0x10000
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Chip detection — reads CHIP_DETECT_MAGIC_VALUE + MAC over the same
     // Port B UART. RX must be in ROM DFU (hold BOOT + power-cycle). Cheap
     // one-round-trip sanity check before any flash op.
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Full dual-slot receiver identity in ONE DFU session. Chip info + OTADATA
     // + app0 scan + app1 scan. Frontend uses this to render the Receiver
     // overview + Slots cards without burning N separate DFU cycles.
     //   POST /api/elrs/receiver_info
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Send MSP-over-CRSF "set RX WiFi mode" (MSP function 0x0E). Mirrors what
     // the ELRS Configurator / OpenTX Lua script sends. RX handler at
@@ -717,13 +686,11 @@ void WebServer::start() {
     //   crsfCRC = CRC8-DVB-S2(0xD5, init 0) over [type..mspCRC] i.e. frameSize-1 bytes
     //
     //   POST /api/elrs/enable_wifi  [form: inverted=0|1]
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Exit stub / ROM cleanly — sends CMD_RUN_USER_CODE (0xD3).
     // Use this when RX is stuck in the in-app stub (from a prior CRSF-bl
     // trigger) or in ROM DFU and we want it to jump to the OTADATA-selected
     // app without requiring a physical power-cycle.
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Send the CRSF "reboot to bootloader" command (the 5-byte "bl" frame
     // `EC 04 32 62 6C <crc>`). ELRS 3.x firmware on ESP32 handles this by
@@ -736,7 +703,6 @@ void WebServer::start() {
     // dump / otadata endpoint just works.
     //
     // Works on vanilla ELRS 3.x AND MILELRS (MILELRS inherits the handler).
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // ===== OTADATA atomic select =====
     // ESP-IDF OTADATA record format (32 bytes):
@@ -752,10 +718,8 @@ void WebServer::start() {
     // Safe update algorithm: pick new_seq = max(seq0, seq1) + 1, bump parity
     // if needed, write the record to the sector that currently holds the
     // LOWER seq (alternating-sector write). RX must be in DFU mode.
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // Read current OTADATA state (RX must be in DFU).
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // ===== CRSF endpoints =====
     s_server->on("/api/crsf/start", HTTP_POST, [](AsyncWebServerRequest *req) {
@@ -924,20 +888,12 @@ void WebServer::start() {
     });
 
     // Clear uploaded firmware
-    // [extracted to src/web/http/routes_flash.cpp]
 
     // ===== OTA firmware update =====
-    // [extracted to src/web/http/routes_ota.cpp]
 
     // Query GitHub releases/latest API; cache asset URL + tag for subsequent pull.
-    // [extracted to src/web/http/routes_ota.cpp]
 
     // Start background download + flash from the previously checked asset URL.
-    // [extracted to src/web/http/routes_ota.cpp]
-
-    // [extracted to src/web/http/routes_ota.cpp]
-
-    // [extracted to src/web/http/routes_ota.cpp]
 
     // ===== USB mode (descriptor selection) =====
     s_server->on("/api/usb/mode", HTTP_GET, [](AsyncWebServerRequest *req) {
@@ -1385,7 +1341,6 @@ void WebServer::start() {
     });
 
     // SMBus transaction log (ring buffer)
-    // [extracted to src/web/http/routes_battery.cpp]
 
     // I2C preflight diagnostics
     s_server->on("/api/i2c/preflight", HTTP_GET, [](AsyncWebServerRequest *req) {
