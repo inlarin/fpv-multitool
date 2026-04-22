@@ -2908,18 +2908,24 @@ function ctrlLog(msg, err) {
   el.textContent = ts + '  ' + (err ? '✗ ' : '✓ ') + msg + '\n' + (el.textContent || '');
   el.style.color = err ? '#f66' : '#0f0';
 }
-async function ctrlBind()  { try { ctrlLog(await postForm('/api/elrs/bind')); }
+function ctrlAutoProbe(delayMs) {
+  setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, delayMs);
+}
+async function ctrlBind()  { try { ctrlLog(await postForm('/api/elrs/bind')); ctrlAutoProbe(2000); }
                             catch (e) { ctrlLog(e.message || e, true); } }
-async function ctrlWifi()  { try { const r = await postForm('/api/elrs/enable_wifi'); ctrlLog(r); }
+async function ctrlWifi()  { try { ctrlLog(await postForm('/api/elrs/enable_wifi')); ctrlAutoProbe(4000); }
                             catch (e) { ctrlLog(e.message || e, true); } }
-async function ctrlStub()  { try { ctrlLog(await postForm('/api/crsf/reboot_to_bl')); }
+async function ctrlStub()  { try { ctrlLog(await postForm('/api/crsf/reboot_to_bl')); ctrlAutoProbe(1500); }
                             catch (e) { ctrlLog(e.message || e, true); } }
-async function ctrlExitDfu() { try { ctrlLog(await postForm('/api/flash/exit_dfu')); }
+async function ctrlExitDfu() { try { ctrlLog(await postForm('/api/flash/exit_dfu')); ctrlAutoProbe(3000); }
                                catch (e) { ctrlLog(e.message || e, true); } }
 async function ctrlBoot(slot) {
   try {
     const fd = new FormData(); fd.append('slot', String(slot));
-    ctrlLog(await postForm('/api/otadata/select', fd));
+    const r = await postForm('/api/otadata/select', fd);
+    ctrlLog(r);
+    ctrlLog('RX should reboot into app' + slot + ' in ~2s. Probing in 4s…');
+    setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, 4000);
   } catch (e) { ctrlLog(e.message || e, true); }
 }
 
