@@ -96,6 +96,8 @@ button { padding: 10px 16px; background: var(--accent-dim); color: #fff; border:
 button.danger { background: #aa2222; }
 button.success { background: #22aa44; }
 button:disabled { background: var(--text-muted); cursor: not-allowed; }
+button.mode-blocked { opacity: .5; cursor: help; }
+button.mode-blocked:hover { opacity: .6; }
 .status { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
 .status.on { background: var(--status-on); color: #fff; }
 .status.off { background: var(--status-off); color: #ccc; }
@@ -635,38 +637,46 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <span style="color:#ffd;display:block;margin-top:2px;font-size:12px">Flash Firmware auto-pauses the monitor; other actions don't.</span>
   </div>
 
-  <!-- ===== 1. RX Status (consolidated: mode + identity from DEVICE_PING) ===== -->
+  <!-- ===== 1. Status + Quick actions =====
+       Status card is the always-visible "where is my RX and what can I do
+       right now" surface. Mode comes from Probe (CRSF DEVICE_PING → DFU sync
+       → stub sync). All buttons in the tab declare data-need-mode; the JS
+       helper applyRxModeGating() greys out what can't work in the current
+       mode and explains why via a tooltip.                                -->
   <div class="card">
-    <h2>RX Status</h2>
-    <div class="warning">
-      Один клик — плата пробует CRSF DEVICE_PING, ROM DFU sync, in-app stub sync. Показывает режим + (если RX в app) имя прошивки / версию / количество LUA-параметров.
-    </div>
+    <h2>Receiver status</h2>
     <div class="row"><span class="label">Mode:</span>
       <span class="value">
         <span id="rxModeBadge" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px">—</span>
         <small id="rxModeAge" style="color:var(--text-dim);margin-left:6px"></small>
-        <small id="rxModeHint" style="color:var(--text-dim);margin-left:8px;display:block;margin-top:4px"></small>
       </span>
     </div>
     <div class="row"><span class="label">Firmware:</span><span class="value" id="rxName">—</span></div>
     <div class="row"><span class="label">Version:</span><span class="value" id="rxVer" style="font-family:monospace">—</span></div>
     <div class="row"><span class="label">Serial / HW ID:</span><span class="value" id="rxIds" style="font-family:monospace;font-size:11px">—</span></div>
     <div class="row"><span class="label">LUA param count:</span><span class="value" id="rxFields">—</span></div>
-    <button onclick="rxProbeMode()" id="rxProbeBtn" style="width:100%">🔍 Probe RX</button>
+    <small id="rxModeHint" style="color:var(--text-dim);display:block;margin-top:4px"></small>
+
+    <!-- Quick actions: one-click common tasks. Probe is always enabled.
+         Reboot + Bind are mode-gated; hover tooltip explains when unavail. -->
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:6px;margin-top:10px">
+      <button onclick="rxProbeMode()" id="rxProbeBtn" title="CRSF DEVICE_PING + DFU sync + stub sync">🔍 Probe RX</button>
+      <button onclick="rcvSoftReboot()" data-need-mode="app" title="Soft reboot via CRSF (RX must be in app)">↻ Reboot</button>
+      <button onclick="ctrlBind()" data-need-mode="app" title="Enter 60 s binding (RX must be in app)">🔗 Bind</button>
+    </div>
+    <div id="ctrlMsg" style="margin-top:6px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
   </div>
 
-  <!-- ===== ACTION PICKER — "what do you want to do?" ===== -->
+  <!-- ===== ACTION PICKER — primary workflows ===== -->
   <div class="card" style="border-left:3px solid var(--accent2)">
     <h2>What do you want to do?</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
-      <button onclick="rcvOpen('flash')"  data-rcv="flash"  class="rcv-nav">💾 Update firmware</button>
-      <button onclick="rcvOpen('config')" data-rcv="config" class="rcv-nav">⚙ Change settings</button>
+      <button onclick="rcvOpen('flash')"  data-rcv="flash"  class="rcv-nav" style="grid-column:span 2">💾 Update firmware</button>
+      <button onclick="rcvOpen('config')" data-rcv="config" class="rcv-nav" data-need-mode="app">⚙ Change settings</button>
       <button onclick="rcvOpen('live')"   data-rcv="live"   class="rcv-nav">📡 Watch link quality</button>
-      <button onclick="rcvOpen('bind')"   data-rcv="bind"   class="rcv-nav">🔗 Pair with handset</button>
-      <button onclick="rcvOpen('reboot')" data-rcv="reboot" class="rcv-nav" style="grid-column:span 2">↺ Reboot receiver</button>
     </div>
     <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-      Один раздел открывается за раз. Кнопка повторно — свернуть. Старые отдельные «ELRS Flash» + «CRSF» вкладки объединены.
+      Один раздел открывается за раз. Клик на уже открытый — свернуть. Reboot и Bind — в Status-карточке выше (one-click).
     </div>
   </div>
 
@@ -681,7 +691,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       <span class="label">Show hidden:</span>
       <span><input type="checkbox" id="rxCfgShowHidden" onchange="rxCfgRender()"> <small style="color:var(--text-dim)">debug-only params</small></span>
     </div>
-    <button onclick="rxCfgLoad()" id="rxCfgLoadBtn" style="width:100%">🔄 Load parameters</button>
+    <button onclick="rxCfgLoad()" id="rxCfgLoadBtn" data-need-mode="app" title="Read all ~40 LUA parameters via CRSF (RX must be in app)" style="width:100%">🔄 Load parameters</button>
     <div id="rxCfgStatus" style="margin-top:6px;font-size:11px;color:var(--text-dim)"></div>
     <table id="rxCfgTable" style="width:100%;margin-top:8px;font-size:11px;display:none">
       <thead><tr style="text-align:left;border-bottom:1px solid var(--border)">
@@ -807,100 +817,121 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     </div>
   </div>  <!-- /rcv-live -->
 
-  <!-- ===== rcv-bind: Pair with new handset ===== -->
-  <div id="rcv-bind" class="rcv-section" style="display:none">
-    <div class="card">
-      <h2>Pair with new handset</h2>
-      <div class="warning">
-        Отправляет CRSF-фрейм <code>bd</code> → RX заходит в bind-режим на 60 с. Включи на handset bind, чтобы спариться. RX должен работать в app (не в DFU/WiFi).
-      </div>
-      <button onclick="ctrlBind()" class="success" style="width:100%;padding:10px;font-size:14px">🔗 Enter binding mode</button>
-      <div id="ctrlMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
-    </div>
-  </div>
+  <!-- rcv-bind + rcv-reboot removed 2026-04-22 — both were single-button
+       sections hiding behind an accordion click. Bind + Soft Reboot are
+       now one-click quick actions in the Status card above; DFU-mode
+       recovery (Exit DFU) lives in Advanced → Bootloader. -->
 
-  <!-- ===== rcv-reboot: Reboot receiver ===== -->
-  <div id="rcv-reboot" class="rcv-section" style="display:none">
-    <div class="card">
-      <h2>Reboot receiver</h2>
-      <div class="warning">
-        Разные способы перезагрузки RX в зависимости от текущего режима:
-      </div>
-      <div style="margin-top:6px">
-        <button onclick="ctrlExitDfu()" style="width:100%;padding:8px">↩ From DFU/stub → app (RUN_USER_CODE)</button>
-        <div style="font-size:11px;color:var(--text-dim);margin:4px 0">Работает когда плата в DFU или в stub-flasher.</div>
-      </div>
-      <div style="margin-top:6px">
-        <button onclick="rcvCrsfReboot()" style="width:100%;padding:8px">↻ From running app (CRSF reboot)</button>
-        <div style="font-size:11px;color:var(--text-dim);margin:4px 0">Работает когда RX в app. Мягкий reboot без потери NVS. Автоматом через live-monitor если он запущен, иначе one-shot по Port B.</div>
-      </div>
-      <div id="rcvRebootMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
-    </div>
-  </div>
-
-  <!-- ===== Advanced / power-tools drawer ===== -->
+  <!-- ===== Advanced / power-tools drawer =====
+       Three clearly-named sub-groups (▸ Bootloader · ▸ Diagnose · ▸ Raw).
+       Each sub-details can be opened independently.                       -->
   <details style="margin:8px 0">
     <summary style="cursor:pointer;padding:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;font-weight:bold">▶ Advanced · power tools</summary>
-    <div style="margin-top:4px;font-size:11px;color:var(--text-dim);padding:0 8px">
-      Contains: Bootloader actions (Boot app0/1, Stub flasher, Exit DFU) · DFU slot inspector · Raw-offset flash · OTADATA debug · hardware.json export · 4 MB flash dump
-    </div>
     <div style="margin-top:8px">
 
-  <!-- Bootloader actions (split out of old Controls) -->
-  <div class="card">
-    <h2>Bootloader actions</h2>
-    <div class="warning">
-      Эти команды работают только когда RX в DFU / stub. Для обычного boot-slot переключения есть Flash + "flip OTADATA" checkbox.
+  <!-- ▸ Bootloader controls — all slot-flip / entry / exit commands -->
+  <details open style="margin:6px 0">
+    <summary style="cursor:pointer;padding:6px;background:var(--card-bg2);border:1px solid var(--border-soft);border-radius:3px;font-size:13px"><b>▸ Bootloader &amp; mode controls</b> — direct state transitions</summary>
+    <div class="card" style="margin-top:4px">
+      <div class="warning" style="font-size:11px">
+        Boot app0/app1 = flip OTADATA pointer (нужен DFU). Enter stub = CRSF 'bl' frame (нужен app). Exit DFU = RUN_USER_CODE (нужен DFU/stub).
+      </div>
+      <div class="grid">
+        <button onclick="ctrlBoot(0)" class="success" data-need-mode="dfu" title="Flip OTADATA → app0, needs DFU">🅰 Boot app0</button>
+        <button onclick="ctrlBoot(1)" class="success" data-need-mode="dfu" title="Flip OTADATA → app1, needs DFU">🅱 Boot app1</button>
+      </div>
+      <div class="grid" style="margin-top:4px">
+        <button onclick="ctrlStub()"    data-need-mode="app"    title="CRSF 'bl' frame → in-app stub @420000, needs app">⚡ Enter stub flasher</button>
+        <button onclick="ctrlExitDfu()" data-need-mode="dfustub" title="RUN_USER_CODE → reboot into OTADATA-selected app, needs DFU/stub">↩ Exit DFU → app</button>
+      </div>
+      <details style="margin-top:8px">
+        <summary style="cursor:pointer;color:var(--text-dim);font-size:11px">ⓘ What can't the plate do? (architectural limits)</summary>
+        <div style="margin-top:4px;font-size:11px;color:var(--text-dim);line-height:1.5">
+          • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP. 3× BOOT-press на RX, 60s-auto-wifi, или через handset.<br>
+          • <b>Exit WiFi via CRSF</b> — нет opcode. HTTP POST на <code>10.0.0.1/reboot</code> с телефона или power-cycle.<br>
+          • <b>Force ROM DFU</b> — только BOOT-провод (GPIO3) без RESET. Физ. BOOT+power-cycle.
+        </div>
+      </details>
     </div>
-    <div class="grid">
-      <button onclick="ctrlBoot(0)" class="success" title="Flip OTADATA → app0 on next reboot (needs DFU)">🅰 Boot app0 (OTADATA)</button>
-      <button onclick="ctrlBoot(1)" class="success" title="Flip OTADATA → app1 on next reboot (needs DFU)">🅱 Boot app1 (OTADATA)</button>
-    </div>
-    <div class="grid" style="margin-top:4px">
-      <button onclick="ctrlStub()" title="CRSF 'bl' frame → RX enters in-app stub flasher @420000">⚡ Enter stub flasher</button>
-      <button onclick="ctrlExitDfu()" title="RUN_USER_CODE → RX reboots into OTADATA-selected app">↩ Exit DFU → app</button>
-    </div>
-    <div style="margin-top:8px;font-size:11px;color:var(--text-dim);line-height:1.5">
-      <b>Что НЕ может плата (архитектурные границы vanilla ELRS):</b><br>
-      • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP. 3× BOOT-press на RX, 60s-auto-wifi timer, или через handset.<br>
-      • <b>Exit WiFi via CRSF</b> — нет opcode. HTTP POST на <code>10.0.0.1/reboot</code> с телефона или power-cycle.<br>
-      • <b>Force ROM DFU</b> — на плате только BOOT-провод (GPIO3), нет RESET. Физ. BOOT+power-cycle.
-    </div>
-  </div>
+  </details>
 
-  <!-- ===== Receiver Overview (unified identity) ===== -->
-  <div class="card">
-    <h2>Receiver Overview</h2>
-    <div class="warning">
-      RX в <b>DFU</b> (BOOT + power-cycle) → Scan. Один запрос — чип, MAC, OTADATA, идентичность обоих app-слотов (target / version / git) в одной DFU-сессии.
-    </div>
-    <button onclick="rxScan()" id="rxScanBtn" style="width:100%">🔍 Scan receiver</button>
-    <div id="rxOv" style="display:none;margin-top:10px">
-      <div class="row"><span class="label">Chip:</span><span class="value" id="rxChip">-</span></div>
-      <div class="row"><span class="label">MAC:</span><span class="value" id="rxMac" style="font-family:monospace">-</span></div>
-      <div class="row"><span class="label">Active slot:</span><span class="value" id="rxActive">-</span></div>
-      <div class="row"><span class="label">OTADATA max_seq:</span><span class="value" id="rxMaxSeq">-</span></div>
-      <div id="rxSlots" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
-    </div>
-    <div id="rxScanErr" style="color:#f66;margin-top:8px;font-family:monospace;font-size:11px"></div>
-  </div>
+  <!-- ▸ Diagnose — read-only scans that don't mutate flash -->
+  <details style="margin:6px 0">
+    <summary style="cursor:pointer;padding:6px;background:var(--card-bg2);border:1px solid var(--border-soft);border-radius:3px;font-size:13px"><b>▸ Diagnose</b> — full DFU scan, dump flash, hardware.json</summary>
 
-  <!--
-    Legacy cards removed — their functionality is now in the 4 primary cards
-    at the top of the tab (RX Status / Configuration / Flash / Controls):
-      • "Detect receiver" (chip_info) → subsumed by RX Status Probe
-      • "RX vanilla-flip wizard (5 steps)" → superseded by Flash Firmware flow
-      • "ELRS Receiver Flasher" (upload+flash card) → superseded by Flash Firmware
-      • "OTADATA / Active slot" (manual Boot buttons) → Controls Boot app0/app1
-      • "RX WiFi AP" static info → Controls "Architectural limits" footer
-      • "Firmware Catalog" (legacy picker) → Flash Firmware source selector
-    Kept below: Slot-targeted flash (raw-offset power-user), hardware.json
-    helper, Dump Receiver Firmware — all have unique function.
-  -->
+    <div class="card" style="margin-top:4px">
+      <h3 style="margin:0 0 4px 0;font-size:13px">Full DFU scan (chip + MAC + both app slots)</h3>
+      <div class="warning" style="font-size:11px">
+        Один запрос в DFU — чип, MAC, OTADATA, идентичность обоих app-слотов (target / version / git). Нужен DFU (BOOT+power-cycle).
+      </div>
+      <button onclick="rxScan()" id="rxScanBtn" data-need-mode="dfu" style="width:100%">🔍 Scan receiver</button>
+      <div id="rxOv" style="display:none;margin-top:10px">
+        <div class="row"><span class="label">Chip:</span><span class="value" id="rxChip">-</span></div>
+        <div class="row"><span class="label">MAC:</span><span class="value" id="rxMac" style="font-family:monospace">-</span></div>
+        <div class="row"><span class="label">Active slot:</span><span class="value" id="rxActive">-</span></div>
+        <div class="row"><span class="label">OTADATA max_seq:</span><span class="value" id="rxMaxSeq">-</span></div>
+        <div id="rxSlots" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
+      </div>
+      <div id="rxScanErr" style="color:#f66;margin-top:8px;font-family:monospace;font-size:11px"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px 0;font-size:13px">Dump receiver flash</h3>
+      <div class="warning" style="font-size:11px">
+        Читает flash приёмника через ROM bootloader в PSRAM → скачать как <code>elrs_dump.bin</code>. Запусти в <code>hardware/bayckrc_c3_dual/parse.py</code> — вытащит версию, WiFi credentials и target-токены.
+      </div>
+      <div class="row"><span class="label">Offset:</span>
+        <input id="dumpOffset" type="text" value="0x0" style="width:90px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
+      </div>
+      <div class="row"><span class="label">Size:</span>
+        <select id="dumpSize" style="padding:4px;background:#0a0a14;color:#fff;border:1px solid #333">
+          <option value="0x100000">1 MB</option>
+          <option value="0x200000">2 MB</option>
+          <option value="0x400000" selected>4 MB (обычный ESP32-C3)</option>
+          <option value="0x800000">8 MB</option>
+        </select>
+      </div>
+      <div class="row"><span class="label">Статус:</span>
+        <span><span class="value" id="dumpStage">idle</span>
+        <span id="dumpError" style="color:#f44;margin-left:8px"></span></span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="dumpBar" style="width:0%;background:#0af"></div></div>
+      <div class="grid">
+        <button class="success" onclick="dumpStart()" id="dumpStartBtn" data-need-mode="dfu">Dump firmware</button>
+        <button onclick="dumpDownload()" id="dumpDownloadBtn" disabled>⬇ Download bin</button>
+      </div>
+      <button class="danger" onclick="dumpClear()" style="width:100%;margin-top:4px">Clear dump (free PSRAM)</button>
+      <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
+        Нужен DFU. Скорость ~12–25 KB/s, 4 MB ≈ 3–5 минут.
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px 0;font-size:13px">Extract hardware.json (client-side)</h3>
+      <div class="warning" style="font-size:11px">
+        После прошивки vanilla ELRS приёмник грузится в "голом" режиме и ждёт hardware.json с pin map. Загружается через WiFi AP приёмника.
+      </div>
+      <ol style="margin:6px 0 8px 18px;padding:0;font-size:12px;line-height:1.5">
+        <li>Скачай <code>hardware.json</code>.</li>
+        <li>Подключи телефон/ПК к WiFi <code>ExpressLRS RX</code> (пароль <code>expresslrs</code>).</li>
+        <li>Открой <code>http://10.0.0.1</code> → "Hardware" → upload.</li>
+        <li>Update → приёмник перезагрузится с правильными pin'ами.</li>
+      </ol>
+      <button class="success" onclick="hwJsonDownload()" style="width:100%">⬇ Download extracted hardware.json</button>
+      <details style="margin-top:8px">
+        <summary style="cursor:pointer;color:var(--text-dim);font-size:11px">Preview JSON</summary>
+        <pre id="hwJsonPreview" style="font-family:monospace;font-size:10px;background:#0a0a14;padding:6px;overflow:auto;max-height:180px"></pre>
+      </details>
+    </div>
+  </details>
+
+  <!-- ▸ Raw — slot-targeted flash + OTADATA debug (danger zone) -->
+  <details style="margin:6px 0">
+    <summary style="cursor:pointer;padding:6px;background:var(--card-bg2);border:1px solid var(--border-soft);border-radius:3px;font-size:13px"><b>▸ Raw / danger zone</b> — slot-targeted flash + OTADATA sector debug</summary>
 
   <!-- ===== Slot-targeted flash ===== -->
-  <div class="card">
-    <h2>Slot-targeted flash (app0 / app1 / custom)</h2>
+  <div class="card" style="margin-top:4px">
+    <h3 style="margin:0 0 4px 0;font-size:13px">Slot-targeted flash (raw offset)</h3>
     <div class="warning">
       ⚠ RX должен быть в <b>DFU</b> (зажми BOOT и подай питание).<br>
       Пишет firmware.bin по произвольному offset, минуя otadata. Используй
@@ -927,27 +958,27 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="bar"><div class="bar-fill" id="slotBar" style="width:0%;background:#fa0"></div></div>
     <div class="grid">
       <button class="success" id="slotUploadBtn" onclick="slotUpload()" disabled>Upload</button>
-      <button id="slotFlashBtn" onclick="slotFlash()" disabled>Erase + Flash @ slot</button>
+      <button id="slotFlashBtn" onclick="slotFlash()" data-need-mode="dfu" disabled>Erase + Flash @ slot</button>
     </div>
     <div id="slotResult" style="margin-top:10px;color:#0f0;white-space:pre-wrap;font-family:monospace;font-size:11px"></div>
   </div>
 
   <!-- ===== OTADATA raw (read sectors + danger erase) ===== -->
   <div class="card">
-    <h2>OTADATA raw (advanced)</h2>
-    <div class="warning">
-      Нормальный путь — Boot app0 / app1 в Controls. Эта карточка — для debug (сырые seq/state/crc из обеих секций) и DANGER erase.
+    <h3 style="margin:0 0 4px 0;font-size:13px">OTADATA raw (sector debug)</h3>
+    <div class="warning" style="font-size:11px">
+      Нормальный путь — Boot app0 / app1 выше. Эта карточка — debug (сырые seq/state/crc из обеих секций) и DANGER erase.
     </div>
     <div class="row"><span class="label">Active slot:</span><span class="value" id="otaActiveSlot">-</span></div>
     <div class="row"><span class="label">Max ota_seq:</span><span class="value" id="otaMaxSeq">-</span></div>
     <div class="row"><span class="label">Sector 0 (@0xe000):</span><span class="value" id="otaSec0" style="font-family:monospace;font-size:11px">-</span></div>
     <div class="row"><span class="label">Sector 1 (@0xf000):</span><span class="value" id="otaSec1" style="font-family:monospace;font-size:11px">-</span></div>
-    <button onclick="otadataRefresh()" style="width:100%">Refresh (RX must be in DFU)</button>
+    <button onclick="otadataRefresh()" data-need-mode="dfu" style="width:100%">Refresh (RX must be in DFU)</button>
     <div style="margin-top:8px;padding:6px;background:#2a1414;border:1px solid #633;border-radius:4px">
       <b style="color:#f66">DANGER ZONE:</b>
       <div class="grid" style="margin-top:4px">
-        <button class="danger" onclick="otadataEraseRegion()">Erase OTADATA</button>
-        <button class="danger" onclick="otadataEraseApp1()">Erase app1 (1.88 MB)</button>
+        <button class="danger" onclick="otadataEraseRegion()" data-need-mode="dfu">Erase OTADATA</button>
+        <button class="danger" onclick="otadataEraseApp1()"   data-need-mode="dfu">Erase app1 (1.88 MB)</button>
       </div>
       <div style="color:var(--text-dim);font-size:11px;margin-top:4px">
         Erase OTADATA = bootloader fallback на app0. Erase app1 = навсегда убить MILELRS слот.
@@ -956,63 +987,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div id="otadataResult" style="margin-top:10px;color:#0f0;white-space:pre-wrap;font-family:monospace;font-size:11px"></div>
   </div>
 
-  <!-- ===== hardware.json helper ===== -->
-  <div class="card">
-    <h2>hardware.json — upload to vanilla ELRS</h2>
-    <div class="warning">
-      После успешной прошивки vanilla ELRS приёмник грузится в "голом" режиме
-      и ждёт hardware.json с pin map. JSON ниже извлечён из дампа
-      <code>bayckrc_c3_dual/dump_2026-04-19_1528.bin</code>.
-    </div>
-    <ol style="margin:6px 0 8px 18px;padding:0;font-size:12px;line-height:1.5">
-      <li>Скачай <code>hardware.json</code> кнопкой ниже.</li>
-      <li>Подключи телефон/ПК к WiFi <code>ExpressLRS RX</code>
-          (пароль <code>expresslrs</code>).</li>
-      <li>Открой <code>http://10.0.0.1</code>.</li>
-      <li>Загрузи hardware.json через кнопку "Hardware" в ELRS Web UI.</li>
-      <li>Жми "Update" — приёмник перезагрузится с правильными pin'ами.</li>
-    </ol>
-    <button class="success" onclick="hwJsonDownload()" style="width:100%">⬇ Download extracted hardware.json</button>
-    <details style="margin-top:8px">
-      <summary style="cursor:pointer;color:var(--text-dim);font-size:11px">Preview JSON</summary>
-      <pre id="hwJsonPreview" style="font-family:monospace;font-size:10px;background:#0a0a14;padding:6px;overflow:auto;max-height:180px"></pre>
-    </details>
-  </div>
-
-  <div class="card">
-    <h2>Dump Receiver Firmware</h2>
-    <div class="warning">
-      Читает flash приёмника через ROM bootloader на плату (в PSRAM), затем
-      скачать как <code>elrs_dump.bin</code>. Запусти в
-      <code>hardware/bayckrc_c3_dual/parse.py</code> — вытащит версию, WiFi
-      credentials (если приёмник когда-то бинился к WiFi) и target-токены.
-    </div>
-    <div class="row"><span class="label">Offset:</span>
-      <input id="dumpOffset" type="text" value="0x0" style="width:90px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
-    </div>
-    <div class="row"><span class="label">Size:</span>
-      <select id="dumpSize" style="padding:4px;background:#0a0a14;color:#fff;border:1px solid #333">
-        <option value="0x100000">1 MB</option>
-        <option value="0x200000">2 MB</option>
-        <option value="0x400000" selected>4 MB (обычный ESP32-C3)</option>
-        <option value="0x800000">8 MB</option>
-      </select>
-    </div>
-    <div class="row"><span class="label">Статус:</span>
-      <span><span class="value" id="dumpStage">idle</span>
-      <span id="dumpError" style="color:#f44;margin-left:8px"></span></span>
-    </div>
-    <div class="bar"><div class="bar-fill" id="dumpBar" style="width:0%;background:#0af"></div></div>
-    <div class="grid">
-      <button class="success" onclick="dumpStart()" id="dumpStartBtn">Dump firmware</button>
-      <button onclick="dumpDownload()" id="dumpDownloadBtn" disabled>⬇ Download bin</button>
-    </div>
-    <button class="danger" onclick="dumpClear()" style="width:100%;margin-top:4px">Clear dump (free PSRAM)</button>
-    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-      Для ESP32-C3 должен быть в DFU (кнопка BOOT во время подачи питания).
-      Скорость ~12–25 KB/s, 4 MB ≈ 3–5 минут.
-    </div>
-  </div>
+  </details>  <!-- /▸ Raw / danger zone -->
 
     </div>  <!-- /details content wrapper -->
   </details>  <!-- /Advanced -->
@@ -2393,20 +2368,17 @@ function crsfStart() {
 }
 function crsfStop() { fetch('/api/crsf/stop', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
 function showCmdResult(msg) {
-  // ctrlMsg is the shared status line in the Bind section; fall back to console.
-  const el = document.getElementById('ctrlMsg') || document.getElementById('rcvRebootMsg');
+  // ctrlMsg is the shared status line in the Status card (Quick actions row).
+  const el = document.getElementById('ctrlMsg');
   if (el) { el.textContent = (new Date().toLocaleTimeString()) + '  ' + msg; }
   else    { console.log('[ctrl]', msg); }
 }
-// Rcv-reboot section: soft reboot via CRSF while RX is in app. Different
-// from ctrlExitDfu which uses RUN_USER_CODE (requires RX in DFU/stub).
-async function rcvCrsfReboot() {
+// Soft reboot via CRSF. Backend /api/crsf/reboot_app handles both states —
+// if live monitor is running it uses the service; else one-shot Port B.
+async function rcvSoftReboot() {
   if (!confirm('Reboot RX via CRSF? Link will drop briefly.')) return;
-  const el = document.getElementById('rcvRebootMsg');
+  const el = document.getElementById('ctrlMsg');
   try {
-    // One-shot endpoint — acquires Port B, sends ELRS COMMAND reboot frame,
-    // releases. Does NOT require the live-monitor service. If the service
-    // IS running, route returns 409 and we tell the user to stop it.
     const r = await postForm('/api/crsf/reboot_app');
     if (el) el.textContent = '✓ ' + r;
     setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, 4000);
@@ -2415,10 +2387,55 @@ async function rcvCrsfReboot() {
   }
 }
 
+// === Mode-aware button gating ===
+// Every action button that has a mode prerequisite declares data-need-mode:
+//   "app"      — RX must be running firmware (app mode)
+//   "dfu"      — RX must be in ROM DFU (BOOT + power-cycle)
+//   "dfustub"  — either DFU or in-app stub flasher
+// When Probe reports a mode, we disable mismatched buttons and set a tooltip
+// explaining why. Mode "silent" or unknown → leave enabled (probing needed).
+// Called from rxProbeMode success handler + on tab activation.
+function applyRxModeGating(mode) {
+  if (!mode) mode = '';
+  const need = {
+    app:      (m) => m === 'app',
+    dfu:      (m) => m === 'dfu',
+    dfustub:  (m) => m === 'dfu' || m === 'stub',
+  };
+  const hint = {
+    app:      'RX must be running its firmware (app mode). Probe first.',
+    dfu:      'RX must be in ROM DFU — hold BOOT while power-cycling RX.',
+    dfustub:  'RX must be in DFU or stub flasher.',
+  };
+  document.querySelectorAll('[data-need-mode]').forEach(btn => {
+    const want = btn.getAttribute('data-need-mode');
+    const check = need[want];
+    if (!check) return;
+    // Unknown mode → don't disable (user may want to try probing by pressing).
+    if (!mode || mode === 'silent' || mode === 'unknown') {
+      btn.disabled = false;
+      btn.classList.remove('mode-blocked');
+      btn._origTitle = btn._origTitle || btn.title;
+      btn.title = btn._origTitle;
+      return;
+    }
+    btn._origTitle = btn._origTitle || btn.title;
+    if (check(mode)) {
+      btn.disabled = false;
+      btn.classList.remove('mode-blocked');
+      btn.title = btn._origTitle;
+    } else {
+      btn.disabled = true;
+      btn.classList.add('mode-blocked');
+      btn.title = hint[want] + (btn._origTitle ? '\n— ' + btn._origTitle : '');
+    }
+  });
+}
+
 // === Receiver tab: action-picker accordion ===
 // Click a nav button → matching section opens, all others close. Click
-// again → close the open one. Each section has DOM ids preserved from
-// the original ELRS / CRSF tabs so existing JS helpers keep working.
+// again → close the open one. Only 3 workflow sections remain (flash,
+// config, live); Bind + Reboot moved to the Status card's Quick actions.
 function rcvOpen(section) {
   const target = document.getElementById('rcv-' + section);
   const wasOpen = target && target.style.display !== 'none';
@@ -2474,51 +2491,22 @@ async function getJson(url) {
 // enabled (Stub-flash needs mode='app', DFU flash wants 'dfu').
 let _rxMode = 'unknown';
 function rxApplyModeGate() {
-  // Enable/disable the per-slot flash buttons based on mode.
-  const stubButtons = document.querySelectorAll('button[onclick^="rxFlashStub"]');
-  const dfuButtons  = document.querySelectorAll('button[onclick^="rxFlashToSlot"]');
-  // Controls card: Boot app0/1 need ROM DFU (OTADATA read+write via SLIP).
-  // Bind/Stub/WiFi need running app. Exit-DFU needs DFU or stub.
-  const bootButtons = document.querySelectorAll('button[onclick^="ctrlBoot"]');
-  const appButtons  = document.querySelectorAll('button[onclick^="ctrlBind"], button[onclick^="ctrlStub"]');
-  const exitBtns    = document.querySelectorAll('button[onclick^="ctrlExitDfu"]');
-  const cfgLoadBtn  = document.getElementById('rxCfgLoadBtn');
-  stubButtons.forEach(b => {
+  // Most buttons are gated declaratively via data-need-mode — apply them first.
+  applyRxModeGating(_rxMode);
+  // Dynamically-generated per-slot flash buttons (rendered from rxScan output)
+  // don't have a static data-need-mode, so gate them here.
+  document.querySelectorAll('button[onclick^="rxFlashStub"]').forEach(b => {
     b.disabled = (_rxMode !== 'app' && _rxMode !== 'stub');
     b.title = b.disabled
       ? 'Stub-flash requires RX in app or already in stub — current mode: ' + _rxMode
       : 'Auto-flash via in-app ELRS stub @420000';
   });
-  dfuButtons.forEach(b => {
+  document.querySelectorAll('button[onclick^="rxFlashToSlot"]').forEach(b => {
     b.disabled = (_rxMode !== 'dfu');
     b.title = b.disabled
-      ? 'Flash (DFU) requires RX in ROM DFU (hold BOOT + power-cycle) — current mode: ' + _rxMode
+      ? 'Flash (DFU) requires RX in ROM DFU — current mode: ' + _rxMode
       : 'ROM DFU flash @115200';
   });
-  bootButtons.forEach(b => {
-    b.disabled = (_rxMode !== 'dfu');
-    b.title = b.disabled
-      ? 'Boot-slot switch writes OTADATA via ROM DFU — need mode=dfu (current: ' + _rxMode + '). Hold BOOT on RX + power-cycle.'
-      : 'Flip OTADATA on next reboot';
-  });
-  appButtons.forEach(b => {
-    b.disabled = (_rxMode !== 'app');
-    b.title = b.disabled
-      ? 'CRSF command requires RX in app — current mode: ' + _rxMode
-      : 'Runtime CRSF command';
-  });
-  exitBtns.forEach(b => {
-    b.disabled = (_rxMode !== 'dfu' && _rxMode !== 'stub');
-    b.title = b.disabled
-      ? 'RUN_USER_CODE requires RX in DFU or stub (current: ' + _rxMode + ')'
-      : 'Exit flasher → boot OTADATA-selected app';
-  });
-  if (cfgLoadBtn) {
-    cfgLoadBtn.disabled = (_rxMode !== 'app');
-    cfgLoadBtn.title = cfgLoadBtn.disabled
-      ? 'LUA params require RX in app (DEVICE_PING) — current: ' + _rxMode
-      : 'Read all ~40 LUA parameters via CRSF';
-  }
 }
 let _rxProbeAt = 0;
 function rxAgeTick() {
