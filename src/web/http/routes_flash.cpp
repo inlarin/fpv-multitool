@@ -222,23 +222,16 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::ElrsDeviceInfo devInfo;
         devInfo.ok = false;
 
-        // Test 1: CRSF DEVICE_PING @ 420000. RX in app answers with DEVICE_INFO
-        // containing name + version — most authoritative + informative probe.
-        // serialUpdate / wifiUpdate / radioFailed stay silent → falls through.
+        // IMPORTANT: order matters because ESP32-C3 ROM has an autobauder that
+        // latches to whichever baud sees activity first. If we send CRSF @
+        // 420000 first (even a polite DEVICE_PING), a just-booted ROM DFU will
+        // lock onto 420000 and later 115200 SYNC attempts fail. So we must
+        // test DFU @ 115200 FIRST — no 420000 traffic on the wire beforehand.
+        //
+        // Test 1 (ROM DFU @ 115200): SLIP SYNC. If RX is in app, the 115200
+        // bytes arrive at its 420000 CRSF parser as garbage and are ignored.
+        // If RX is in ROM DFU, ROM autobauder locks to 115200 and replies.
         {
-            ESPFlasher::Config cfg;
-            cfg.uart = &Serial1;
-            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
-            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
-            cfg.baud_rate = 420000;
-            if (ESPFlasher::crsfDevicePing(cfg, 200, &devInfo) == ESPFlasher::FLASH_OK && devInfo.ok) {
-                mode = "app";
-            }
-        }
-
-        // Test 2: ROM DFU SYNC @ 115200 (only if app didn't answer).
-        if (!devInfo.ok) {
-            delay(50);
             ESPFlasher::Config cfg;
             cfg.uart = &Serial1;
             cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
@@ -251,8 +244,22 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             }
         }
 
-        // Test 3: in-app stub SYNC @ 420000 (RX just post-'bl' frame).
-        if (!devInfo.ok && !dfu_ok) {
+        // Test 2 (CRSF DEVICE_PING @ 420000) — only if DFU didn't answer.
+        if (!dfu_ok) {
+            delay(50);
+            ESPFlasher::Config cfg;
+            cfg.uart = &Serial1;
+            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+            cfg.baud_rate = 420000;
+            if (ESPFlasher::crsfDevicePing(cfg, 250, &devInfo) == ESPFlasher::FLASH_OK && devInfo.ok) {
+                mode = "app";
+            }
+        }
+
+        // Test 3: in-app stub SYNC @ 420000 (RX just post-'bl' frame — app
+        // paused, stub waiting for SLIP). Runs only if app DEVICE_PING failed.
+        if (!dfu_ok && !devInfo.ok) {
             delay(50);
             ESPFlasher::Config cfg;
             cfg.uart = &Serial1;
@@ -1200,13 +1207,30 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.uart = &Serial1;
         cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
-        cfg.baud_rate = 115200;
-        ESPFlasher::Result r = ESPFlasher::runUserCode(cfg);
+        // ESP32-C3 ROM DFU's autobauder may have locked to either 115 200
+        // (if user booted cleanly with BOOT held) or 420 000 (if an earlier
+        // CRSF 'bl' frame put the RX into stub flasher). RUN_USER_CODE (0xD3)
+        // is transport-identical between ROM and stub, so we try 115 200
+        // first; on failure, retry at 420 000. First hit wins.
+        const uint32_t bauds[] = {115200, 420000};
+        ESPFlasher::Result r = ESPFlasher::FLASH_ERR_NO_SYNC;
+        uint32_t used_baud = 0;
+        for (uint32_t b : bauds) {
+            cfg.baud_rate = b;
+            r = ESPFlasher::runUserCode(cfg);
+            if (r == ESPFlasher::FLASH_OK) { used_baud = b; break; }
+            delay(50);
+        }
         PinPort::release(PinPort::PORT_B);
         if (r == ESPFlasher::FLASH_OK) {
-            req->send(200, "text/plain", "RUN_USER_CODE sent — RX jumping to app");
+            char msg[96];
+            snprintf(msg, sizeof(msg),
+                "RUN_USER_CODE sent @%u — RX jumping to app", (unsigned)used_baud);
+            req->send(200, "text/plain", msg);
         } else {
-            req->send(500, "text/plain", ESPFlasher::errorString(r));
+            req->send(500, "text/plain",
+                "RUN_USER_CODE failed at both 115 200 and 420 000 — RX not in DFU/stub, "
+                "or ROM autobauder wedged. Power-cycle RX to recover.");
         }
     });
 
