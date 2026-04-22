@@ -667,6 +667,52 @@ button.mode-blocked:hover { opacity: .6; }
     <div id="ctrlMsg" style="margin-top:6px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
   </div>
 
+  <!-- ===== Device identity: WiFi creds + bind UID + phrase converter =====
+       Source: NVS partition (eeprom blob at namespace "eeprom", key "eeprom"
+       gives current rx_config with UID at offset 4). WiFi AP default is
+       compile-time (ExpressLRS RX / expresslrs); home-STA creds are patched
+       into the ELRSOPTS JSON blob at end of active app partition.         -->
+  <div class="card" id="identCard">
+    <h2>Device identity</h2>
+    <div class="warning">
+      Вытаскивает из RX через ROM DFU: bind UID (hex), WiFi AP SSID + password. Нужен RX в DFU (BOOT + power-cycle). ~5-6 sec.
+    </div>
+    <div class="row"><span class="label">Current UID:</span>
+      <span class="value" id="identUid" style="font-family:monospace">—</span>
+    </div>
+    <div class="row"><span class="label">Bound:</span>
+      <span class="value" id="identBound">—</span>
+    </div>
+    <div class="row"><span class="label">WiFi SSID:</span>
+      <span class="value" id="identSsid" style="font-family:monospace">—</span>
+    </div>
+    <div class="row"><span class="label">WiFi password:</span>
+      <span class="value" id="identPass" style="font-family:monospace">—</span>
+    </div>
+    <div class="row"><span class="label">Flash discriminator:</span>
+      <span class="value" id="identDisc" style="font-family:monospace;font-size:11px">—</span>
+    </div>
+    <button onclick="identRead()" id="identReadBtn" data-need-mode="dfu" style="width:100%">⬇ Read identity from device</button>
+    <div id="identStatus" style="margin-top:6px;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
+
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:12px">🔧 Phrase ↔ UID converter (client-side MD5)</summary>
+      <div style="margin-top:8px;padding:6px;background:var(--card-bg2);border:1px solid var(--border-soft);border-radius:4px">
+        <div class="row"><span class="label">Bind phrase:</span>
+          <input type="text" id="phraseInput" placeholder="e.g. my secret phrase"
+                 oninput="identPhraseToUid()"
+                 style="flex:1;padding:4px;background:#0a0a14;color:#fff;border:1px solid #333;font-family:monospace">
+        </div>
+        <div class="row"><span class="label">Computed UID:</span>
+          <span class="value" id="phraseUid" style="font-family:monospace;color:var(--accent)">—</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:4px">
+          UID = <code>md5("-DMY_BINDING_PHRASE=\"&lt;phrase&gt;\"")[0..5]</code>. Совпадает с тем что считает ELRS Configurator. ELRS phrase в прошивке не хранится, сохраняются только 6 hash-байт.
+        </div>
+      </div>
+    </details>
+  </div>
+
   <!-- ===== ACTION PICKER — primary workflows ===== -->
   <div class="card" style="border-left:3px solid var(--accent2)">
     <h2>What do you want to do?</h2>
@@ -2384,6 +2430,273 @@ async function rcvSoftReboot() {
     setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, 4000);
   } catch (e) {
     if (el) el.textContent = '✗ ' + (e.message || e);
+  }
+}
+
+// ===== Device identity: extract WiFi creds + UID from RX via fast NVS read =====
+//
+// Flow:  [Read identity] POSTs /api/elrs/identity/fast, backend reads NVS
+//  (20KB @ 0x9000), OTADATA (8KB @ 0xe000), active-app tail (8KB) in one
+//  DFU session, returns a concatenated hex response with per-section
+//  headers. We parse all three client-side:
+//   - NVS v2 walk → namespace "eeprom", key "eeprom" is an ELRS RxConfig
+//     blob; UID lives at offset 4 (6 bytes) and flash_discriminator at 12.
+//   - ELRSOPTS JSON at app-tail → wifi-ssid / wifi-password / uid (if
+//     hasUID was baked at compile time) / domain / flash-discriminator.
+//     Runtime override lives in SPIFFS /options.json — we don't read that
+//     yet (Phase 2 full-dump fallback).
+// WiFi AP defaults (not extractable from NVS/ELRSOPTS — they're compile-time
+// constants in rodata): SSID = "ExpressLRS RX" / password = "expresslrs".
+
+// --- Minimal MD5 (public-domain implementation, ~60 LOC) ---------------------
+// Needed for phrase→UID conversion that matches ELRS Configurator
+//   (UID = md5("-DMY_BINDING_PHRASE=\"<phrase>\"")[0..5]).
+function _md5(str) {
+  function add32(a,b){return (a+b)&0xffffffff;}
+  function rol(n,s){return (n<<s)|(n>>>(32-s));}
+  function cmn(q,a,b,x,s,t){return add32(rol(add32(add32(a,q),add32(x,t)),s),b);}
+  function ff(a,b,c,d,x,s,t){return cmn((b&c)|((~b)&d),a,b,x,s,t);}
+  function gg(a,b,c,d,x,s,t){return cmn((b&d)|(c&(~d)),a,b,x,s,t);}
+  function hh(a,b,c,d,x,s,t){return cmn(b^c^d,a,b,x,s,t);}
+  function ii(a,b,c,d,x,s,t){return cmn(c^(b|(~d)),a,b,x,s,t);}
+  // UTF-8 encode
+  const bytes = new TextEncoder().encode(str);
+  const n = bytes.length;
+  const nblk = ((n + 8) >> 6) + 1;
+  const blks = new Int32Array(nblk * 16);
+  for (let i = 0; i < n; i++) blks[i>>2] |= bytes[i] << ((i%4) * 8);
+  blks[n>>2] |= 0x80 << ((n%4) * 8);
+  blks[nblk*16 - 2] = n * 8;
+  let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+  for (let i = 0; i < blks.length; i += 16) {
+    const oa=a, ob=b, oc=c, od=d;
+    a=ff(a,b,c,d,blks[i+ 0], 7,-680876936); d=ff(d,a,b,c,blks[i+ 1],12,-389564586);
+    c=ff(c,d,a,b,blks[i+ 2],17,  606105819); b=ff(b,c,d,a,blks[i+ 3],22,-1044525330);
+    a=ff(a,b,c,d,blks[i+ 4], 7, -176418897); d=ff(d,a,b,c,blks[i+ 5],12, 1200080426);
+    c=ff(c,d,a,b,blks[i+ 6],17,-1473231341); b=ff(b,c,d,a,blks[i+ 7],22, -45705983);
+    a=ff(a,b,c,d,blks[i+ 8], 7, 1770035416); d=ff(d,a,b,c,blks[i+ 9],12,-1958414417);
+    c=ff(c,d,a,b,blks[i+10],17,    -42063); b=ff(b,c,d,a,blks[i+11],22,-1990404162);
+    a=ff(a,b,c,d,blks[i+12], 7, 1804603682); d=ff(d,a,b,c,blks[i+13],12,  -40341101);
+    c=ff(c,d,a,b,blks[i+14],17,-1502002290); b=ff(b,c,d,a,blks[i+15],22, 1236535329);
+    a=gg(a,b,c,d,blks[i+ 1], 5, -165796510); d=gg(d,a,b,c,blks[i+ 6], 9,-1069501632);
+    c=gg(c,d,a,b,blks[i+11],14,  643717713); b=gg(b,c,d,a,blks[i+ 0],20, -373897302);
+    a=gg(a,b,c,d,blks[i+ 5], 5, -701558691); d=gg(d,a,b,c,blks[i+10], 9,   38016083);
+    c=gg(c,d,a,b,blks[i+15],14, -660478335); b=gg(b,c,d,a,blks[i+ 4],20, -405537848);
+    a=gg(a,b,c,d,blks[i+ 9], 5,  568446438); d=gg(d,a,b,c,blks[i+14], 9,-1019803690);
+    c=gg(c,d,a,b,blks[i+ 3],14, -187363961); b=gg(b,c,d,a,blks[i+ 8],20, 1163531501);
+    a=gg(a,b,c,d,blks[i+13], 5,-1444681467); d=gg(d,a,b,c,blks[i+ 2], 9,  -51403784);
+    c=gg(c,d,a,b,blks[i+ 7],14, 1735328473); b=gg(b,c,d,a,blks[i+12],20,-1926607734);
+    a=hh(a,b,c,d,blks[i+ 5], 4,    -378558); d=hh(d,a,b,c,blks[i+ 8],11,-2022574463);
+    c=hh(c,d,a,b,blks[i+11],16, 1839030562); b=hh(b,c,d,a,blks[i+14],23,  -35309556);
+    a=hh(a,b,c,d,blks[i+ 1], 4,-1530992060); d=hh(d,a,b,c,blks[i+ 4],11, 1272893353);
+    c=hh(c,d,a,b,blks[i+ 7],16, -155497632); b=hh(b,c,d,a,blks[i+10],23,-1094730640);
+    a=hh(a,b,c,d,blks[i+13], 4,  681279174); d=hh(d,a,b,c,blks[i+ 0],11, -358537222);
+    c=hh(c,d,a,b,blks[i+ 3],16, -722521979); b=hh(b,c,d,a,blks[i+ 6],23,   76029189);
+    a=hh(a,b,c,d,blks[i+ 9], 4, -640364487); d=hh(d,a,b,c,blks[i+12],11, -421815835);
+    c=hh(c,d,a,b,blks[i+15],16,  530742520); b=hh(b,c,d,a,blks[i+ 2],23, -995338651);
+    a=ii(a,b,c,d,blks[i+ 0], 6, -198630844); d=ii(d,a,b,c,blks[i+ 7],10, 1126891415);
+    c=ii(c,d,a,b,blks[i+14],15,-1416354905); b=ii(b,c,d,a,blks[i+ 5],21,  -57434055);
+    a=ii(a,b,c,d,blks[i+12], 6, 1700485571); d=ii(d,a,b,c,blks[i+ 3],10,-1894986606);
+    c=ii(c,d,a,b,blks[i+10],15,   -1051523); b=ii(b,c,d,a,blks[i+ 1],21,-2054922799);
+    a=ii(a,b,c,d,blks[i+ 8], 6, 1873313359); d=ii(d,a,b,c,blks[i+15],10,  -30611744);
+    c=ii(c,d,a,b,blks[i+ 6],15,-1560198380); b=ii(b,c,d,a,blks[i+13],21, 1309151649);
+    a=ii(a,b,c,d,blks[i+ 4], 6, -145523070); d=ii(d,a,b,c,blks[i+11],10,-1120210379);
+    c=ii(c,d,a,b,blks[i+ 2],15,  718787259); b=ii(b,c,d,a,blks[i+ 9],21, -343485551);
+    a=add32(a,oa); b=add32(b,ob); c=add32(c,oc); d=add32(d,od);
+  }
+  // Serialise little-endian
+  const out = new Uint8Array(16);
+  [a,b,c,d].forEach((v,i)=>{
+    out[i*4+0]=v&0xff; out[i*4+1]=(v>>>8)&0xff; out[i*4+2]=(v>>>16)&0xff; out[i*4+3]=(v>>>24)&0xff;
+  });
+  return out;
+}
+
+function identPhraseToUid() {
+  const phrase = document.getElementById('phraseInput').value;
+  if (!phrase) { document.getElementById('phraseUid').textContent = '—'; return; }
+  const full = '-DMY_BINDING_PHRASE="' + phrase + '"';
+  const digest = _md5(full);
+  const uid = Array.from(digest.slice(0, 6)).map(b => b.toString(16).padStart(2,'0')).join(':').toUpperCase();
+  document.getElementById('phraseUid').textContent = uid;
+}
+
+// --- NVS v2 walker (ported from hardware/bayckrc_c3_dual/parse.py) ----------
+function _nvsParse(bytes) {
+  const PAGE = 4096, HDR = 32, ESZ = 32, NENT = 126;
+  const STATE_ACTIVE = 0xFFFFFFFE, STATE_FULL = 0xFFFFFFFC, STATE_FREEING = 0xFFFFFFF8;
+  const T_U8=0x01, T_U32=0x04, T_STR=0x21, T_BLOB_DATA=0x42, T_BLOB_IDX=0x48, T_BLOB_V2=0x41;
+  const namespaces = {};
+  const entries = {};  // { ns_name: { key: { type, value, value_hex } } }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  function u32(off) { return dv.getUint32(off, true); }
+  function u16(off) { return dv.getUint16(off, true); }
+
+  for (const pass of [1, 2]) {
+    for (let pageBase = 0; pageBase + PAGE <= bytes.length; pageBase += PAGE) {
+      const state = u32(pageBase);
+      if (state !== STATE_ACTIVE && state !== STATE_FULL && state !== STATE_FREEING) continue;
+      let eidx = 0;
+      while (eidx < NENT) {
+        const eOff = pageBase + HDR + eidx * ESZ;
+        if (eOff + ESZ > pageBase + PAGE) break;
+        const nsId = bytes[eOff];
+        const eType = bytes[eOff + 1];
+        let span = bytes[eOff + 2];
+        // blank / erased
+        if (nsId === 0xFF) { eidx++; continue; }
+        if (span === 0 || span > NENT) span = 1;
+        // key slice 8..24, ASCII clean
+        let keyEnd = eOff + 24;
+        for (let i = eOff + 8; i < eOff + 24; i++) if (bytes[i] === 0) { keyEnd = i; break; }
+        const keyBytes = bytes.slice(eOff + 8, keyEnd);
+        const printable = Array.from(keyBytes).every(b => b >= 0x20 && b < 0x7F);
+        if (!printable) { eidx += span; continue; }
+        const key = new TextDecoder('utf-8', {fatal:false}).decode(keyBytes);
+        if (pass === 1) {
+          if (nsId === 0 && eType === T_U8 && key) namespaces[bytes[eOff + 24]] = key;
+          eidx += span; continue;
+        }
+        if (nsId === 0 || !key) { eidx += span; continue; }
+        const nsName = namespaces[nsId] || ('ns#' + nsId);
+        let value = null, value_hex = null;
+        try {
+          if (eType === T_U8) value = bytes[eOff + 24];
+          else if (eType === T_U32) value = u32(eOff + 24);
+          else if (eType === T_STR) {
+            const sz = u16(eOff + 24);
+            const ds = eOff + ESZ;
+            if (ds + sz <= pageBase + PAGE) {
+              const raw = bytes.slice(ds, ds + sz);
+              const nul = raw.indexOf(0);
+              value = new TextDecoder().decode(nul < 0 ? raw : raw.slice(0, nul));
+            }
+          }
+          else if (eType === T_BLOB_DATA || eType === T_BLOB_V2) {
+            const sz = u16(eOff + 24);
+            const ds = eOff + ESZ;
+            const end = Math.min(ds + sz, pageBase + PAGE, bytes.length);
+            const raw = bytes.slice(ds, end);
+            value = { size: sz, length: raw.length };
+            value_hex = Array.from(raw).map(b=>b.toString(16).padStart(2,'0')).join('');
+          }
+        } catch (e) { /* ignore */ }
+        entries[nsName] = entries[nsName] || {};
+        entries[nsName][key] = { type: eType, value, value_hex };
+        eidx += span;
+      }
+    }
+  }
+  return { namespaces, entries };
+}
+
+async function identRead() {
+  const btn = document.getElementById('identReadBtn');
+  const st = document.getElementById('identStatus');
+  btn.disabled = true; btn.textContent = '⏳ Reading (~5 s)…';
+  st.textContent = 'Requesting NVS + OTADATA + app tail via ROM DFU…';
+  try {
+    const r = await fetch('/api/elrs/identity/fast', {method:'POST'});
+    const txt = await r.text();
+    if (!r.ok) throw new Error(txt || ('HTTP ' + r.status));
+    // Parse sectional response: lines starting with "# section=NAME off=... size=..."
+    // followed by one line of hex (the binary as hex). There are 3 sections.
+    const sections = {};
+    const lines = txt.split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      const m = lines[i].match(/^# section=(\w+) off=(0x[0-9a-f]+) size=(0x[0-9a-f]+)/i);
+      if (m && i + 1 < lines.length) {
+        const name = m[1]; const off = parseInt(m[2]); const size = parseInt(m[3]);
+        const hex = lines[i + 1].trim();
+        const u8 = new Uint8Array(size);
+        for (let j = 0; j < size && j * 2 + 1 < hex.length; j++) {
+          u8[j] = parseInt(hex.substr(j * 2, 2), 16);
+        }
+        sections[name] = { off, size, bytes: u8 };
+        i += 2;
+      } else {
+        i += 1;
+      }
+    }
+
+    // Parse NVS
+    let uid = null, flashDisc = null, bound = null;
+    let ssid = null, password = null;
+    if (sections.NVS) {
+      const nvs = _nvsParse(sections.NVS.bytes);
+      // Look for eeprom.eeprom blob — that's the RX config struct (v8+)
+      const blob = nvs.entries?.eeprom?.eeprom;
+      if (blob && blob.value_hex) {
+        const hex = blob.value_hex;
+        // rx_config_t layout:
+        //   offset 0..3: version (u32 LE)
+        //   offset 4..9: uid[6]
+        //   offset 10:    unused_padding
+        //   offset 11:    serial1Protocol packed
+        //   offset 12..15: flash_discriminator (u32 LE)
+        uid = Array.from({length:6}, (_,k) =>
+          hex.substr((4+k)*2, 2).toUpperCase()).join(':');
+        bound = (uid === '00:00:00:00:00:00') ? 'no (zero UID)' : 'yes (NVS)';
+        const d0 = parseInt(hex.substr(24,2),16), d1 = parseInt(hex.substr(26,2),16);
+        const d2 = parseInt(hex.substr(28,2),16), d3 = parseInt(hex.substr(30,2),16);
+        flashDisc = '0x' + ((d3<<24)|(d2<<16)|(d1<<8)|d0).toString(16).padStart(8,'0');
+      }
+      // Also check for TX-side UID storage (scattered keys in namespace "ELRS")
+      const elrsNs = nvs.entries?.ELRS;
+      if (!uid && elrsNs) {
+        if (elrsNs.tx_version) bound = 'TX config present (UID in SPIFFS /options.json — needs full dump)';
+      }
+    }
+    // Parse ELRSOPTS JSON from app-tail. The block is at known offsets relative
+    // to end of app partition: 2704 bytes back = PRODUCTNAME+DEVICENAME+OPTIONS+HARDWARE.
+    // OPTIONS starts at (end - 2704) + 128 + 16 = (end - 2560). Size up to 512.
+    if (sections.APPTAIL) {
+      const tail = sections.APPTAIL.bytes;
+      // Scan the whole tail for a JSON block starting with `{"` that contains
+      // known keys — ELRSOPTS has these literally.
+      const dec = new TextDecoder('utf-8', {fatal:false});
+      const txtBlob = dec.decode(tail);
+      const markers = ['"wifi-ssid"','"wifi-password"','"flash-discriminator"','"uid"'];
+      for (const m of markers) {
+        const mi = txtBlob.indexOf(m);
+        if (mi < 0) continue;
+        let j = mi;
+        while (j > 0 && txtBlob.charCodeAt(j) !== 123) j--;  // '{'
+        let depth = 0, end = -1;
+        for (let k = j; k < Math.min(j + 4096, txtBlob.length); k++) {
+          const c = txtBlob.charCodeAt(k);
+          if (c === 123) depth++;
+          else if (c === 125) { depth--; if (depth === 0) { end = k + 1; break; } }
+        }
+        if (end < 0) continue;
+        try {
+          const obj = JSON.parse(txtBlob.slice(j, end));
+          if (obj['wifi-ssid'])     ssid = obj['wifi-ssid'];
+          if (obj['wifi-password']) password = obj['wifi-password'];
+          if (!uid && Array.isArray(obj.uid) && obj.uid.length === 6) {
+            uid = obj.uid.map(x => (x&0xff).toString(16).padStart(2,'0')).join(':').toUpperCase();
+            bound = 'yes (compile-time baked)';
+          }
+          if (!flashDisc && obj['flash-discriminator'])
+            flashDisc = '0x' + obj['flash-discriminator'].toString(16).padStart(8,'0');
+          break;
+        } catch (e) { /* keep trying other markers */ }
+      }
+    }
+
+    document.getElementById('identUid').textContent  = uid || '— (not bound / not found in NVS)';
+    document.getElementById('identBound').textContent = bound || 'unknown';
+    document.getElementById('identSsid').textContent = ssid || 'ExpressLRS RX  (compile-time default)';
+    document.getElementById('identPass').textContent = password || 'expresslrs  (compile-time default)';
+    document.getElementById('identDisc').textContent = flashDisc || '—';
+    st.textContent = '✓ Identity read complete';
+    st.style.color = '#0f0';
+  } catch (e) {
+    st.textContent = '✗ ' + (e.message || e);
+    st.style.color = '#f66';
+  } finally {
+    btn.disabled = false; btn.textContent = '⬇ Read identity from device';
   }
 }
 

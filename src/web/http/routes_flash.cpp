@@ -998,6 +998,176 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(200, "application/json", out);
     });
 
+    // ==== ELRS Identity: fast-read (NVS 20 KB + OTADATA 8 KB + active-app tail 8 KB) ====
+    // One DFU session, returns concatenated hex blobs as text/plain with a
+    // section header per blob. Client-side JS parses NVS v2 format + searches
+    // app-tail rodata for the ELRSOPTS JSON block. Total wire: ~73 KB hex.
+    // Takes ~4-6 s at 115200 via CMD_READ_FLASH_SLOW.
+    s_server->on("/api/elrs/identity/fast", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "identity_fast")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        // Allocate PSRAM buffer large enough for all three regions + slack.
+        const uint32_t NVS_OFF = 0x9000;
+        const uint32_t NVS_SZ  = 0x5000;   // 20 KB (standard ELRS layout)
+        const uint32_t OTA_OFF = 0xe000;
+        const uint32_t OTA_SZ  = 0x2000;   // 8 KB
+        const uint32_t TAIL_SZ = 0x2000;   // 8 KB from end of active app
+        const uint32_t BUF_SZ  = NVS_SZ + OTA_SZ + TAIL_SZ;
+        uint8_t *buf = (uint8_t *)heap_caps_malloc(BUF_SZ, MALLOC_CAP_SPIRAM);
+        if (!buf) {
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain", "PSRAM alloc failed");
+            return;
+        }
+
+        // Read NVS partition
+        ESPFlasher::Result r = ESPFlasher::readFlash(cfg, NVS_OFF, NVS_SZ, buf);
+        if (r != ESPFlasher::FLASH_OK) {
+            heap_caps_free(buf);
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain",
+                String("NVS read failed: ") + ESPFlasher::errorString(r));
+            return;
+        }
+        // Read OTADATA
+        r = ESPFlasher::readFlash(cfg, OTA_OFF, OTA_SZ, buf + NVS_SZ);
+        if (r != ESPFlasher::FLASH_OK) {
+            heap_caps_free(buf);
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain",
+                String("OTADATA read failed: ") + ESPFlasher::errorString(r));
+            return;
+        }
+        // Parse OTADATA to decide which app to tail.
+        // Each sector: seq u32 | label[20] | state u32 | crc u32 (first 32 bytes).
+        uint8_t *ota = buf + NVS_SZ;
+        uint32_t seq0 = 0, seq1 = 0;
+        memcpy(&seq0, ota,        4);
+        memcpy(&seq1, ota + 0x1000, 4);
+        int active_slot = 0;  // default: app0
+        uint32_t max_seq = 0;
+        if (seq0 != 0xFFFFFFFF) { max_seq = seq0; active_slot = (seq0 - 1) & 1; }
+        if (seq1 != 0xFFFFFFFF && seq1 > max_seq) {
+            max_seq = seq1; active_slot = (seq1 - 1) & 1;
+        }
+        // Standard ELRS layout: app0 @ 0x10000 size 0x1e0000, app1 @ 0x1f0000 size 0x1e0000.
+        // Tail = last 8 KB before the next partition.
+        const uint32_t APP0_END = 0x1f0000;
+        const uint32_t APP1_END = 0x3d0000;
+        uint32_t tail_off = (active_slot == 0 ? APP0_END : APP1_END) - TAIL_SZ;
+        r = ESPFlasher::readFlash(cfg, tail_off, TAIL_SZ, buf + NVS_SZ + OTA_SZ);
+        if (r != ESPFlasher::FLASH_OK) {
+            heap_caps_free(buf);
+            PinPort::release(PinPort::PORT_B);
+            req->send(500, "text/plain",
+                String("app tail read failed: ") + ESPFlasher::errorString(r));
+            return;
+        }
+        PinPort::release(PinPort::PORT_B);
+
+        // Build chunked text response: header line + hex per section.
+        // Format:
+        //   # section=NVS off=0x9000 size=0x5000 active_slot=1
+        //   <10000 hex chars>\n
+        //   # section=OTADATA off=0xe000 size=0x2000
+        //   <4000 hex chars>\n
+        //   # section=APPTAIL off=0x... size=0x2000
+        //   <4000 hex chars>\n
+        // Use AsyncWebServerResponse chunked to avoid a single giant String alloc.
+        struct Ctx { uint8_t *buf; uint32_t tail_off; int active_slot; };
+        Ctx *ctx = new Ctx{ buf, tail_off, active_slot };
+        AsyncWebServerResponse *resp = req->beginChunkedResponse("text/plain",
+            [ctx](uint8_t *dst, size_t max_len, size_t index) -> size_t {
+                // Deterministic generator: emit header + hex for each region.
+                // We track position across calls via `index`.
+                const uint32_t NVS_SZ_L  = 0x5000;
+                const uint32_t OTA_SZ_L  = 0x2000;
+                const uint32_t TAIL_SZ_L = 0x2000;
+                // Section byte offsets in response (header + hex pairs).
+                char hdr0[80], hdr1[80], hdr2[80];
+                int h0 = snprintf(hdr0, sizeof(hdr0),
+                    "# section=NVS off=0x9000 size=0x5000 active_slot=%d\n",
+                    ctx->active_slot);
+                int h1 = snprintf(hdr1, sizeof(hdr1),
+                    "\n# section=OTADATA off=0xe000 size=0x2000\n");
+                int h2 = snprintf(hdr2, sizeof(hdr2),
+                    "\n# section=APPTAIL off=0x%x size=0x2000\n",
+                    (unsigned)ctx->tail_off);
+                const size_t S0_start = 0;
+                const size_t S0_end   = S0_start + h0;
+                const size_t S1_start = S0_end;
+                const size_t S1_end   = S1_start + NVS_SZ_L * 2;
+                const size_t S2_start = S1_end;
+                const size_t S2_end   = S2_start + h1;
+                const size_t S3_start = S2_end;
+                const size_t S3_end   = S3_start + OTA_SZ_L * 2;
+                const size_t S4_start = S3_end;
+                const size_t S4_end   = S4_start + h2;
+                const size_t S5_start = S4_end;
+                const size_t S5_end   = S5_start + TAIL_SZ_L * 2;
+                const size_t TOTAL    = S5_end + 1;  // trailing newline
+
+                if (index >= TOTAL) {
+                    heap_caps_free(ctx->buf);
+                    delete ctx;
+                    return 0;
+                }
+                size_t out = 0;
+                while (out < max_len && index + out < TOTAL) {
+                    size_t pos = index + out;
+                    size_t remaining = max_len - out;
+                    if (pos < S0_end) {
+                        size_t take = min(S0_end - pos, remaining);
+                        memcpy(dst + out, hdr0 + (pos - S0_start), take);
+                        out += take;
+                    } else if (pos < S1_end) {
+                        // NVS hex
+                        size_t hex_pos = pos - S1_start;
+                        size_t byte_i = hex_pos / 2;
+                        bool hi = (hex_pos & 1) == 0;
+                        uint8_t b = ctx->buf[byte_i];
+                        char c = hi ? "0123456789abcdef"[b >> 4]
+                                    : "0123456789abcdef"[b & 0xf];
+                        dst[out++] = (uint8_t)c;
+                    } else if (pos < S2_end) {
+                        size_t take = min(S2_end - pos, remaining);
+                        memcpy(dst + out, hdr1 + (pos - S2_start), take);
+                        out += take;
+                    } else if (pos < S3_end) {
+                        size_t hex_pos = pos - S3_start;
+                        size_t byte_i = NVS_SZ_L + hex_pos / 2;
+                        bool hi = (hex_pos & 1) == 0;
+                        uint8_t b = ctx->buf[byte_i];
+                        dst[out++] = hi ? "0123456789abcdef"[b >> 4]
+                                        : "0123456789abcdef"[b & 0xf];
+                    } else if (pos < S4_end) {
+                        size_t take = min(S4_end - pos, remaining);
+                        memcpy(dst + out, hdr2 + (pos - S4_start), take);
+                        out += take;
+                    } else if (pos < S5_end) {
+                        size_t hex_pos = pos - S5_start;
+                        size_t byte_i = NVS_SZ_L + OTA_SZ_L + hex_pos / 2;
+                        bool hi = (hex_pos & 1) == 0;
+                        uint8_t b = ctx->buf[byte_i];
+                        dst[out++] = hi ? "0123456789abcdef"[b >> 4]
+                                        : "0123456789abcdef"[b & 0xf];
+                    } else {
+                        dst[out++] = '\n';
+                    }
+                }
+                return out;
+            });
+        req->send(resp);
+    });
+
     s_server->on("/api/flash/erase_partition", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("offset", true) || !req->hasParam("size", true)) {
             req->send(400, "text/plain", "need offset + size");
