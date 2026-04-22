@@ -832,7 +832,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       </div>
       <div style="margin-top:6px">
         <button onclick="rcvCrsfReboot()" style="width:100%;padding:8px">↻ From running app (CRSF reboot)</button>
-        <div style="font-size:11px;color:var(--text-dim);margin:4px 0">Requires live monitor active. Даёт "мягкий" reboot без потери NVS.</div>
+        <div style="font-size:11px;color:var(--text-dim);margin:4px 0">Работает когда RX в app. Мягкий reboot без потери NVS. Автоматом через live-monitor если он запущен, иначе one-shot по Port B.</div>
       </div>
       <div id="rcvRebootMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
     </div>
@@ -2404,7 +2404,10 @@ async function rcvCrsfReboot() {
   if (!confirm('Reboot RX via CRSF? Link will drop briefly.')) return;
   const el = document.getElementById('rcvRebootMsg');
   try {
-    const r = await postForm('/api/crsf/reboot');
+    // One-shot endpoint — acquires Port B, sends ELRS COMMAND reboot frame,
+    // releases. Does NOT require the live-monitor service. If the service
+    // IS running, route returns 409 and we tell the user to stop it.
+    const r = await postForm('/api/crsf/reboot_app');
     if (el) el.textContent = '✓ ' + r;
     setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, 4000);
   } catch (e) {
@@ -2419,6 +2422,13 @@ async function rcvCrsfReboot() {
 function rcvOpen(section) {
   const target = document.getElementById('rcv-' + section);
   const wasOpen = target && target.style.display !== 'none';
+  // Anchor: record viewport-relative Y of the picker BEFORE layout changes,
+  // then restore that offset AFTER. Without this the page "jumps" as sections
+  // of different heights swap, because the browser keeps scroll offset but
+  // content above/below the viewport shifts.
+  const picker = document.querySelector('button[data-rcv]');
+  const anchorRect = picker ? picker.getBoundingClientRect() : null;
+
   document.querySelectorAll('.rcv-section').forEach(e => e.style.display = 'none');
   document.querySelectorAll('button[data-rcv]').forEach(b => b.classList.remove('active'));
   if (!wasOpen && target) {
@@ -2429,6 +2439,16 @@ function rcvOpen(section) {
     if (section === 'flash')  fwPathUpdate();
     if (section === 'config') { /* user clicks Load manually */ }
     if (section === 'live')   { /* CRSF starts on explicit click */ }
+  }
+
+  // Restore the picker's viewport position so the content below it is
+  // predictable. Defers to next frame so layout has settled.
+  if (anchorRect) {
+    requestAnimationFrame(() => {
+      const newRect = picker.getBoundingClientRect();
+      const delta   = newRect.top - anchorRect.top;
+      if (Math.abs(delta) > 1) window.scrollBy({top: delta, left: 0, behavior: 'instant'});
+    });
   }
 }
 

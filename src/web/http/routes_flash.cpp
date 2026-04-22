@@ -1237,6 +1237,50 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(200, "application/json", out);
     });
 
+    // "Soft reboot RX while running app". Works in BOTH states:
+    //  - If live monitor is already running, route through the service
+    //    (it owns Port B; don't contend).
+    //  - Otherwise acquire Port B one-shot, send the CRSF COMMAND, release.
+    // Frame: 0xEC 0x06 0x32 0xEC 0xEA 0x0A 0x0B CRC8(D5 over type+dst+src+subcmd+action)
+    s_server->on("/api/crsf/reboot_app", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (CRSFService::isRunning()) {
+            CRSFService::cmdReboot();
+            req->send(200, "text/plain", "Reboot command sent via live monitor");
+            return;
+        }
+        uint32_t baud = req->hasParam("baud", true)
+            ? strtoul(req->getParam("baud", true)->value().c_str(), nullptr, 0)
+            : 420000;
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf_reboot")) {
+            req->send(409, "text/plain", "Port B busy");
+            return;
+        }
+        Serial1.end();
+        Serial1.begin(baud, SERIAL_8N1,
+                      PinPort::rx_pin(PinPort::PORT_B),
+                      PinPort::tx_pin(PinPort::PORT_B));
+        delay(50);
+        // ELRS ENTER_BOOTLOADER action. ELRS firmware interprets this as
+        // "restart into bootloader"; for a plain "soft reboot of running
+        // app" we send the same COMMAND — the app naturally cycles through
+        // its reset handler on the way to bl and most forks return to app
+        // if no further traffic arrives within ~2 s.
+        // Ext frame: dst=ADDR_RECEIVER(0xEC), src=ADDR_RADIO(0xEA)
+        // type=0x32 COMMAND, subcmd=0x0A ELRS_FUNC, action=0x0B REBOOT
+        const uint8_t payload[] = { 0x32, 0xEC, 0xEA, 0x0A, 0x0B };
+        uint8_t crc = 0;
+        for (size_t i = 0; i < sizeof(payload); i++) {
+            crc ^= payload[i];
+            for (int b = 0; b < 8; b++) crc = (crc & 0x80) ? (crc << 1) ^ 0xD5 : (crc << 1);
+        }
+        uint8_t frame[8] = { 0xEC, 0x06, 0x32, 0xEC, 0xEA, 0x0A, 0x0B, crc };
+        Serial1.write(frame, sizeof(frame));
+        Serial1.flush();
+        delay(120);
+        PinPort::release(PinPort::PORT_B);
+        req->send(200, "text/plain", "Reboot command sent (RX will drop link briefly)");
+    });
+
     s_server->on("/api/otadata/select", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("slot", true)) {
             req->send(400, "text/plain", "need form param 'slot' = 0 or 1");
