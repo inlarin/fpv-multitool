@@ -152,8 +152,7 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   <div class="tabs">
     <div class="tab active" onclick="showTab('servo')">Servo</div>
     <div class="tab" onclick="showTab('motor')">Motor</div>
-    <div class="tab" onclick="showTab('elrs')">ELRS Flash</div>
-    <div class="tab" onclick="showTab('crsf')">CRSF</div>
+    <div class="tab" onclick="showTab('receiver')">Receiver</div>
     <div class="tab" onclick="showTab('rcsniff')">RC Sniff</div>
   </div>
 </div>
@@ -627,13 +626,13 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
   </div>
 </div>
 
-<!-- ===== ELRS FLASH ===== -->
-<div id="tab-elrs" class="tab-content" style="display:none">
+<!-- ===== RECEIVER (merged ELRS + CRSF — action-picker structure) ===== -->
+<div id="tab-receiver" class="tab-content" style="display:none">
 
   <div id="elrsCrsfBanner" style="display:none;padding:8px;margin-bottom:6px;background:#c60;color:#fff;border-radius:4px;font-size:13px">
-    ⚠ <b>CRSF telemetry service is running</b> — Port B locked, ELRS flash/probe actions will fail with 409.
-    <button onclick="crsfStop()" style="float:right;padding:2px 8px;font-size:12px">Stop CRSF</button>
-    <span style="color:#ffd">Flash Firmware auto-pauses CRSF; standalone probes/controls don't.</span>
+    ⚠ <b>Live link monitor is running</b> — Port B locked. Probe / Load settings / Bind will fail with 409 until it's stopped.
+    <button onclick="crsfStop()" style="float:right;padding:2px 8px;font-size:12px">Stop monitor</button>
+    <span style="color:#ffd;display:block;margin-top:2px;font-size:12px">Flash Firmware auto-pauses the monitor; other actions don't.</span>
   </div>
 
   <!-- ===== 1. RX Status (consolidated: mode + identity from DEVICE_PING) ===== -->
@@ -656,7 +655,23 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <button onclick="rxProbeMode()" id="rxProbeBtn" style="width:100%">🔍 Probe RX</button>
   </div>
 
-  <!-- ===== 2. RX Configuration (LUA params via CRSF) ===== -->
+  <!-- ===== ACTION PICKER — "what do you want to do?" ===== -->
+  <div class="card" style="border-left:3px solid var(--accent2)">
+    <h2>What do you want to do?</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
+      <button onclick="rcvOpen('flash')"  data-rcv="flash"  class="rcv-nav">💾 Update firmware</button>
+      <button onclick="rcvOpen('config')" data-rcv="config" class="rcv-nav">⚙ Change settings</button>
+      <button onclick="rcvOpen('live')"   data-rcv="live"   class="rcv-nav">📡 Watch link quality</button>
+      <button onclick="rcvOpen('bind')"   data-rcv="bind"   class="rcv-nav">🔗 Pair with handset</button>
+      <button onclick="rcvOpen('reboot')" data-rcv="reboot" class="rcv-nav" style="grid-column:span 2">↺ Reboot receiver</button>
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
+      Один раздел открывается за раз. Кнопка повторно — свернуть. Старые отдельные «ELRS Flash» + «CRSF» вкладки объединены.
+    </div>
+  </div>
+
+  <!-- ===== rcv-config: RX Configuration ===== -->
+  <div id="rcv-config" class="rcv-section" style="display:none">
   <div class="card" id="rxConfigCard">
     <h2>RX Configuration</h2>
     <div class="warning">
@@ -675,8 +690,10 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
       <tbody id="rxCfgBody"></tbody>
     </table>
   </div>
+  </div>  <!-- /rcv-config -->
 
-  <!-- ===== 3. Flash Firmware (unified flow) ===== -->
+  <!-- ===== rcv-flash: Flash Firmware ===== -->
+  <div id="rcv-flash" class="rcv-section" style="display:none">
   <div class="card">
     <h2>Flash Firmware</h2>
     <div class="warning">
@@ -742,42 +759,114 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
     <div class="bar"><div class="bar-fill" id="fwBar" style="width:0%;background:#fa0"></div></div>
     <div id="fwResult" style="margin-top:8px;font-family:monospace;font-size:11px;white-space:pre-wrap"></div>
   </div>
+  </div>  <!-- /rcv-flash -->
 
-  <!-- ===== 3. Controls ===== -->
-  <div class="card">
-    <h2>Controls</h2>
-    <div class="warning">
-      Прямые команды к приёмнику. CRSF-команды работают когда RX в app (не в DFU/WiFi). OTADATA-переключение требует DFU.
+  <!-- ===== rcv-live: Live link monitor (merged from old CRSF tab) ===== -->
+  <div id="rcv-live" class="rcv-section" style="display:none">
+    <div id="crsfNoLinkHint" style="display:none;padding:8px;margin-bottom:6px;background:#335;color:#ccf;border-radius:4px;font-size:12px">
+      ℹ <b>No TX link detected</b> — Link Stats / Channels / FC Telemetry требуют связанный handset TX, который активно передаёт на этот RX. Plate+RX-only режим покажет только Device Info через другие разделы.
     </div>
-    <div class="grid">
-      <button onclick="ctrlBind()" title="CRSF 'bd' frame → RX entering 60s bind window">🔗 Enter binding</button>
-      <button onclick="ctrlStub()" title="CRSF 'bl' frame → RX enters in-app stub flasher @420000">⚡ Enter stub flasher</button>
+    <div class="card">
+      <h2>Live link monitor</h2>
+      <div class="warning">
+        Плата подключается к RX как «handset-эмулятор» и слушает CRSF-телеметрию на 420 000 бод непрерывно. Port B занят на всё время работы — Flash и Probe авто-приостановят его.
+      </div>
+      <div class="row"><span class="label">Status:</span>
+        <span>
+          <span id="crsfStatus" class="status off">OFF</span>
+          <span id="crsfConnected" class="status off">NO LINK</span>
+        </span>
+      </div>
+      <div class="row"><span class="label">Inverted CRSF:</span>
+        <span><input type="checkbox" id="crsfInverted"> <small style="color:var(--text-dim)">для F3/F4 FC</small></span>
+      </div>
+      <button class="success" onclick="crsfStart()" style="width:100%;padding:10px;font-size:14px">▶ Start live monitor</button>
+      <button class="danger" onclick="crsfStop()" style="width:100%;margin-top:4px">■ Stop</button>
     </div>
-    <div class="grid" style="margin-top:4px">
-      <button onclick="ctrlBoot(0)" class="success" title="Flip OTADATA → app0 on next reboot (requires DFU)">🅰 Boot app0</button>
-      <button onclick="ctrlBoot(1)" class="success" title="Flip OTADATA → app1 on next reboot (requires DFU)">🅱 Boot app1</button>
+    <div class="card">
+      <h2>Link Stats</h2>
+      <div class="row"><span class="label">Uplink RSSI:</span><span class="value" id="crsfRssi">- dBm</span></div>
+      <div class="row"><span class="label">Link Quality:</span><span class="value" id="crsfLQ">- %</span></div>
+      <div class="bar"><div class="bar-fill" id="crsfLqBar" style="width:0%"></div></div>
+      <div class="row"><span class="label">SNR:</span><span class="value" id="crsfSnr">- dB</span></div>
+      <div class="row"><span class="label">RF Mode:</span><span class="value" id="crsfRf">-</span></div>
+      <div class="row"><span class="label">TX Power:</span><span class="value" id="crsfPower">-</span></div>
+      <div class="row"><span class="label">Downlink:</span><span class="value" id="crsfDl">-</span></div>
+      <div class="row"><span class="label">Frames/Errors:</span><span class="value" id="crsfFrames">0 / 0</span></div>
     </div>
-    <div class="grid" style="margin-top:4px">
-      <button onclick="ctrlExitDfu()" title="RUN_USER_CODE → RX reboots into OTADATA-selected app">↩ Exit DFU → app</button>
+    <div class="card">
+      <h2>Channels</h2>
+      <div id="channelsGrid"></div>
     </div>
-    <div id="ctrlMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
-    <div style="margin-top:6px;font-size:11px;color:var(--text-dim);line-height:1.5">
-      <b>Что НЕ может плата (архитектурные границы vanilla ELRS):</b><br>
-      • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP локально. Способы: <span style="color:var(--text)">3× BOOT-press на RX</span>, или <span style="color:var(--text)">60s-auto-wifi timer</span>, или через handset.<br>
-      • <b>Exit WiFi via CRSF</b> — нет opcode'а. HTTP POST на <code>10.0.0.1/reboot</code> через телефон или power-cycle RX.<br>
-      • <b>Force ROM DFU</b> — на плате только BOOT-провод (GPIO3), нет RESET. Только физ. BOOT+power-cycle.
+    <div class="card">
+      <h2>FC Telemetry</h2>
+      <div class="row"><span class="label">Flight Mode:</span><span class="value" id="crsfMode">-</span></div>
+      <div class="row"><span class="label">Battery:</span><span class="value" id="crsfBatt">-</span></div>
+      <div class="row"><span class="label">Attitude:</span><span class="value" id="crsfAtt">-</span></div>
+      <div class="row"><span class="label">GPS:</span><span class="value" id="crsfGPS">-</span></div>
+    </div>
+  </div>  <!-- /rcv-live -->
+
+  <!-- ===== rcv-bind: Pair with new handset ===== -->
+  <div id="rcv-bind" class="rcv-section" style="display:none">
+    <div class="card">
+      <h2>Pair with new handset</h2>
+      <div class="warning">
+        Отправляет CRSF-фрейм <code>bd</code> → RX заходит в bind-режим на 60 с. Включи на handset bind, чтобы спариться. RX должен работать в app (не в DFU/WiFi).
+      </div>
+      <button onclick="ctrlBind()" class="success" style="width:100%;padding:10px;font-size:14px">🔗 Enter binding mode</button>
+      <div id="ctrlMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
     </div>
   </div>
 
-  <!-- ===== 4. Advanced (collapsed legacy + debug cards) ===== -->
+  <!-- ===== rcv-reboot: Reboot receiver ===== -->
+  <div id="rcv-reboot" class="rcv-section" style="display:none">
+    <div class="card">
+      <h2>Reboot receiver</h2>
+      <div class="warning">
+        Разные способы перезагрузки RX в зависимости от текущего режима:
+      </div>
+      <div style="margin-top:6px">
+        <button onclick="ctrlExitDfu()" style="width:100%;padding:8px">↩ From DFU/stub → app (RUN_USER_CODE)</button>
+        <div style="font-size:11px;color:var(--text-dim);margin:4px 0">Работает когда плата в DFU или в stub-flasher.</div>
+      </div>
+      <div style="margin-top:6px">
+        <button onclick="rcvCrsfReboot()" style="width:100%;padding:8px">↻ From running app (CRSF reboot)</button>
+        <div style="font-size:11px;color:var(--text-dim);margin:4px 0">Requires live monitor active. Даёт "мягкий" reboot без потери NVS.</div>
+      </div>
+      <div id="rcvRebootMsg" style="margin-top:8px;font-family:monospace;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
+    </div>
+  </div>
+
+  <!-- ===== Advanced / power-tools drawer ===== -->
   <details style="margin:8px 0">
-    <summary style="cursor:pointer;padding:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;font-weight:bold">▶ Advanced (legacy flash paths, RX dump, hardware.json, raw I/O, 5-step wizard)</summary>
+    <summary style="cursor:pointer;padding:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;font-weight:bold">▶ Advanced · power tools</summary>
+    <div style="margin-top:4px;font-size:11px;color:var(--text-dim);padding:0 8px">
+      Contains: Bootloader actions (Boot app0/1, Stub flasher, Exit DFU) · DFU slot inspector · Raw-offset flash · OTADATA debug · hardware.json export · 4 MB flash dump
+    </div>
     <div style="margin-top:8px">
-    <!--
-      Legacy cards kept for power-user flows. The three cards above cover the
-      99% paths (Status / Flash / Controls). Everything below is either
-      diagnostic or explicitly low-level.
-    -->
+
+  <!-- Bootloader actions (split out of old Controls) -->
+  <div class="card">
+    <h2>Bootloader actions</h2>
+    <div class="warning">
+      Эти команды работают только когда RX в DFU / stub. Для обычного boot-slot переключения есть Flash + "flip OTADATA" checkbox.
+    </div>
+    <div class="grid">
+      <button onclick="ctrlBoot(0)" class="success" title="Flip OTADATA → app0 on next reboot (needs DFU)">🅰 Boot app0 (OTADATA)</button>
+      <button onclick="ctrlBoot(1)" class="success" title="Flip OTADATA → app1 on next reboot (needs DFU)">🅱 Boot app1 (OTADATA)</button>
+    </div>
+    <div class="grid" style="margin-top:4px">
+      <button onclick="ctrlStub()" title="CRSF 'bl' frame → RX enters in-app stub flasher @420000">⚡ Enter stub flasher</button>
+      <button onclick="ctrlExitDfu()" title="RUN_USER_CODE → RX reboots into OTADATA-selected app">↩ Exit DFU → app</button>
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--text-dim);line-height:1.5">
+      <b>Что НЕ может плата (архитектурные границы vanilla ELRS):</b><br>
+      • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP. 3× BOOT-press на RX, 60s-auto-wifi timer, или через handset.<br>
+      • <b>Exit WiFi via CRSF</b> — нет opcode. HTTP POST на <code>10.0.0.1/reboot</code> с телефона или power-cycle.<br>
+      • <b>Force ROM DFU</b> — на плате только BOOT-провод (GPIO3), нет RESET. Физ. BOOT+power-cycle.
+    </div>
+  </div>
 
   <!-- ===== Receiver Overview (unified identity) ===== -->
   <div class="card">
@@ -927,103 +1016,11 @@ button:disabled { background: var(--text-muted); cursor: not-allowed; }
 
     </div>  <!-- /details content wrapper -->
   </details>  <!-- /Advanced -->
-</div>  <!-- /#tab-elrs -->
+</div>  <!-- /#tab-receiver -->
 
-<!-- ===== CRSF ===== -->
-<div id="tab-crsf" class="tab-content" style="display:none">
-
-  <div id="crsfFlashBanner" style="display:none;padding:8px;margin-bottom:6px;background:#c60;color:#fff;border-radius:4px;font-size:13px">
-    ⚠ <b>Flash operation in progress on ELRS tab</b> — CRSF service auto-stopped, Port B held by flasher. Restart CRSF after flash completes.
-  </div>
-
-  <div id="crsfNoLinkHint" style="display:none;padding:8px;margin-bottom:6px;background:#335;color:#ccf;border-radius:4px;font-size:12px">
-    ℹ <b>No TX link detected</b> — Link Stats / Channels / FC Telemetry require a paired handset TX actively transmitting to this RX. Plate+RX-only mode shows only Device Info + Parameters + Commands (CRSF-over-UART).
-  </div>
-
-  <div class="card">
-    <h2>CRSF / ELRS Telemetry</h2>
-    <div class="warning">
-      Подключи RX приёмника → GPIO 11 (ESP TX), TX приёмника → GPIO 10 (ESP RX), 5V, GND.<br>
-      ⚠ <b>Port B</b> (System → Port B Mode) должен быть в режиме <code>UART</code>.<br>
-      Для инвертированного CRSF (F3/F4 FC) поставь галку.
-    </div>
-    <div class="row">
-      <span class="label">Status:</span>
-      <span>
-        <span id="crsfStatus" class="status off">OFF</span>
-        <span id="crsfConnected" class="status off">NO LINK</span>
-      </span>
-    </div>
-    <div class="row">
-      <span class="label">Inverted:</span>
-      <span><input type="checkbox" id="crsfInverted"></span>
-    </div>
-    <div class="grid">
-      <button class="success" onclick="crsfStart()">Start</button>
-      <button class="danger" onclick="crsfStop()">Stop</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Link Stats</h2>
-    <div class="row"><span class="label">Uplink RSSI:</span><span class="value" id="crsfRssi">- dBm</span></div>
-    <div class="row"><span class="label">Link Quality:</span><span class="value" id="crsfLQ">- %</span></div>
-    <div class="bar"><div class="bar-fill" id="crsfLqBar" style="width:0%"></div></div>
-    <div class="row"><span class="label">SNR:</span><span class="value" id="crsfSnr">- dB</span></div>
-    <div class="row"><span class="label">RF Mode:</span><span class="value" id="crsfRf">-</span></div>
-    <div class="row"><span class="label">TX Power:</span><span class="value" id="crsfPower">-</span></div>
-    <div class="row"><span class="label">Downlink:</span><span class="value" id="crsfDl">-</span></div>
-    <div class="row"><span class="label">Frames/Errors:</span><span class="value" id="crsfFrames">0 / 0</span></div>
-  </div>
-
-  <div class="card">
-    <h2>Channels</h2>
-    <div id="channelsGrid"></div>
-  </div>
-
-  <div class="card">
-    <h2>FC Telemetry</h2>
-    <div class="row"><span class="label">Flight Mode:</span><span class="value" id="crsfMode">-</span></div>
-    <div class="row"><span class="label">Battery:</span><span class="value" id="crsfBatt">-</span></div>
-    <div class="row"><span class="label">Attitude:</span><span class="value" id="crsfAtt">-</span></div>
-    <div class="row"><span class="label">GPS:</span><span class="value" id="crsfGPS">-</span></div>
-  </div>
-
-  <div class="card">
-    <h2>Device Info</h2>
-    <div class="row"><span class="label">Name:</span><span class="value" id="crsfDevName">-</span></div>
-    <div class="row"><span class="label">FW:</span><span class="value" id="crsfDevFw">-</span></div>
-    <div class="row"><span class="label">Serial:</span><span class="value" id="crsfDevSerial">-</span></div>
-    <div class="row"><span class="label">Parameters:</span><span class="value" id="crsfDevFields">-</span></div>
-    <div class="grid">
-      <button onclick="crsfPing()">Ping Device</button>
-      <button onclick="crsfReadParams()">Read Params</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Parameters</h2>
-    <div id="crsfParams">No parameters loaded. Click "Read Params" above.</div>
-  </div>
-
-  <div class="card">
-    <h2>Commands</h2>
-    <div class="warning">⚠ Команды шлются на приёмник по адресу 0xEC</div>
-    <div class="grid">
-      <button class="danger" onclick="crsfBind()">Bind Mode</button>
-      <button class="danger" onclick="crsfReboot()">Reboot RX</button>
-    </div>
-    <div class="warning" style="margin-top:10px;">
-      Для смены <b>bind phrase</b> — запусти WiFi mode на приёмнике,
-      подключись к его AP <code>ExpressLRS RX</code> (pass <code>expresslrs</code>)
-      и открой <code>http://10.0.0.1</code>. Требует сначала <b>Read Params</b>.
-    </div>
-    <div class="grid">
-      <button onclick="crsfEnterWifi()">Enter WiFi Update Mode</button>
-    </div>
-    <div id="crsfCmdResult" style="margin-top:10px;color:#ff0;"></div>
-  </div>
-</div>
+<!-- Old tab-crsf merged into tab-receiver (rcv-live section). Duplicate
+     Device Info / Parameters / Commands cards removed — that functionality
+     lives in RX Status + rcv-config + rcv-bind/rcv-reboot respectively. -->
 
 <!-- ===== RC SNIFFER ===== -->
 <div id="tab-rcsniff" class="tab-content" style="display:none">
@@ -1336,7 +1333,11 @@ function send(obj) {
 let _curWs = localStorage.getItem('ws') || 'batt';
 const _wsDefTab = {batt:'battery', fpv:'servo', sys:'setup'};
 const _wsValid = name => ['batt','fpv','sys'].includes(name);
-const _tabValid = name => ['servo','motor','battery','elrs','crsf','rcsniff','setup','sys','usb','ota'].includes(name);
+const _tabValid = name => ['servo','motor','battery','receiver','rcsniff','setup','sys','usb','ota'].includes(name);
+// Back-compat: any old saved 'elrs' or 'crsf' tab name maps to merged 'receiver' tab
+if (localStorage.getItem('tab_fpv') === 'elrs' || localStorage.getItem('tab_fpv') === 'crsf') {
+  localStorage.setItem('tab_fpv', 'receiver');
+}
 
 function showWorkspace(ws) {
   if (!_wsValid(ws)) ws = 'batt';
@@ -1390,15 +1391,13 @@ function showTab(name) {
   if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
-  if (name === 'elrs') {
+  if (name === 'receiver') {
     if (!window.ELRS_MODELS)   window.ELRS_MODELS = ELRS_MODELS;
     if (!window.ELRS_RELEASES) window.ELRS_RELEASES = ELRS_RELEASES;
     fwPopulateModels(); fwSourceChange(); fwPathUpdate();
     const tgt = document.getElementById('fwTarget'); if (tgt) tgt.onchange = fwPathUpdate;
     hwJsonPreviewRender();
-    // Auto-probe on first open of the ELRS tab this session (or if stale >90s).
-    // Triggers otadataRefresh too so the "OTADATA raw (advanced)" card in the
-    // drawer reflects current state if the user expands it.
+    // Auto-probe on first open this session (or if stale >90s).
     const now = Date.now();
     if (!window._rxProbeLast || now - window._rxProbeLast > 90000) {
       window._rxProbeLast = now;
@@ -2382,107 +2381,55 @@ function rcPoll() {
   });
 }
 
-// === CRSF ===
+// === Receiver tab: live monitor (CRSF service start/stop) ===
+// Full-featured per-RX param editor moved to rcv-config (RX Configuration
+// card), which uses the one-shot /api/elrs/params path. The old CRSF-tab
+// Ping/ReadParams/Bind/Commands cards were removed — all subsumed by the
+// Receiver tab's Status / Configuration / Bind / Reboot sections.
 function crsfStart() {
   const inv = document.getElementById('crsfInverted').checked ? '1' : '0';
   fetch('/api/crsf/start?inverted='+inv, {method:'POST'})
     .then(r=>r.text()).then(t=>showCmdResult(t));
 }
-function crsfStop()  { fetch('/api/crsf/stop',  {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
-function crsfPing()  { fetch('/api/crsf/ping',  {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
-function crsfReadParams() { fetch('/api/crsf/params', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
-function crsfBind()   { if (confirm('Send bind command?')) fetch('/api/crsf/bind',   {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
-function crsfReboot() { if (confirm('Reboot receiver?'))   fetch('/api/crsf/reboot', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
-function crsfEnterWifi() {
-  if (!confirm('Switch RX to WiFi update mode? Link will drop; RX will start its own AP.')) return;
-  fetch('/api/crsf/wifi', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t));
-}
-
-// Render CRSF parameter tree: group by parent_id, folders expand, commands are state-aware.
-// ELRS COMMAND status codes: 0=READY, 1=START, 2=PROGRESS, 3=CONFIRM_NEEDED, 4=CONFIRM, 5=CANCEL, 6=QUERY.
-function renderCrsfCommand(p) {
-  const info = p.info || '';
-  const s = p.status | 0;
-  if (s === 2) { // PROGRESS
-    return `<span style="color:#fc0">${info || 'Executing...'}</span> `
-         + `<button onclick="crsfWriteParam(${p.id}, 5)">Abort</button>`;
-  }
-  if (s === 3) { // CONFIRMATION_NEEDED
-    return `<span style="color:#f80">${info || 'Confirm?'}</span> `
-         + `<button onclick="crsfWriteParam(${p.id}, 4)">Confirm</button> `
-         + `<button onclick="crsfWriteParam(${p.id}, 5)">Cancel</button>`;
-  }
-  if (s === 4) return `<span style="color:#0f0">Done</span>`;
-  if (s === 5) return `<span style="color:#888">Cancelled</span>`;
-  // READY (0) / QUERY (6) / unknown → show Execute button
-  return `<button onclick="crsfWriteParam(${p.id}, 1)">Execute</button>`
-       + (info ? ` <span style="color:#888;font-size:11px">${info}</span>` : '');
-}
-
-function renderCrsfParamValue(p) {
-  if (p.type === 9) { // TEXT_SELECTION
-    const opts = (p.opts || '').split(';');
-    let sel = `<select onchange="crsfWriteParam(${p.id}, this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;">`;
-    opts.forEach((o,i) => {
-      sel += `<option value="${i}"${i === p.idx ? ' selected' : ''}>${o}</option>`;
-    });
-    return sel + '</select>';
-  }
-  if (p.type === 10) return `<input type="text" value="${p.value || ''}" onchange="crsfWriteParam(${p.id}, this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;width:120px;">`;
-  if (p.type === 12) return `<span style="color:#aaa">${p.value || ''}</span>`;
-  if (p.type === 13) return renderCrsfCommand(p);
-  // Numeric
-  return `<input type="number" value="${p.value}" min="${p.min||0}" max="${p.max||255}" onchange="crsfWriteParam(${p.id}, this.value)" style="background:#0a0a14;color:#fff;border:1px solid #333;padding:4px;width:80px;">`;
-}
-
-function renderCrsfParams(params) {
-  // Index by id, bucket children by parent
-  const byId = {};
-  const children = {};
-  params.forEach(p => {
-    byId[p.id] = p;
-    const pp = p.parent | 0;
-    (children[pp] = children[pp] || []).push(p);
-  });
-
-  // Depth-first rendering with indentation
-  function renderGroup(parentId, depth) {
-    const list = children[parentId] || [];
-    let html = '';
-    list.forEach(p => {
-      const indent = depth * 14;
-      const nameCol = `<b>${p.name}</b>` + (p.unit ? ` <span style="color:#888">(${p.unit})</span>` : '');
-      if (p.type === 11) {
-        // Folder header
-        html += `<div class="row" style="padding-left:${indent}px;background:#1a1a2a;margin-top:4px;border-left:3px solid #55a;">`
-              + `<span style="color:#8af">▾ ${p.name}</span></div>`;
-        html += renderGroup(p.id, depth + 1);
-      } else {
-        html += `<div class="row" style="padding-left:${indent}px;">`
-              + `<span class="label" style="flex:1">${nameCol}</span>`
-              + `<span>${renderCrsfParamValue(p)}</span></div>`;
-      }
-    });
-    return html;
-  }
-
-  // Roots: anything whose parent is 0 or not in byId
-  // (ELRS uses parent_id=0 for root-level params)
-  let html = renderGroup(0, 0);
-  // Orphans — params pointing to an unknown parent
-  Object.keys(children).forEach(pid => {
-    const p = pid | 0;
-    if (p !== 0 && !byId[p]) html += renderGroup(p, 0);
-  });
-  return html || '<div style="color:#888">No visible parameters.</div>';
-}
-function crsfWriteParam(id, value) {
-  fetch(`/api/crsf/write?id=${id}&value=${encodeURIComponent(value)}`, {method:'POST'})
-    .then(r=>r.text()).then(t=>showCmdResult(t));
-}
+function crsfStop() { fetch('/api/crsf/stop', {method:'POST'}).then(r=>r.text()).then(t=>showCmdResult(t)); }
 function showCmdResult(msg) {
-  const el = document.getElementById('crsfCmdResult');
-  if (el) { el.textContent = msg; setTimeout(()=>el.textContent='', 3000); }
+  // ctrlMsg is the shared status line in the Bind section; fall back to console.
+  const el = document.getElementById('ctrlMsg') || document.getElementById('rcvRebootMsg');
+  if (el) { el.textContent = (new Date().toLocaleTimeString()) + '  ' + msg; }
+  else    { console.log('[ctrl]', msg); }
+}
+// Rcv-reboot section: soft reboot via CRSF while RX is in app. Different
+// from ctrlExitDfu which uses RUN_USER_CODE (requires RX in DFU/stub).
+async function rcvCrsfReboot() {
+  if (!confirm('Reboot RX via CRSF? Link will drop briefly.')) return;
+  const el = document.getElementById('rcvRebootMsg');
+  try {
+    const r = await postForm('/api/crsf/reboot');
+    if (el) el.textContent = '✓ ' + r;
+    setTimeout(() => { try { rxProbeMode(); } catch(_) {} }, 4000);
+  } catch (e) {
+    if (el) el.textContent = '✗ ' + (e.message || e);
+  }
+}
+
+// === Receiver tab: action-picker accordion ===
+// Click a nav button → matching section opens, all others close. Click
+// again → close the open one. Each section has DOM ids preserved from
+// the original ELRS / CRSF tabs so existing JS helpers keep working.
+function rcvOpen(section) {
+  const target = document.getElementById('rcv-' + section);
+  const wasOpen = target && target.style.display !== 'none';
+  document.querySelectorAll('.rcv-section').forEach(e => e.style.display = 'none');
+  document.querySelectorAll('button[data-rcv]').forEach(b => b.classList.remove('active'));
+  if (!wasOpen && target) {
+    target.style.display = '';
+    const nav = document.querySelector('button[data-rcv="' + section + '"]');
+    if (nav) nav.classList.add('active');
+    // Section-specific post-open init
+    if (section === 'flash')  fwPathUpdate();
+    if (section === 'config') { /* user clicks Load manually */ }
+    if (section === 'live')   { /* CRSF starts on explicit click */ }
+  }
 }
 
 // === ELRS FLASH ===
@@ -2968,8 +2915,8 @@ function rxBackupSlot(slot) {
   const off = slot === 0 ? '0x10000' : '0x1f0000';
   document.getElementById('dumpOffset').value = off;
   document.getElementById('dumpSize').value = '0x200000';
-  alert('Dump offset/size prefilled. Scroll down to "Dump Receiver Firmware" and press Dump.');
-  location.hash = '#tab-elrs';
+  alert('Dump offset/size prefilled. Open Receiver tab → Advanced → "Dump Receiver Firmware" and press Dump.');
+  showTab('receiver');
 }
 function rxFlashToSlot(slot) {
   const radio = document.querySelector('input[name="slotSel"][value="app' + slot + '"]');
@@ -4543,28 +4490,13 @@ function handleMsg(m) {
         `${m.gps.lat.toFixed(6)}, ${m.gps.lon.toFixed(6)} alt=${m.gps.alt}m sats=${m.gps.sats}`;
     }
 
-    // Device info
-    if (m.device) {
-      document.getElementById('crsfDevName').textContent = m.device.name;
-      document.getElementById('crsfDevFw').textContent = '0x' + m.device.fw.toString(16);
-      document.getElementById('crsfDevSerial').textContent = m.device.serial;
-      document.getElementById('crsfDevFields').textContent = m.device.fields;
-    }
-
-    // Parameters (hierarchical by parent_id, state-aware COMMAND)
-    if (m.params && m.params.length > 0) {
-      document.getElementById('crsfParams').innerHTML = renderCrsfParams(m.params);
-    }
+    // Device info + parameter tree were removed in the receiver-tab merge.
+    // Their data is fetched on-demand via /api/elrs/device_info and
+    // /api/elrs/params from the RX Status + rcv-config sections.
   }
-  else if (m.type === 'flash') {
-    // Legacy "ELRS Receiver Flasher" card is gone (commit 7d965f6) — primary
-    // Flash card polls /api/flash/status via HTTP instead of consuming the WS
-    // broadcast. But we do use this message to drive the CRSF-tab banner:
-    // during a flash, CRSFService is auto-paused server-side, so the tab user
-    // should see the warning until Start is clicked again.
-    const crsfFb = document.getElementById('crsfFlashBanner');
-    if (crsfFb) crsfFb.style.display = (m.in_progress ? '' : 'none');
-  }
+  // `flash` WS messages were consumed by the old tab-crsf flash-in-progress
+  // banner (removed in the Option A merge). The primary Flash card polls
+  // /api/flash/status directly, so no WS handler is needed here.
 }
 
 // Theme — restore from localStorage (dark is default)
