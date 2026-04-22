@@ -172,6 +172,20 @@ struct ReceiverInfo {
 };
 Result receiverInfo(const Config &cfg, ReceiverInfo *out);
 
+// Read + modify + write OTADATA in a SINGLE Serial1 session. RX must be in
+// ROM DFU (or in-app stub at matching baud). Reads both 32 B sectors at
+// 0xe000/0xf000, computes a new seq so that `desired_slot` boots next,
+// writes the new record into the lower-seq sector (alternating-sector
+// algorithm per esp-idf OTA). Returns the seq actually written plus the
+// sector offset for diagnostics.
+//
+// Combines read + write in one session because doing two separate
+// ESPFlasher::readFlash + ESPFlasher::flash calls glitches the ROM
+// autobauder (Serial1.end/begin cycle between them) and causes a spurious
+// "No sync" on the second SLIP handshake.
+Result otadataSelect(const Config &cfg, int desired_slot,
+                     uint32_t *out_new_seq, uint32_t *out_target_offset);
+
 const char* errorString(Result r);
 
 } // namespace ESPFlasher

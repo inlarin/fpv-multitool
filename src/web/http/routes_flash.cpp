@@ -1301,73 +1301,30 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
         cfg.baud_rate = 115200;
 
-        // 1) Read both OTADATA sectors in ONE Serial1 session via receiverInfo().
-        // Two separate readFlash() calls here used to glitch the ROM's autobaud
-        // lock between begin()/end() cycles — producing "readFlash failed both
-        // sectors" even when the RX was clearly in DFU. receiverInfo() does a
-        // single sync + spi_attach + spi_set_params + two readFlashInSession
-        // calls, which survives the inter-read interval.
-        ESPFlasher::ReceiverInfo rinfo;
-        if (ESPFlasher::receiverInfo(cfg, &rinfo) != ESPFlasher::FLASH_OK || !rinfo.otadata_ok) {
-            PinPort::release(PinPort::PORT_B);
-            req->send(500, "text/plain",
-                "readFlash failed both sectors — is RX in DFU? (hold BOOT, power-cycle)");
-            return;
-        }
-        uint32_t seq0 = rinfo.otadata[0].read_ok ? rinfo.otadata[0].seq : 0xFFFFFFFF;
-        uint32_t seq1 = rinfo.otadata[1].read_ok ? rinfo.otadata[1].seq : 0xFFFFFFFF;
-        uint32_t max_seq = 0;
-        if (seq0 != 0xFFFFFFFF) max_seq = seq0;
-        if (seq1 != 0xFFFFFFFF && seq1 > max_seq) max_seq = seq1;
-
-        // Choose new_seq to select target slot. If desired parity already
-        // matches current max, bump by 1; otherwise bump by 2.
-        uint32_t new_seq = max_seq + 1;
-        int current_selected_slot = ((new_seq - 1) & 1);
-        if (current_selected_slot != slot) new_seq++;
-        // Safety: never allow wrap-around (near UINT32_MAX = probably corrupt)
-        if (new_seq == 0 || new_seq > 0x7fffffff) {
-            PinPort::release(PinPort::PORT_B);
-            req->send(500, "text/plain", "OTADATA seq out of range");
-            return;
-        }
-
-        // Build new record: seq (4), label (20 zeros), state=0xFFFFFFFF (4),
-        // crc (4) = crc32_le init 0xFFFFFFFF over 4-byte seq.
-        uint8_t rec[32];
-        memset(rec, 0, 32);
-        *(uint32_t*)&rec[0] = new_seq;
-        *(uint32_t*)&rec[24] = 0xFFFFFFFF;
-        // CRC32-LE with init 0xFFFFFFFF — standard ethernet/zlib polynomial.
-        uint32_t crc = 0xFFFFFFFF;
-        for (int j = 0; j < 4; j++) {
-            crc ^= rec[j];
-            for (int k = 0; k < 8; k++) {
-                crc = (crc >> 1) ^ (0xEDB88320u & (-(int32_t)(crc & 1)));
-            }
-        }
-        crc ^= 0xFFFFFFFF;
-        *(uint32_t*)&rec[28] = crc;
-
-        // Write to sector that currently holds the LOWER seq (alternating
-        // writes = standard ESP-IDF OTA behaviour, preserves rollback).
-        uint32_t target_offset = (seq0 <= seq1) ? 0xe000 : 0xf000;
-        cfg.flash_offset = target_offset;
-        ESPFlasher::Result wr = ESPFlasher::flash(cfg, rec, 32);
-
+        // All-in-one session: read + compute + write. Doing read (via
+        // receiverInfo) and write (via flash) as SEPARATE ESPFlasher calls
+        // glitches the ROM autobauder between Serial1.end/begin cycles and
+        // causes a spurious "No sync" on the write's FLASH_BEGIN. This helper
+        // keeps one session open for the whole transaction.
+        uint32_t new_seq = 0, target_offset = 0;
+        ESPFlasher::Result r = ESPFlasher::otadataSelect(cfg, slot, &new_seq, &target_offset);
         PinPort::release(PinPort::PORT_B);
-
-        if (wr != ESPFlasher::FLASH_OK) {
-            req->send(500, "text/plain",
-                String("OTADATA write failed: ") + ESPFlasher::errorString(wr));
+        if (r != ESPFlasher::FLASH_OK) {
+            const char *msg =
+                r == ESPFlasher::FLASH_ERR_NO_SYNC      ? "No sync — is RX in DFU? (hold BOOT + power-cycle)" :
+                r == ESPFlasher::FLASH_ERR_READ_FAILED  ? "OTADATA read failed — RX flash chip unresponsive" :
+                r == ESPFlasher::FLASH_ERR_BEGIN_FAILED ? "FLASH_BEGIN rejected during write" :
+                r == ESPFlasher::FLASH_ERR_WRITE_FAILED ? "FLASH_DATA rejected during write" :
+                                                          ESPFlasher::errorString(r);
+            req->send(500, "text/plain", msg);
             return;
         }
-
         char msg[160];
         snprintf(msg, sizeof(msg),
             "OTADATA updated: seq=%u written to sector @0x%x -> boots app%d on next power-cycle",
             (unsigned)new_seq, (unsigned)target_offset, slot);
         req->send(200, "text/plain", msg);
+        return;
     });
 
     s_server->on("/api/otadata/status", HTTP_GET, [](AsyncWebServerRequest *req) {

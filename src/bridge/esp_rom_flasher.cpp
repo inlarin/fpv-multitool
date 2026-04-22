@@ -894,6 +894,76 @@ Result sendCrsfReboot(const Config &cfg) {
     return FLASH_OK;
 }
 
+// OTADATA read + write within a single Serial1 session. Two separate
+// readFlash + flash calls glitch the ROM autobauder-lock between end/begin
+// cycles — the write's SYNC then fails with "No sync" despite the read
+// having just succeeded. This helper sends sync + spi_attach + spi_set_params
+// ONCE, reads both 32 B OTADATA sectors via READ_FLASH_SLOW, computes the
+// new ota_seq for the desired slot, then does FLASH_BEGIN + FLASH_DATA +
+// FLASH_END on the lower-seq sector — all without closing Serial1.
+//
+// On ESP32-C3, FLASH_END with reboot=1 makes the ROM reboot into app. The
+// caller gets the chosen seq / sector back for logging.
+Result otadataSelect(const Config &cfg, int desired_slot,
+                     uint32_t *out_new_seq, uint32_t *out_target_offset) {
+    if (!cfg.uart || (desired_slot != 0 && desired_slot != 1)) return FLASH_ERR_INVALID_INPUT;
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(4096);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(100);
+
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    spiAttach();
+    spiSetParams(0x400000);
+
+    // Read both sectors in-session.
+    uint8_t sec0[32] = {0}, sec1[32] = {0};
+    bool ok0 = readFlashInSession(0xe000, 32, sec0);
+    bool ok1 = readFlashInSession(0xf000, 32, sec1);
+    if (!ok0 && !ok1) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
+
+    uint32_t seq0 = ok0 ? *(uint32_t*)&sec0[0] : 0xFFFFFFFF;
+    uint32_t seq1 = ok1 ? *(uint32_t*)&sec1[0] : 0xFFFFFFFF;
+    uint32_t max_seq = 0;
+    if (seq0 != 0xFFFFFFFF) max_seq = seq0;
+    if (seq1 != 0xFFFFFFFF && seq1 > max_seq) max_seq = seq1;
+
+    // Choose new_seq so that (new_seq-1)&1 == desired_slot. Bump by 1 or 2.
+    uint32_t new_seq = max_seq + 1;
+    int cur = (int)((new_seq - 1) & 1);
+    if (cur != desired_slot) new_seq++;
+    if (new_seq == 0 || new_seq > 0x7fffffff) { s_uart->end(); return FLASH_ERR_INVALID_INPUT; }
+
+    // Build 32 B OTADATA record: [seq:4][label:20 zeros][state:4=0xffffffff][crc32:4]
+    uint8_t rec[32];
+    memset(rec, 0, 32);
+    *(uint32_t*)&rec[0]  = new_seq;
+    *(uint32_t*)&rec[24] = 0xFFFFFFFF;
+    uint32_t crc = 0xFFFFFFFF;
+    for (int j = 0; j < 4; j++) {
+        crc ^= rec[j];
+        for (int k = 0; k < 8; k++) crc = (crc >> 1) ^ (0xEDB88320u & (-(int32_t)(crc & 1)));
+    }
+    crc ^= 0xFFFFFFFF;
+    *(uint32_t*)&rec[28] = crc;
+
+    // Write to the sector with the LOWER seq (alternating-sector spec).
+    uint32_t target_offset = (seq0 <= seq1) ? 0xe000 : 0xf000;
+    if (out_new_seq)       *out_new_seq       = new_seq;
+    if (out_target_offset) *out_target_offset = target_offset;
+
+    // FLASH_BEGIN for 32 bytes at target_offset. Then one FLASH_DATA block
+    // (32 bytes, padded to 4 KB with 0xFF), then FLASH_END(reboot=1).
+    if (!flashBegin(32, target_offset)) { s_uart->end(); return FLASH_ERR_BEGIN_FAILED; }
+    if (!flashData(rec, 32, 0))         { s_uart->end(); return FLASH_ERR_WRITE_FAILED; }
+    // reboot=true so RX boots into the newly-selected app partition.
+    flashEnd(true);
+
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Shared CRSF CRC8-DVB-S2 (poly 0xD5, init 0) over [data..data+n).
 static uint8_t crsfCrc8(const uint8_t *data, size_t n) {
     uint8_t c = 0;
