@@ -7,8 +7,6 @@
 #include "battery/dji_battery.h"
 #include "battery/smbus.h"
 #include "motor/dshot.h"
-#include "motor/blheli_onewire.h"
-#include "blheli/blheli_4way.h"
 #include "servo/servo_pwm.h"
 #include "bridge/esp_rom_flasher.h"
 #include "bridge/firmware_unpack.h"
@@ -1261,41 +1259,14 @@ void WebServer::start() {
         req->send(200, "application/json", out);
     });
 
-    // ===== BLHeli 4way passthrough (TCP server on :4321) =====
-    s_server->on("/api/esc/4way/start", HTTP_POST, [](AsyncWebServerRequest *req) {
-        BLHeli4Way::start(SIGNAL_OUT);
-        req->send(200, "text/plain", "4way server started on port 4321");
-    });
-    s_server->on("/api/esc/4way/stop", HTTP_POST, [](AsyncWebServerRequest *req) {
-        BLHeli4Way::stop();
-        req->send(200, "text/plain", "stopped");
-    });
-    s_server->on("/api/esc/4way/status", HTTP_GET, [](AsyncWebServerRequest *req) {
-        const auto &st = BLHeli4Way::status();
-        JsonDocument d;
-        d["running"]         = BLHeli4Way::isRunning();
-        d["connected"]       = st.clientConnected;
-        d["commands"]        = st.commandsHandled;
-        d["escReadBytes"]    = st.escReadBytes;
-        d["escWriteBytes"]   = st.escWriteBytes;
-        d["escErrors"]       = st.escErrors;
-        d["lastCmdName"]     = st.lastCmdName;
-        String out; serializeJson(d, out);
-        req->send(200, "application/json", out);
-    });
-
-    // ===== BLHeli ESC probe (early / skeleton) =====
-    s_server->on("/api/esc/probe", HTTP_POST, [](AsyncWebServerRequest *req) {
-        BLHeliInfo info;
-        bool ok = BLHeli::probeInfo(SIGNAL_OUT, &info, 2000);
-        JsonDocument d;
-        d["detected"] = info.detected;
-        d["firmwareName"] = info.firmwareName;
-        d["ok"] = ok;
-        d["note"] = "Full BLHeli 4way passthrough not yet implemented — probe only checks presence";
-        String out; serializeJson(d, out);
-        req->send(200, "application/json", out);
-    });
+    // BLHeli 4way passthrough + OneWire ESC probe were removed in v0.28.3.
+    // 4way TCP server only forwarded commands to a stub OneWire bit-bang
+    // that was never timing-calibrated on real ESC silicon — it returned
+    // 0xFF for nearly every command and misled users into thinking
+    // BLHeliSuite32 was talking to their ESC. KISS / BLHeli_32 ESC
+    // telemetry decoding (read-only, /api/esc/telem/state) is still here
+    // and works. If 4way passthrough is needed in the future, redo from
+    // scratch with bench-validated bit-bang timing.
 
     // ===== Servo state + sweep recorder =====
     s_server->on("/api/servo/state", HTTP_GET, [](AsyncWebServerRequest *req) {

@@ -321,23 +321,6 @@ button.mode-blocked:hover { opacity: 1; }
         <button onclick="motor3DOff()">3D OFF</button>
       </div>
       <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
-      <div class="row"><span class="label">ESC tools:</span></div>
-      <div class="warning" style="font-size:11px">
-        Подключи signal-wire ESC к GPIO 2, GND, 5V (BEC). Для BLHeli passthrough
-        запусти TCP server и в BLHeliSuite32 укажи <b>Interface: 4way TCP</b>,
-        адрес <span id="blhServerAddr" style="color:var(--accent)">&lt;board-IP&gt;</span>:4321.
-        OneWire bit-bang пока stub — часть команд возвращает 0xFF (нужны реальные тесты с железом).
-      </div>
-      <div class="grid">
-        <button onclick="escProbe()">ESC Probe</button>
-        <button onclick="blh4wayStart()" class="success">Start 4way</button>
-      </div>
-      <div class="grid">
-        <button onclick="blh4wayStatus()">Status</button>
-        <button onclick="blh4wayStop()" class="danger">Stop 4way</button>
-      </div>
-      <div id="escResult" style="font-family:monospace;font-size:11px;margin-top:6px;color:var(--text-dim)"></div>
-      <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
       <div class="row"><span class="label">ESC Telemetry (KISS / BLHeli_32):</span></div>
       <div class="warning" style="font-size:11px">
         ESC telemetry wire (single byte UART @ 115200) подключи к <b>GPIO 44</b> (ELRS_RX),
@@ -1164,7 +1147,7 @@ button.mode-blocked:hover { opacity: 1; }
       <button data-device="battery"  onclick="setupPickDevice('battery')">🔋 Battery<br><small style="color:#888">DJI / SBS SMBus</small></button>
       <button data-device="receiver" onclick="setupPickDevice('receiver')">📡 Receiver<br><small style="color:#888">ELRS / CRSF UART</small></button>
       <button data-device="motor"    onclick="setupPickDevice('motor')">⚡ Motor/Servo<br><small style="color:#888">ESC DShot / PWM</small></button>
-      <button data-device="advanced" onclick="setupPickDevice('advanced')">🔌 Advanced<br><small style="color:#888">PPM / 4way / raw</small></button>
+      <button data-device="advanced" onclick="setupPickDevice('advanced')">🔌 Advanced<br><small style="color:#888">PPM / raw / sniffer</small></button>
       <button data-device="idle"     onclick="setupPickDevice('idle')">💤 Idle<br><small style="color:#888">ничего не используется</small></button>
     </div>
 
@@ -1257,7 +1240,7 @@ button.mode-blocked:hover { opacity: 1; }
       <code>I2C</code> — SDA=GPIO 11, SCL=GPIO 10 — DJI/SBS battery, CP2112 USB2I2C<br>
       <code>UART</code> — TX=GPIO 11, RX=GPIO 10 — ELRS Flash, CRSF, USB2TTL<br>
       <code>PWM</code> — signal=GPIO 11 — Servo, Motor DShot, ESC test<br>
-      <code>GPIO</code> — raw bit-bang — RC Sniffer (PPM), BLHeli passthrough
+      <code>GPIO</code> — raw bit-bang — RC Sniffer (PPM)
     </div>
   </div>
   <div class="card" style="background:var(--bg);border:1px dashed var(--border)">
@@ -2390,42 +2373,6 @@ function battSnapshot() {
     a.href = URL.createObjectURL(blob);
     a.download = 'battery_snapshot_' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.json';
     a.click();
-  });
-}
-
-// === ESC ===
-function blh4wayStart() {
-  fetch('/api/esc/4way/start', {method:'POST'}).then(r=>r.text()).then(t=>{
-    const el = document.getElementById('escResult');
-    el.textContent = t + '\n\nBLHeliSuite32 setup:\n  Interface: 4way TCP\n  Host: ' + location.hostname + '\n  Port: 4321\n  Then Connect → ESC index 0';
-    el.style.color = 'var(--status-on)';
-    document.getElementById('blhServerAddr').textContent = location.hostname;
-  });
-}
-function blh4wayStop() {
-  fetch('/api/esc/4way/stop', {method:'POST'}).then(r=>r.text()).then(t=>{
-    document.getElementById('escResult').textContent = t;
-    document.getElementById('escResult').style.color = 'var(--text-dim)';
-  });
-}
-function blh4wayStatus() {
-  fetch('/api/esc/4way/status').then(r=>r.json()).then(j=>{
-    const el = document.getElementById('escResult');
-    el.textContent = 'running=' + j.running + ' connected=' + j.connected +
-      '\ncommands=' + j.commands + ' lastCmd=' + j.lastCmdName +
-      '\nESC read=' + j.escReadBytes + 'B write=' + j.escWriteBytes + 'B errors=' + j.escErrors;
-    el.style.color = 'var(--text)';
-  });
-}
-function escProbe() {
-  const el = document.getElementById('escResult');
-  el.textContent = 'Probing...';
-  fetch('/api/esc/probe', {method:'POST'}).then(r=>r.json()).then(j=>{
-    let txt = j.detected ? '[OK] ESC detected' : '[NO] No ESC on signal wire';
-    if (j.firmwareName && j.firmwareName !== 'unknown') txt += ' | FW: ' + j.firmwareName;
-    if (j.note) txt += '\n' + j.note;
-    el.textContent = txt;
-    el.style.color = j.detected ? 'var(--status-on)' : 'var(--warning-text)';
   });
 }
 
