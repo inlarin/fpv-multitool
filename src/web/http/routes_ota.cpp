@@ -1,7 +1,15 @@
 // AUTO-REFACTORED from web_server.cpp 2026-04-21. Plate self-update (OTA)
-// endpoints — /api/ota/{info,check,pull,abort} plus multipart upload at
-// /api/ota. Uses ESP32 Arduino Update + HTTPUpdate over WiFiClientSecure
-// for the GitHub-release pull path.
+// endpoints — /api/ota/{info,check,pull,abort,upload}. Multipart upload
+// MUST live under a sub-path: ESPAsyncWebServer's AsyncCallbackWebHandler
+// matches `/api/ota` against ANY URL starting with `/api/ota/` (line 305 of
+// WebHandlers.cpp — kept for `/users/{id}` style routes), so registering
+// `/api/ota` first would shadow `/api/ota/abort`, `/api/ota/pull`, etc.
+// The pull path runs the download manually instead of httpUpdate.update():
+// httpUpdate's redirect-following + chunked TE handling corrupts the last
+// bytes when GitHub redirects to objects.githubusercontent.com — the
+// resulting image fails esp_ota_set_boot_partition() with "Could Not
+// Activate The Firmware" even though byte-for-byte the upload of the same
+// file works. We download into PSRAM then feed Update.write() in one go.
 #include "routes_ota.h"
 
 #include <Arduino.h>
@@ -10,9 +18,9 @@
 #include <Update.h>
 #include <esp_ota_ops.h>
 #include <HTTPClient.h>
-#include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 
 #if __has_include("core/build_info.h")
   #include "core/build_info.h"
@@ -126,44 +134,123 @@ void registerRoutesOta(AsyncWebServer *s_server) {
         s_otaPull.url      = s_latestAssetUrl;
 
         xTaskCreate([](void *) {
+            // Two-stage download:
+            //   1. HTTPClient::GET → buffer entire .bin in PSRAM
+            //   2. Update.begin() + Update.write(buf, size) + Update.end()
+            // This avoids httpUpdate.update()'s streaming-with-redirect path
+            // which empirically corrupts the last few bytes when the
+            // GitHub redirect lands on objects.githubusercontent.com — the
+            // image then fails esp_ota_set_boot_partition() at activation
+            // even though SHA256 of the served file is correct.
             WiFiClientSecure client;
             client.setInsecure();
+            HTTPClient https;
+            https.setUserAgent("esp32-fpv-multitool");
+            https.setTimeout(15000);
+            https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
 
-            httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-            httpUpdate.rebootOnUpdate(false);
-            httpUpdate.onProgress([](int cur, int total) {
-                if (total > 0) s_otaPull.progress = (int)((int64_t)cur * 100 / total);
-            });
-            httpUpdate.onStart([]() { s_otaPull.message = "downloading"; });
-            httpUpdate.onEnd  ([]() { s_otaPull.message = "verifying"; });
-            httpUpdate.onError([](int err) {
-                s_otaPull.message = String("error ") + err + ": " + httpUpdate.getLastErrorString();
-            });
-
-            t_httpUpdate_return ret = httpUpdate.update(client, s_otaPull.url);
-            switch (ret) {
-                case HTTP_UPDATE_FAILED:
-                    s_otaPull.message = String("FAILED: ") + httpUpdate.getLastErrorString();
-                    s_otaPull.running = false;
-                    break;
-                case HTTP_UPDATE_NO_UPDATES:
-                    s_otaPull.message = "no update";
-                    s_otaPull.running = false;
-                    break;
-                case HTTP_UPDATE_OK:
-                    s_otaPull.message = "OK — rebooting";
-                    s_otaPull.progress = 100;
-                    vTaskDelay(pdMS_TO_TICKS(500));
-                    ESP.restart();
-                    break;
+            s_otaPull.message = "connecting";
+            if (!https.begin(client, s_otaPull.url)) {
+                s_otaPull.message = "FAILED: HTTP begin";
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
             }
+
+            int code = https.GET();
+            s_otaPull.http_code = code;
+            if (code != 200) {
+                s_otaPull.message = String("FAILED: HTTP ") + code;
+                https.end();
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+
+            int len = https.getSize();
+            if (len <= 0 || len > 4 * 1024 * 1024) {
+                s_otaPull.message = String("FAILED: bad Content-Length=") + len;
+                https.end();
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+
+            uint8_t *buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+            if (!buf) {
+                s_otaPull.message = "FAILED: PSRAM alloc";
+                https.end();
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+
+            s_otaPull.message = "downloading";
+            WiFiClient *stream = https.getStreamPtr();
+            size_t got = 0;
+            uint32_t deadline = millis() + 90000;  // 90s for 1.5 MB on flaky links
+            while (got < (size_t)len && millis() < deadline) {
+                int avail = stream->available();
+                if (avail <= 0) { delay(2); continue; }
+                size_t want = (size_t)len - got;
+                if ((size_t)avail < want) want = avail;
+                if (want > 4096) want = 4096;
+                int n = stream->readBytes(buf + got, want);
+                if (n > 0) got += n;
+                s_otaPull.progress = (int)((int64_t)got * 100 / len);
+            }
+            https.end();
+
+            if (got != (size_t)len) {
+                heap_caps_free(buf);
+                char m[64];
+                snprintf(m, sizeof(m), "FAILED: short read %u/%d", (unsigned)got, len);
+                s_otaPull.message = m;
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+
+            s_otaPull.message = "writing";
+            if (!Update.begin(got, U_FLASH)) {
+                heap_caps_free(buf);
+                s_otaPull.message = String("FAILED begin: ") + Update.errorString();
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+            size_t written = Update.write(buf, got);
+            heap_caps_free(buf);
+            if (written != got) {
+                s_otaPull.message = String("FAILED write: ") + Update.errorString();
+                Update.abort();
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+
+            s_otaPull.message = "activating";
+            if (!Update.end(true)) {
+                s_otaPull.message = String("FAILED activate: ") + Update.errorString();
+                s_otaPull.running = false;
+                vTaskDelete(nullptr);
+                return;
+            }
+
+            s_otaPull.message = "OK — rebooting";
+            s_otaPull.progress = 100;
+            vTaskDelay(pdMS_TO_TICKS(500));
+            ESP.restart();
             vTaskDelete(nullptr);
         }, "otaPull", 8192, nullptr, 1, nullptr);
 
         req->send(202, "text/plain", "Pull started — poll /api/ota/info");
     });
 
-    s_server->on("/api/ota", HTTP_POST,
+    // POST /api/ota/upload — multipart firmware.bin → flash + reboot.
+    // (NOT `/api/ota` — that path would shadow every other /api/ota/* route
+    // because of AsyncCallbackWebHandler's prefix-match rule.)
+    s_server->on("/api/ota/upload", HTTP_POST,
         [](AsyncWebServerRequest *req) {
             // `otaBeginOk` is set in the upload handler — if begin() failed
             // we must report FAIL even if `Update.hasError()` happens to be

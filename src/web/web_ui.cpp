@@ -4492,7 +4492,7 @@ function otaUpload() {
   fd.append('update', f, f.name);
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/ota');
+  xhr.open('POST', '/api/ota/upload');
   const bar = document.getElementById('otaBar');
   const stage = document.getElementById('otaStage');
   const res = document.getElementById('otaResult');
