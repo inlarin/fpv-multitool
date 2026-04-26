@@ -1130,6 +1130,16 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
     // app-tail rodata for the ELRSOPTS JSON block. Total wire: ~73 KB hex.
     // Takes ~4-6 s at 115200 via CMD_READ_FLASH_SLOW.
     s_server->on("/api/elrs/identity/fast", HTTP_POST, [](AsyncWebServerRequest *req) {
+        // Optional ?spiffs=1 — adds the SPIFFS partition region (default
+        // ELRS layout offset 0x3d0000, 192 KB) to the same readFlashMulti
+        // call. Adds ~16 s at 12 KB/s but extracts options.json (TX UID,
+        // runtime WiFi STA creds) — Phase 1c stretch. Adding it to the
+        // SAME readFlashMulti rather than a separate call avoids BUG-ID1
+        // (the ROM autobauder won't re-sync after Serial1 cycles within
+        // the same RX boot session).
+        bool wantSpiffs = req->hasParam("spiffs", true)
+            ? (req->getParam("spiffs", true)->value().toInt() != 0)
+            : false;
         bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "identity_fast")) {
             crsfResumeAfterPortB(_crsf);
@@ -1160,7 +1170,14 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         const uint32_t TAIL_SZ   = 0x2000;   // 8 KB
         const uint32_t APP0_END  = 0x1f0000; // Layout A — Phase M1 will replace
         const uint32_t APP1_END  = 0x3d0000; //            from partition table
-        const uint32_t BUF_SZ    = PT_SZ + NVS_OTA + 2 * TAIL_SZ;
+        // Default ELRS RX (ESP32-C3 4 MB) places SPIFFS / LittleFS right
+        // after app1. 192 KB covers the typical layout; if the partition
+        // is smaller we just over-read empty 0xFF bytes (no harm). For
+        // non-default layouts the extracted JSON parser will simply find
+        // nothing — frontend falls back to "options.json not found".
+        const uint32_t SPIFFS_OFF = 0x3d0000;
+        const uint32_t SPIFFS_SZ  = wantSpiffs ? 0x30000 : 0;  // 192 KB or off
+        const uint32_t BUF_SZ    = PT_SZ + NVS_OTA + 2 * TAIL_SZ + SPIFFS_SZ;
         uint8_t *buf = (uint8_t *)heap_caps_malloc(BUF_SZ, MALLOC_CAP_SPIRAM);
         if (!buf) {
             PinPort::release(PinPort::PORT_B);
@@ -1169,13 +1186,15 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             return;
         }
 
-        ESPFlasher::ReadRegion regions[4] = {
+        ESPFlasher::ReadRegion regions[5] = {
             { PT_OFF,            PT_SZ,   buf },
             { NVS_OFF,           NVS_OTA, buf + PT_SZ },
             { APP0_END - TAIL_SZ, TAIL_SZ, buf + PT_SZ + NVS_OTA },
             { APP1_END - TAIL_SZ, TAIL_SZ, buf + PT_SZ + NVS_OTA + TAIL_SZ },
+            { SPIFFS_OFF,        SPIFFS_SZ, buf + PT_SZ + NVS_OTA + 2 * TAIL_SZ },
         };
-        ESPFlasher::Result r = ESPFlasher::readFlashMulti(cfg, regions, 4);
+        size_t n_regions = wantSpiffs ? 5 : 4;
+        ESPFlasher::Result r = ESPFlasher::readFlashMulti(cfg, regions, n_regions);
         if (r != ESPFlasher::FLASH_OK) {
             heap_caps_free(buf);
             PinPort::release(PinPort::PORT_B);
@@ -1210,16 +1229,19 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         // in `index` + Ctx (the PSRAM buf). When we emit the final byte, we
         // free the Ctx inside the generator.
         struct Ctx { uint8_t *buf; int active_slot; uint32_t max_seq;
-                     uint32_t app0_tail_off; uint32_t app1_tail_off; };
+                     uint32_t app0_tail_off; uint32_t app1_tail_off;
+                     uint32_t spiffs_off; uint32_t spiffs_sz; };
         Ctx *ctx = new Ctx{ buf, active_slot, max_seq,
-                            APP0_END - TAIL_SZ, APP1_END - TAIL_SZ };
+                            APP0_END - TAIL_SZ, APP1_END - TAIL_SZ,
+                            SPIFFS_OFF, SPIFFS_SZ };
         AsyncWebServerResponse *resp = req->beginChunkedResponse("text/plain",
             [ctx](uint8_t *dst, size_t max_len, size_t index) -> size_t {
                 const uint32_t PT_SZ_L   = 0x1000;
                 const uint32_t NVS_SZ_L  = 0x5000;
                 const uint32_t OTA_SZ_L  = 0x2000;
                 const uint32_t TAIL_SZ_L = 0x2000;
-                char hdr_pt[96], hdr_nvs[96], hdr_ota[96], hdr_a0[96], hdr_a1[96];
+                const uint32_t SP_SZ_L   = ctx->spiffs_sz;  // 0 when ?spiffs not requested
+                char hdr_pt[96], hdr_nvs[96], hdr_ota[96], hdr_a0[96], hdr_a1[96], hdr_sp[96];
                 int hp = snprintf(hdr_pt,  sizeof(hdr_pt),
                     "# section=PT off=0x8000 size=0x1000\n");
                 int hn = snprintf(hdr_nvs, sizeof(hdr_nvs),
@@ -1233,6 +1255,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 int ha1 = snprintf(hdr_a1, sizeof(hdr_a1),
                     "\n# section=APP1TAIL off=0x%x size=0x2000\n",
                     (unsigned)ctx->app1_tail_off);
+                int hsp = SP_SZ_L ? snprintf(hdr_sp, sizeof(hdr_sp),
+                    "\n# section=SPIFFS off=0x%x size=0x%x\n",
+                    (unsigned)ctx->spiffs_off, (unsigned)SP_SZ_L) : 0;
                 // Running offsets through the response stream.
                 const size_t E_pt_h   = hp;
                 const size_t E_pt     = E_pt_h  + PT_SZ_L   * 2;
@@ -1244,7 +1269,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 const size_t E_a0     = E_a0_h  + TAIL_SZ_L * 2;
                 const size_t E_a1_h   = E_a0    + ha1;
                 const size_t E_a1     = E_a1_h  + TAIL_SZ_L * 2;
-                const size_t TOTAL    = E_a1 + 1;
+                const size_t E_sp_h   = E_a1    + hsp;
+                const size_t E_sp     = E_sp_h  + SP_SZ_L   * 2;
+                const size_t TOTAL    = (SP_SZ_L ? E_sp : E_a1) + 1;
 
                 // Buffer byte offsets per section:
                 //   PT      @ buf + 0
@@ -1252,10 +1279,12 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 //   OTADATA @ buf + PT_SZ_L + NVS_SZ_L
                 //   APP0    @ buf + PT_SZ_L + NVS_SZ_L + OTA_SZ_L
                 //   APP1    @ buf + PT_SZ_L + NVS_SZ_L + OTA_SZ_L + TAIL_SZ_L
+                //   SPIFFS  @ buf + PT_SZ_L + NVS_SZ_L + OTA_SZ_L + 2*TAIL_SZ_L
                 const size_t B_nvs = PT_SZ_L;
                 const size_t B_ota = B_nvs + NVS_SZ_L;
                 const size_t B_a0  = B_ota + OTA_SZ_L;
                 const size_t B_a1  = B_a0  + TAIL_SZ_L;
+                const size_t B_sp  = B_a1  + TAIL_SZ_L;
 
                 if (index >= TOTAL) {
                     heap_caps_free(ctx->buf);
@@ -1301,6 +1330,13 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                     } else if (pos < E_a1) {
                         size_t hp2 = pos - E_a1_h;
                         uint8_t b = ctx->buf[B_a1 + hp2/2];
+                        dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
+                    } else if (SP_SZ_L && pos < E_sp_h) {
+                        size_t take = min(E_sp_h - pos, remaining);
+                        memcpy(dst + out, hdr_sp + (pos - E_a1), take); out += take;
+                    } else if (SP_SZ_L && pos < E_sp) {
+                        size_t hp2 = pos - E_sp_h;
+                        uint8_t b = ctx->buf[B_sp + hp2/2];
                         dst[out++] = (hp2 & 1) ? HEX_TAB[b & 0xf] : HEX_TAB[b >> 4];
                     } else {
                         dst[out++] = '\n';

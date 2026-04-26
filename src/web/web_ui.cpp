@@ -729,8 +729,20 @@ button.mode-blocked:hover { opacity: 1; }
     <small id="identPlaceholder" style="display:block;color:var(--text-dim);font-size:11px;margin:4px 0 8px">
       Положи RX в DFU (зажми BOOT + power-cycle), потом нажми кнопку ниже.
     </small>
-    <button onclick="identRead()" id="identReadBtn" data-need-mode="dfu" style="width:100%">⬇ Read identity from device</button>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:6px">
+      <button onclick="identRead(false)" id="identReadBtn" data-need-mode="dfu">⬇ Read identity from device</button>
+      <button onclick="identRead(true)" id="identReadThoroughBtn" data-need-mode="dfu" title="Adds SPIFFS partition read (+~16s) — extracts TX UID + runtime WiFi STA creds from /options.json">+ SPIFFS</button>
+    </div>
     <div id="identStatus" style="margin-top:6px;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
+    <div class="row" id="identTxUidRow" style="display:none"><span class="label">TX UID (paired):</span>
+      <span class="value" id="identTxUid" style="font-family:monospace">—</span>
+    </div>
+    <div class="row" id="identStaSsidRow" style="display:none"><span class="label">STA SSID (runtime):</span>
+      <span class="value" id="identStaSsid" style="font-family:monospace">—</span>
+    </div>
+    <div class="row" id="identStaPassRow" style="display:none"><span class="label">STA password:</span>
+      <span class="value" id="identStaPass" style="font-family:monospace">—</span>
+    </div>
 
     <details style="margin-top:10px">
       <summary style="cursor:pointer;font-size:12px">🔧 Phrase ↔ UID converter (client-side MD5)</summary>
@@ -2649,13 +2661,21 @@ function _parsePartitionTable(bytes) {
   return parts;
 }
 
-async function identRead() {
+async function identRead(thorough) {
   const btn = document.getElementById('identReadBtn');
+  const btn2 = document.getElementById('identReadThoroughBtn');
   const st = document.getElementById('identStatus');
-  btn.disabled = true; btn.textContent = '⏳ Reading (~8 s)…';
-  st.textContent = 'Requesting partition table + NVS + OTADATA + both app tails via ROM DFU…';
+  const active = thorough ? btn2 : btn;
+  const origLabel = active.textContent;
+  btn.disabled = true; btn2.disabled = true;
+  active.textContent = thorough ? '⏳ Reading (~24 s)…' : '⏳ Reading (~8 s)…';
+  st.textContent = thorough
+    ? 'Requesting PT + NVS + OTADATA + both app tails + SPIFFS via ROM DFU…'
+    : 'Requesting partition table + NVS + OTADATA + both app tails via ROM DFU…';
   try {
-    const r = await fetch('/api/elrs/identity/fast', {method:'POST'});
+    const fd = new FormData();
+    if (thorough) fd.append('spiffs', '1');
+    const r = await fetch('/api/elrs/identity/fast', {method:'POST', body: thorough ? fd : undefined});
     const txt = await r.text();
     if (!r.ok) throw new Error(txt || ('HTTP ' + r.status));
     // Parse sectional response: header "# section=NAME off=... size=..." then
@@ -2774,6 +2794,58 @@ async function identRead() {
     }
     if (fork && window._rxProfile) window._rxProfile.fork = fork;
 
+    // Phase 1c: SPIFFS scan — extract /options.json runtime overrides.
+    // ELRS RX firmware writes a JSON file with the keys it cares about
+    // (wifi-ssid / wifi-password / uid / tlm-interval / etc). The file
+    // lives somewhere inside the ~192 KB partition; rather than parse the
+    // SPIFFS / LittleFS directory we scan the raw bytes for the key
+    // markers and extract the surrounding JSON object — same trick as
+    // the app-tail parser above. Hits in SPIFFS are RUNTIME values, so
+    // they take precedence over compile-time defaults from the app tail.
+    let txUid = null, staSsid = null, staPass = null;
+    if (sections.SPIFFS) {
+      const dec = new TextDecoder('utf-8', {fatal:false});
+      const sp = dec.decode(sections.SPIFFS.bytes);
+      const markers = ['"wifi-ssid"','"wifi-password"','"uid"'];
+      for (const m of markers) {
+        let from = 0;
+        while (from < sp.length) {
+          const mi = sp.indexOf(m, from);
+          if (mi < 0) break;
+          // Walk back to nearest '{' and forward to matching '}'.
+          let j = mi;
+          while (j > 0 && sp.charCodeAt(j) !== 123) j--;
+          let depth = 0, end = -1;
+          for (let k = j; k < Math.min(j + 4096, sp.length); k++) {
+            const c = sp.charCodeAt(k);
+            if (c === 123) depth++;
+            else if (c === 125) { depth--; if (depth === 0) { end = k + 1; break; } }
+          }
+          if (end < 0) { from = mi + m.length; continue; }
+          try {
+            const obj = JSON.parse(sp.slice(j, end));
+            if (obj['wifi-ssid'] && !staSsid) staSsid = obj['wifi-ssid'];
+            if (obj['wifi-password'] && !staPass) staPass = obj['wifi-password'];
+            if (Array.isArray(obj.uid) && obj.uid.length === 6 && !txUid) {
+              txUid = obj.uid.map(x => (x&0xff).toString(16).padStart(2,'0')).join(':').toUpperCase();
+            }
+            from = end;
+            break;  // first valid object with this marker is enough
+          } catch (e) {
+            from = mi + m.length;
+          }
+        }
+      }
+      // Show the new rows only when SPIFFS was actually scanned, even if
+      // some fields stayed empty (signals "we looked, nothing found").
+      document.getElementById('identTxUidRow').style.display = '';
+      document.getElementById('identStaSsidRow').style.display = '';
+      document.getElementById('identStaPassRow').style.display = '';
+      document.getElementById('identTxUid').textContent  = txUid  || '— (TX UID not in /options.json — RX bound at runtime?)';
+      document.getElementById('identStaSsid').textContent = staSsid || '— (no STA override — RX in AP mode)';
+      document.getElementById('identStaPass').textContent = staPass || '—';
+    }
+
     document.getElementById('identUid').textContent  = uid || '— (not bound / not found in NVS)';
     document.getElementById('identBound').textContent = bound || 'unknown';
     document.getElementById('identSsid').textContent = ssid || 'ExpressLRS RX  (compile-time default)';
@@ -2809,6 +2881,9 @@ async function identRead() {
           + `flash ${(window._rxProfile.flash_end/1048576).toFixed(1)} MB, `
           + `active slot: app${activeSlot})`;
     }
+    if (sections.SPIFFS) {
+      msg += `  · SPIFFS: ${(sections.SPIFFS.size/1024)|0} KB scanned`;
+    }
     st.textContent = msg;
     st.style.color = '#0f0';
     // Hide the "put RX in DFU" hint once we got a result.
@@ -2818,7 +2893,8 @@ async function identRead() {
     st.textContent = '✗ ' + (e.message || e);
     st.style.color = '#f66';
   } finally {
-    btn.disabled = false; btn.textContent = '⬇ Read identity from device';
+    btn.disabled = false; btn2.disabled = false;
+    active.textContent = origLabel;
   }
 }
 
