@@ -20,6 +20,7 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
+#include <MD5Builder.h>
 
 // Static state used by the dump endpoints. Inside a function-scope static so
 // lambdas capture it; moved out here verbatim from WebServer::start().
@@ -32,6 +33,48 @@ static const size_t MAX_FW_SIZE = 2 * 1024 * 1024;
 static void flashProgress(int pct, const char* stage) {
     WebState::flashState.progress_pct = pct;
     WebState::flashState.stage = stage;
+}
+
+// =====================================================================
+// CRSF auto-pause / resume helpers — every ELRS-or-OTADATA op that needs
+// Port B in UART mode must call crsfPauseForPortB() before acquire() and
+// crsfResumeAfterPortB(was_running) after release() (or on acquire fail).
+// State-changing ops (flash, dump, otadata_select, erase_region) skip the
+// resume — RX has rebooted/changed mode and stale CRSF would just confuse
+// the live monitor's "connected" state. Quick read-only ops (probe,
+// device_info, params, chip_info, recv_info, otadata_status) DO resume so
+// the user's live monitor session survives an incidental probe.
+//
+// Baud (420000) and inversion (WebState::crsf.inverted) match what
+// /api/crsf/start would do, so resume is bit-for-bit equivalent.
+// =====================================================================
+static bool crsfPauseForPortB() {
+    if (!CRSFService::isRunning()) return false;
+    Serial.println("[ELRS] CRSF service running — pausing for Port B");
+    CRSFService::end();
+    CRSFConfig::reset();
+    WebState::crsf.enabled = false;
+    PinPort::release(PinPort::PORT_B);
+    delay(50);  // settle
+    return true;
+}
+
+static void crsfResumeAfterPortB(bool was_running) {
+    if (!was_running) return;
+    // Best-effort: if Port B got grabbed by another consumer between
+    // release() above and here, log and leave CRSF stopped rather than
+    // block the response. User can hit Start again from the CRSF tab.
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf_resume")) {
+        Serial.println("[ELRS] CRSF resume: Port B busy — leaving stopped");
+        return;
+    }
+    CRSFService::begin(&Serial1,
+                       PinPort::rx_pin(PinPort::PORT_B),
+                       PinPort::tx_pin(PinPort::PORT_B),
+                       420000, WebState::crsf.inverted);
+    CRSFConfig::init();
+    WebState::crsf.enabled = true;
+    Serial.println("[ELRS] CRSF service resumed after Port B op");
 }
 
 // Non-static — declared in routes_flash.h as RoutesFlash::executeFlash()
@@ -92,20 +135,9 @@ void executeFlash() {
     Serial.printf("[Flash] Flashing %u bytes\n", fw_size);
     WebState::flashState.stage = "Starting";
 
-    // Auto-pause CRSF telemetry service if it was running — otherwise it
-    // holds Port B and we'd fail acquire below. User must manually Start
-    // again from the CRSF tab after the flash operation completes; we don't
-    // auto-restart because the RX is likely in a different state afterwards
-    // (rebooting into new firmware, etc).
-    bool crsf_was_running = CRSFService::isRunning();
-    if (crsf_was_running) {
-        Serial.println("[Flash] CRSF service was running — pausing for Port B");
-        CRSFService::end();
-        CRSFConfig::reset();
-        WebState::crsf.enabled = false;
-        PinPort::release(PinPort::PORT_B);
-        delay(50);  // settle
-    }
+    // RX state changes during flash (reboot into new firmware) — discard the
+    // resume signal. User restarts CRSF Live monitor manually after flash.
+    (void)crsfPauseForPortB();
 
     if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
         WebState::flashState.stage = "Failed";
@@ -164,8 +196,6 @@ void executeFlash() {
 
     ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size, samples, N_SAMPLES);
 
-    PinPort::release(PinPort::PORT_B);
-
     // Compare samples against local image on success.
     String verifyMsg;
     if (r == ESPFlasher::FLASH_OK) {
@@ -192,6 +222,44 @@ void executeFlash() {
             r = ESPFlasher::FLASH_ERR_WRITE_FAILED;
         }
     }
+
+    // Full-image MD5 verify on top of the 5-sample spot-check. Catches
+    // corruption between samples that the spot-check would miss. Reuses the
+    // open ROM session — must run BEFORE PinPort::release. ~3 s extra at
+    // 115200 for 1.2 MB; we already paid 30-60 s on the flash itself, so the
+    // overhead is in noise. On stub flash (via_stub=true) the SPI_FLASH_MD5
+    // command works the same — stub passes it through to ROM.
+    if (r == ESPFlasher::FLASH_OK) {
+        WebState::flashState.stage = "Verifying MD5";
+        uint8_t remote_md5[16];
+        ESPFlasher::Result mr = ESPFlasher::spiFlashMd5(
+            cfg, cfg.flash_offset, (uint32_t)fw_size, remote_md5);
+        if (mr == ESPFlasher::FLASH_OK) {
+            MD5Builder md5;
+            md5.begin();
+            md5.add((uint8_t*)fw_ptr, fw_size);
+            md5.calculate();
+            uint8_t local_md5[16];
+            md5.getBytes(local_md5);
+            if (memcmp(remote_md5, local_md5, 16) == 0) {
+                verifyMsg += " · MD5 ✓";
+            } else {
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    " · MD5 MISMATCH (local %02x%02x%02x… vs remote %02x%02x%02x…)",
+                    local_md5[0], local_md5[1], local_md5[2],
+                    remote_md5[0], remote_md5[1], remote_md5[2]);
+                verifyMsg += buf;
+                r = ESPFlasher::FLASH_ERR_WRITE_FAILED;
+            }
+        } else {
+            // MD5 read failed but samples passed — soft warning, don't fail.
+            verifyMsg += String(" · MD5 read failed (") +
+                         ESPFlasher::errorString(mr) + ")";
+        }
+    }
+
+    PinPort::release(PinPort::PORT_B);
 
     if (decompressed) free(decompressed);
 
@@ -230,7 +298,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(409, "text/plain", "flash in progress");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_rx_mode")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -291,6 +361,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
 
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
 
         JsonDocument d;
         d["mode"]    = mode;
@@ -325,7 +396,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(409, "text/plain", "flash in progress");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_device_info")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -337,6 +410,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::ElrsDeviceInfo info;
         ESPFlasher::Result r = ESPFlasher::crsfDevicePing(cfg, 300, &info);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         if (r != ESPFlasher::FLASH_OK || !info.ok) {
             req->send(500, "text/plain",
                 "No DEVICE_INFO reply — RX not in app (may be wifi/stub/dfu/silent)");
@@ -373,7 +447,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(409, "text/plain", "flash in progress");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_params")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -387,6 +463,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::ElrsDeviceInfo di;
         if (ESPFlasher::crsfDevicePing(cfg, 250, &di) != ESPFlasher::FLASH_OK || !di.ok) {
             PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
             req->send(500, "text/plain",
                 "DEVICE_PING failed — RX must be running the app (not DFU/WiFi)");
             return;
@@ -495,6 +572,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         rs->print("]}");
         req->send(rs);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
     });
 
     // Write one LUA parameter. Value encoded per type:
@@ -515,7 +593,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint8_t id   = (uint8_t)req->getParam("id",   true)->value().toInt();
         uint8_t type = (uint8_t)req->getParam("type", true)->value().toInt();
         String  vraw =          req->getParam("value",true)->value();
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_param_w")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -551,11 +631,13 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             }
             default:
                 PinPort::release(PinPort::PORT_B);
+                crsfResumeAfterPortB(_crsf);
                 req->send(400, "text/plain", "unsupported param type for write");
                 return;
         }
         ESPFlasher::crsfParamWrite(cfg, id, payload, payload_len);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         char msg[96];
         snprintf(msg, sizeof(msg), "WRITE id=%u type=%u len=%u value=%s",
                  id, type, payload_len, vraw.c_str());
@@ -570,7 +652,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(409, "text/plain", "flash in progress");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_bind")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -581,6 +665,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.baud_rate = 420000;
         ESPFlasher::sendCrsfBind(cfg);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         req->send(200, "text/plain", "CRSF 'bd' frame sent — RX in bind mode for 60 s");
     });
 
@@ -791,9 +876,15 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(500, "text/plain", "alloc failed — no PSRAM/heap for dump");
             return;
         }
+        // Pause CRSF before acquiring Port B. Long-running async op via xTask:
+        // resume only if acquire fails — once xTask owns the port, lambda
+        // returns and we can't safely resume CRSF until the dump completes.
+        // User restarts CRSF Live monitor manually after dump.
+        bool _crsf = crsfPauseForPortB();
         // Acquire Port B BEFORE flipping `running` so a failed acquire can't
         // leave the status endpoint reporting a non-existent dump as live.
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_dump")) {
+            crsfResumeAfterPortB(_crsf);
             free(s_dump.buf); s_dump.buf = nullptr;
             s_dump.error = "Port B busy — switch Setup to Receiver";
             req->send(409, "text/plain", s_dump.error);
@@ -875,7 +966,11 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(400, "text/plain", "range outside 4 MB flash");
             return;
         }
+        // Erase reaches into RX flash — RX is in DFU and will need power-cycle
+        // afterwards. Pause CRSF (no resume — RX state changes).
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "erase_region")) {
+            crsfResumeAfterPortB(_crsf);  // restore on the early-fail path only
             req->send(409, "text/plain", "Port B busy — switch Setup to Receiver");
             return;
         }
@@ -909,7 +1004,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint32_t ms = req->hasParam("ms", true)
             ? strtoul(req->getParam("ms", true)->value().c_str(), nullptr, 0) : 3000;
         if (ms > 8000) ms = 8000;
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "bridge_listen")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -930,6 +1027,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
         Serial1.end();
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
 
         // Build response: hex followed by ASCII render (non-printable → .)
         String out;
@@ -960,7 +1058,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(400, "text/plain", "size must be 1..2048");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "flash_read_bytes")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -972,6 +1072,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint8_t buf[2048];
         ESPFlasher::Result r = ESPFlasher::readFlash(cfg, offset, size, buf);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         if (r != ESPFlasher::FLASH_OK) {
             req->send(500, "text/plain", ESPFlasher::errorString(r));
             return;
@@ -993,7 +1094,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
         uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
         uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "flash_md5")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1005,6 +1108,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint8_t digest[16];
         ESPFlasher::Result r = ESPFlasher::spiFlashMd5(cfg, offset, size, digest);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         if (r != ESPFlasher::FLASH_OK) {
             req->send(500, "text/plain", ESPFlasher::errorString(r));
             return;
@@ -1026,7 +1130,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
     // app-tail rodata for the ELRSOPTS JSON block. Total wire: ~73 KB hex.
     // Takes ~4-6 s at 115200 via CMD_READ_FLASH_SLOW.
     s_server->on("/api/elrs/identity/fast", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "identity_fast")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1058,6 +1164,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint8_t *buf = (uint8_t *)heap_caps_malloc(BUF_SZ, MALLOC_CAP_SPIRAM);
         if (!buf) {
             PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
             req->send(500, "text/plain", "PSRAM alloc failed");
             return;
         }
@@ -1072,6 +1179,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         if (r != ESPFlasher::FLASH_OK) {
             heap_caps_free(buf);
             PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
             req->send(500, "text/plain",
                 String("Flash read failed: ") + ESPFlasher::errorString(r));
             return;
@@ -1088,6 +1196,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             max_seq = seq1; active_slot = (seq1 - 1) & 1;
         }
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
 
         // Build chunked text response: header line + hex per section. 5 sections:
         //   PT       @ 0x8000  — 4 KB  partition table (for Phase M1)
@@ -1215,7 +1324,10 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(400, "text/plain", "size > 2 MB refused");
             return;
         }
+        // Erases an entire partition — RX state changes; don't resume CRSF.
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "erase_part")) {
+            crsfResumeAfterPortB(_crsf);  // restore on early-fail only
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1252,7 +1364,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(409, "text/plain", "flash/dump in progress — wait for it to finish");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_chip_info")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1265,6 +1379,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::ChipInfo info;
         ESPFlasher::Result r = ESPFlasher::chipInfo(cfg, &info);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         if (r != ESPFlasher::FLASH_OK) {
             req->send(500, "text/plain", ESPFlasher::errorString(r));
             return;
@@ -1288,7 +1403,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(409, "text/plain", "flash/dump in progress");
             return;
         }
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_recv_info")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1301,6 +1418,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::ReceiverInfo info;
         ESPFlasher::Result r = ESPFlasher::receiverInfo(cfg, &info);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         if (r != ESPFlasher::FLASH_OK) {
             req->send(500, "text/plain", ESPFlasher::errorString(r));
             return;
@@ -1361,7 +1479,11 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
     // timer, or command via a linked handset.
 
     s_server->on("/api/flash/exit_dfu", HTTP_POST, [](AsyncWebServerRequest *req) {
+        // RX state changes (DFU → app jump). Don't resume CRSF — user
+        // restarts Live monitor manually once the new app boots.
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "exit_dfu")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1401,7 +1523,10 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             ? strtoul(req->getParam("baud", true)->value().c_str(), nullptr, 0)
             : 420000;  // vanilla ELRS default; MILELRS may use 115200 — caller picks
 
+        // Sends RX into in-app stub flasher — RX state changes; don't resume.
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf_bl")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1496,7 +1621,11 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             return;
         }
 
+        // Boot-slot flip — on next power-cycle RX boots a different app;
+        // CRSF baud / mode may change. Don't auto-resume.
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "otadata_select")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy — switch Setup to Receiver");
             return;
         }
@@ -1534,7 +1663,9 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
     });
 
     s_server->on("/api/otadata/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        bool _crsf = crsfPauseForPortB();
         if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "otadata_status")) {
+            crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
         }
@@ -1550,6 +1681,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::ReceiverInfo rinfo;
         ESPFlasher::Result r = ESPFlasher::receiverInfo(cfg, &rinfo);
         PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
         if (r != ESPFlasher::FLASH_OK || !rinfo.otadata_ok) {
             req->send(500, "text/plain",
                 "readFlash failed — RX must be in DFU (hold BOOT, power-cycle)");

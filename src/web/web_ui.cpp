@@ -651,7 +651,7 @@ button.mode-blocked:hover { opacity: 1; }
     <h2>Receiver status</h2>
     <div class="row"><span class="label">Mode:</span>
       <span class="value">
-        <span id="rxModeBadge" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px">—</span>
+        <span id="rxModeBadge" role="status" aria-live="polite" aria-label="Receiver mode: unknown" style="background:#333;color:#ccc;padding:2px 8px;border-radius:3px;font-weight:bold">— Unknown</span>
         <small id="rxModeAge" style="color:var(--text-dim);margin-left:6px"></small>
       </span>
     </div>
@@ -2960,8 +2960,10 @@ async function rxProbeMode() {
   const badge = document.getElementById('rxModeBadge');
   const hint = document.getElementById('rxModeHint');
   btn.disabled = true; btn.textContent = '⏳ Probing (~1s)…';
-  badge.textContent = 'probing…';
+  badge.innerHTML = '⋯ <b>Probing</b>';
+  badge.setAttribute('aria-label', 'Receiver mode: probing');
   badge.style.background = '#444';
+  badge.style.color = '#ccc';
   // Clear identity rows
   for (const id of ['rxName','rxVer','rxIds','rxFields']) {
     const el = document.getElementById(id);
@@ -2972,14 +2974,18 @@ async function rxProbeMode() {
     const d = JSON.parse(txt);
     _rxMode = d.mode;
     _rxProbeAt = Date.now();
+    // Shape-prefix for colour-blind redundancy: ◆/◇/●/○ pair with the
+    // semantic colour so mode is distinguishable on monochrome displays.
     const colors = {
-      'dfu':    {bg:'#c60',   fg:'#fff', lbl:'DFU (ROM @115200)'},
-      'stub':   {bg:'#06c',   fg:'#fff', lbl:'STUB (@420000)'},
-      'app':    {bg:'#0a3',   fg:'#fff', lbl:'APP (running)'},
-      'silent': {bg:'#633',   fg:'#fcc', lbl:'SILENT (WiFi/halted)'},
+      'dfu':    {bg:'#c60',   fg:'#fff', icon:'◆', tag:'DFU',    detail:'ROM @115200'},
+      'stub':   {bg:'#06c',   fg:'#fff', icon:'◇', tag:'STUB',   detail:'@420000'},
+      'app':    {bg:'#0a3',   fg:'#fff', icon:'●', tag:'APP',    detail:'running'},
+      'silent': {bg:'#633',   fg:'#fcc', icon:'○', tag:'SILENT', detail:'WiFi/halted'},
     };
-    const c = colors[d.mode] || {bg:'#333', fg:'#ccc', lbl:d.mode};
-    badge.textContent = c.lbl;
+    const c = colors[d.mode] || {bg:'#333', fg:'#ccc', icon:'?', tag:d.mode, detail:''};
+    badge.innerHTML = c.icon + ' <b>' + c.tag + '</b>' +
+                      (c.detail ? ' <span style="font-weight:normal;opacity:0.85">(' + c.detail + ')</span>' : '');
+    badge.setAttribute('aria-label', 'Receiver mode: ' + c.tag + (c.detail ? ', ' + c.detail : ''));
     badge.style.background = c.bg;
     badge.style.color = c.fg;
     hint.textContent = d.hint || '';
@@ -3014,7 +3020,8 @@ async function rxProbeMode() {
     fwPathUpdate();
   } catch (e) {
     _rxMode = 'error';
-    badge.textContent = 'error';
+    badge.innerHTML = '✗ <b>Error</b>';
+    badge.setAttribute('aria-label', 'Receiver mode: probe failed');
     badge.style.background = '#900';
     badge.style.color = '#fff';
     hint.textContent = (e.message || e);

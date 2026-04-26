@@ -7,6 +7,96 @@ Three parallel audits ran on the project: architecture / code quality, end-to-en
 
 This file is the merged action plan.
 
+---
+
+## Delta update — 2026-04-26 (post-audit verification pass)
+
+After the three audits + initial synthesis, two additional checks ran:
+
+### 1. Pin config vs board documentation — NO mismatches
+
+Cross-referenced [include/pin_config.h](../include/pin_config.h) against the local
+Waveshare wiki snapshot ([hardware/wiki.html](../hardware/wiki.html)). Every
+GPIO that wiki documents matches the code:
+
+| Function | pin_config.h | Waveshare wiki | Match |
+|---|---|---|---|
+| LCD_MOSI/SCLK/CS/DC/RST | 45/40/42/41/39 | 45/40/42/41/39 | ✓ |
+| LCD_BL | 46 | 46 | ✓ |
+| RGB_LED_PIN | 38 | 38 | ✓ |
+| SD_CMD/CLK/D0/D1/D2/D3 | 15/14/16/18/17/21 | 15/14/16/18/17/21 | ✓ |
+
+Pins **not covered** by wiki (still empirically validated per CLAUDE.md):
+QMI8658 I2C (48/47), Port B (10/11), BAT_ADC (1), BTN_BOOT (0). Wiki only
+documents header-exposed and primary onboard buses; QMI8658 is onboard-only,
+Port B / BTN_BOOT / BAT_ADC are clone-board specific.
+
+A live WebFetch of spotpear.com returned `LCD_BL = GPIO48` — that is a
+content-extraction artefact (model conflated I2C_SDA pin with LCD_BL),
+not a real source-of-truth conflict. **Verdict: pin_config.h is correct.
+No remediation needed.**
+
+### 2. Top-15 fixes — six already shipped in commit `92a7dcd`
+
+After the synthesis was written, the user shipped commit `92a7dcd` ("UX
+polish round 1 (audit follow-up)") which closes 6 of the top-7 priority
+items. Updated status:
+
+| # | Fix | Status (post-92a7dcd) |
+|---|---|---|
+| 1 | Mode-blocked button visual | ✅ **DONE** — dashed border + `--text-muted` background, opacity .85→1 on hover |
+| 2 | Empty-state hints | ✅ **DONE** — `<small class="placeholder">` on identCard / rxCfgTable / live monitor / channels / FC telem |
+| 3 | Mode badge text labels | ⏳ **OPEN** |
+| 4 | identCard "needs DFU" warning to summary | ✅ **DONE** — moved into `<h2>` subtitle |
+| 5 | Inverse "flash in progress" banner | ✅ **DONE** — `rcvFlashBanner` + `crsfStartBtn` gated during fwFlash poll |
+| 6 | Erase OTADATA / Erase app1 typed-confirm | ✅ **DONE** for OTADATA (`type "ERASE OTADATA"`); verify Erase app1 also typed |
+| 7 | Flash ETA + elapsed timer | ✅ **DONE** — `elapsed Ns · ETA ~Ns` in stage label, "(total Ns)" on completion |
+| 8 | Parameter-table edit affordance | ⏳ OPEN — placeholder now hints "клик на value → редактируется", but no pencil icon yet |
+| 9 | Replace `confirm()` with custom modal | ⏳ OPEN |
+| 10 | MD5 verify after flash | ⏳ OPEN |
+| 11 | Auto-pause CRSF for ALL ELRS ops | ⏳ OPEN |
+| 12 | Identity Phase 1c | ⏳ OPEN |
+| 13 | executeFlash() → xTask | ⏳ OPEN |
+| 14 | WebState facade | ⏳ OPEN |
+| 15 | `#ifdef RESEARCH_MODE` | ⏳ OPEN |
+
+**Six wins down, ~50 minutes of work delivered.** Remaining 9 items are
+the harder / higher-LOC ones.
+
+### 3. Stale-claim re-verification (still good)
+
+Re-spot-checked the three stale-claim corrections from the original
+synthesis against current HEAD (`92a7dcd`):
+
+- **B1 fix (`setRxBufferSize` ordering)**: ✓ confirmed — 15 sites in
+  [esp_rom_flasher.cpp:293-1266](../src/bridge/esp_rom_flasher.cpp#L293)
+  call `setRxBufferSize` before `begin()` with explicit comment at L293.
+- **B2 fix (`sendCmd` truncated frame)**: ✓ confirmed — line ~141
+  returns `false` on `resp_size < 2 || n < 8 + resp_size` with rationale
+  comment. Hardware-incident-grade fix.
+- **CRSF auto-pause for flash**: ✓ confirmed at
+  [routes_flash.cpp:97-107](../src/web/http/routes_flash.cpp#L97) —
+  `CRSFService::isRunning()` → `end()` + `CRSFConfig::reset()` + `release()`
+  before flash acquires Port B.
+
+### 4. Recommended next-up after this delta
+
+With items 1/2/4/5/6/7 closed, the highest-leverage remaining (impact ÷ effort):
+
+1. **Item 11 (auto-pause CRSF for all ELRS ops)** — single biggest remaining
+   class of cryptic 409 errors. ~50 LOC.
+2. **Item 13 (executeFlash → xTask)** — eliminates 30-120 s browser freeze.
+   ~100 LOC. Pre-empts the WDT-on-big-flash class entirely.
+3. **Item 10 (MD5 verify after flash)** — defence-in-depth for the now-fixed
+   B1+B2 paths. ~30 min using existing `/api/flash/md5` endpoint.
+4. **Item 3 (mode badge text labels)** — 5-min accessibility win. Trivially low
+   effort, may as well bundle with next UX commit.
+5. **Item 9 (custom modal)** — bundle with item 3 if that commit lands.
+
+Items 12/14/15 stay queued for after the next sprint.
+
+---
+
 ## Headline verdict
 
 The project is a **6.5/10** by code quality, **B+** by UI/UX, and **functionally
