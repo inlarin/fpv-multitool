@@ -136,9 +136,59 @@ button.mode-blocked:hover { opacity: 1; }
   input[type=number], input[type=text], input[type=password] { font-size: 14px; }
   pre { font-size: 10px !important; max-height: 200px !important; }
 }
+
+/* Custom confirm modal — replaces blocking browser confirm() so we can
+   theme it (light/dark), allow danger styling, and stop the page-jank
+   that native confirm() causes on some browsers. Async via Promise. */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: none; align-items: center; justify-content: center; z-index: 9999;
+}
+.modal-backdrop.show { display: flex; }
+.modal-box {
+  background: var(--card-bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 18px 20px 14px; min-width: 280px; max-width: min(90vw, 520px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4); font-size: 14px;
+}
+.modal-box.danger { border-color: #c33; box-shadow: 0 8px 32px rgba(204,51,51,0.3); }
+.modal-msg { white-space: pre-wrap; line-height: 1.45; margin: 0 0 14px; }
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; }
+.modal-btns button { padding: 8px 16px; font-size: 13px; }
+.modal-btns .modal-cancel { background: var(--text-muted); }
+.modal-btns .modal-ok.danger { background: #c33; }
+
+/* Parameter-table inline edit affordance — pencil glyph + theme-respecting
+   input styling so user knows the value is clickable / editable. Was a
+   plain <input> with no surrounding cue → users didn't realise. */
+#rxCfgTable td .pencil { color: var(--text-dim); margin-right: 4px; font-size: 10px; }
+#rxCfgTable td input, #rxCfgTable td select {
+  background: var(--input-bg, var(--card-bg));
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+#rxCfgTable td input:hover, #rxCfgTable td select:hover {
+  border-color: var(--accent);
+}
+#rxCfgTable td input:focus, #rxCfgTable td select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0,204,255,0.2);
+}
 </style>
 </head>
 <body>
+<div id="confirmBackdrop" class="modal-backdrop" onclick="if(event.target===this)_modalCancel()">
+  <div class="modal-box" id="confirmBox" role="alertdialog" aria-modal="true" aria-labelledby="confirmMsg">
+    <p class="modal-msg" id="confirmMsg"></p>
+    <div class="modal-btns">
+      <button class="modal-cancel" onclick="_modalCancel()">Cancel</button>
+      <button class="modal-ok success" onclick="_modalOk()" id="confirmOkBtn">OK</button>
+    </div>
+  </div>
+</div>
 <div id="connStatus" class="disconnected">...</div>
 <button id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
 <h1>FPV MultiTool</h1>
@@ -1523,10 +1573,10 @@ function onMaxThrottle() {
   if (+slider.value > v) { slider.value = v; onThrottle(); }
   send({cmd:'motorMaxThrottle', value: v});
 }
-function motorDirCW()  { if (confirm('Set direction CW (normal)? ESC must be armed.'))  send({cmd:'motorDirCW'}); }
-function motorDirCCW() { if (confirm('Set direction CCW (reverse)? ESC must be armed.')) send({cmd:'motorDirCCW'}); }
-function motor3DOn()   { if (confirm('Enable 3D mode? ESC must be armed.'))  send({cmd:'motor3DOn'}); }
-function motor3DOff()  { if (confirm('Disable 3D mode? ESC must be armed.')) send({cmd:'motor3DOff'}); }
+async function motorDirCW()  { if (await confirmModal('Set direction CW (normal)? ESC must be armed.', {danger:true}))  send({cmd:'motorDirCW'}); }
+async function motorDirCCW() { if (await confirmModal('Set direction CCW (reverse)? ESC must be armed.', {danger:true})) send({cmd:'motorDirCCW'}); }
+async function motor3DOn()   { if (await confirmModal('Enable 3D mode? ESC must be armed.', {danger:true}))  send({cmd:'motor3DOn'}); }
+async function motor3DOff()  { if (await confirmModal('Disable 3D mode? ESC must be armed.', {danger:true})) send({cmd:'motor3DOff'}); }
 
 // === ESC telemetry ===
 let _escTelemTimer = null;
@@ -1570,7 +1620,7 @@ function escTelemPoll() {
 }
 
 // === BATTERY ===
-function battAction(action) {
+async function battAction(action) {
   const confirmMsgs = {
     unseal:      'Unseal battery? Tries TI default key.\nMavic 2+/3/4 will likely fail (no public key).',
     clearpf:     'Clear Permanent Failure flags?\nBattery MUST be unsealed first.\nOperation can take 2-3 seconds.',
@@ -1578,7 +1628,7 @@ function battAction(action) {
     reset:       'Send soft reset to BMS?',
     fullservice: 'FULL SERVICE: unseal + clear PF + seal.\nPotentially destructive. Continue only if you know what you are doing.'
   };
-  if (confirmMsgs[action] && !confirm(confirmMsgs[action])) return;
+  if (confirmMsgs[action] && !(await confirmModal(confirmMsgs[action], {danger: action === 'fullservice' || action === 'clearpf'}))) return;
   document.getElementById('battActionResult').textContent = '...';
   fetch('/api/batt?action='+action).then(r=>r.text()).then(t=>{
     document.getElementById('battActionResult').textContent = t;
@@ -1898,11 +1948,11 @@ function loadMacCatalog() {
     sel.onchange();
   });
 }
-function runMacCmd() {
+async function runMacCmd() {
   const sel = document.getElementById('macSelect');
   const opt = sel.selectedOptions[0];
   if (!opt) return;
-  if (opt.dataset.destructive === 'true' && !confirm(opt.dataset.desc + '\nThis is destructive. Continue?')) return;
+  if (opt.dataset.destructive === 'true' && !(await confirmModal(opt.dataset.desc + '\nThis is destructive. Continue?', {danger:true}))) return;
   const sub = opt.value;
   const rlen = parseInt(opt.dataset.rlen);
   const el = document.getElementById('macResult');
@@ -2005,11 +2055,11 @@ function dfImportKillerIni(evt) {
   const file = evt.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     try {
       const parsed = dfParseKillerIni(e.target.result);
       if (parsed.length < 10) {
-        if (!confirm('Only ' + parsed.length + ' entries parsed. Continue anyway?')) return;
+        if (!(await confirmModal('Only ' + parsed.length + ' entries parsed. Continue anyway?'))) return;
       }
       localStorage.setItem('dfMapCustom', JSON.stringify(parsed));
       _dfMap = parsed;
@@ -2026,8 +2076,8 @@ function dfImportKillerIni(evt) {
   evt.target.value = '';
 }
 
-function dfClearCustomMap() {
-  if (!confirm('Discard imported Killer.ini and use built-in map?')) return;
+async function dfClearCustomMap() {
+  if (!(await confirmModal('Discard imported Killer.ini and use built-in map?'))) return;
   localStorage.removeItem('dfMapCustom');
   dfLoadMap();
 }
@@ -2175,12 +2225,12 @@ function dfMarkChanged(input) {
   }
 }
 
-function dfWriteOne(btn) {
+async function dfWriteOne(btn) {
   const addr = btn.dataset.addr;
   const size = btn.dataset.size;
   const input = btn.closest('tr').querySelector('input[type=number]');
   const value = input.value;
-  if (!confirm('Write ' + value + ' to DF ' + addr + '?\\nBattery must be unsealed!')) return;
+  if (!(await confirmModal('Write ' + value + ' to DF ' + addr + '?\nBattery must be unsealed!', {danger:true}))) return;
   btn.disabled = true;
   btn.textContent = '...';
   const fd = new FormData();
@@ -2269,11 +2319,11 @@ function dfUpdateSnapshotStatus() {
   el.innerHTML = parts.join(' ');
 }
 
-function dfRestoreOne(btn) {
+async function dfRestoreOne(btn) {
   const addr = btn.dataset.addr;
   const size = btn.dataset.size;
   const value = btn.dataset.value;
-  if (!confirm('Restore ' + addr + ' to ' + value + '? Battery must be unsealed.')) return;
+  if (!(await confirmModal('Restore ' + addr + ' to ' + value + '? Battery must be unsealed.', {danger:true}))) return;
   btn.disabled = true;
   btn.textContent = '...';
   const fd = new FormData();
@@ -2441,7 +2491,7 @@ function showCmdResult(msg) {
 // Soft reboot via CRSF. Backend /api/crsf/reboot_app handles both states —
 // if live monitor is running it uses the service; else one-shot Port B.
 async function rcvSoftReboot() {
-  if (!confirm('Reboot RX via CRSF? Link will drop briefly.')) return;
+  if (!(await confirmModal('Reboot RX via CRSF? Link will drop briefly.'))) return;
   const el = document.getElementById('ctrlMsg');
   try {
     const r = await postForm('/api/crsf/reboot_app');
@@ -2917,6 +2967,38 @@ async function postForm(url, form) {
   if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (t || r.statusText));
   return t;
 }
+
+// Async drop-in replacement for browser confirm(). Returns Promise<boolean>.
+// Use as: if (!(await confirmModal('msg'))) return;
+//   opts.danger=true   — red OK button + red modal border
+//   opts.okLabel='Run' — custom OK label
+let _modalResolve = null;
+function _modalCancel() { _modalClose(false); }
+function _modalOk()     { _modalClose(true); }
+function _modalClose(result) {
+  document.getElementById('confirmBackdrop').classList.remove('show');
+  if (_modalResolve) { _modalResolve(result); _modalResolve = null; }
+}
+function confirmModal(msg, opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    document.getElementById('confirmMsg').textContent = msg;
+    const okBtn = document.getElementById('confirmOkBtn');
+    okBtn.textContent = opts.okLabel || 'OK';
+    okBtn.classList.toggle('danger', !!opts.danger);
+    okBtn.classList.toggle('success', !opts.danger);
+    document.getElementById('confirmBox').classList.toggle('danger', !!opts.danger);
+    document.getElementById('confirmBackdrop').classList.add('show');
+    setTimeout(() => okBtn.focus(), 30);
+    _modalResolve = resolve;
+  });
+}
+// Esc to cancel, Enter to accept — matches native confirm() shortcuts.
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('confirmBackdrop').classList.contains('show')) return;
+  if (e.key === 'Escape') _modalCancel();
+  else if (e.key === 'Enter') _modalOk();
+});
 async function getJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (await r.text()));
@@ -3209,7 +3291,7 @@ async function fwFlash() {
   const pathMsg = via ? 'via in-app stub (no BOOT required)' : 'via ROM DFU (RX must be in DFU)';
   const slotName = (target === '0x10000') ? 'app0' : (target === '0x1f0000') ? 'app1' : null;
   const bootMsg = (bootAfter && slotName) ? (' + flip OTADATA to ' + slotName) : '';
-  if (!confirm('Flash ' + _fwCached.name + ' to ' + target + ' ' + pathMsg + bootMsg)) return;
+  if (!(await confirmModal('Flash ' + _fwCached.name + ' to ' + target + ' ' + pathMsg + bootMsg, {danger:true, okLabel:'Flash'}))) return;
   btn.disabled = true;
   status.textContent = '';
   let flashOk = false;
@@ -3317,25 +3399,28 @@ function rxCfgRender() {
     tr.style.color = p.hidden ? 'var(--text-dim)' : '';
     let valueCell = '—';
     const tn = CRSF_TYPE_NAMES[p.type] || ('t' + p.type);
+    // ✎ glyph signals "click to edit" for the inline inputs — without it,
+    // a plain <input> in a tight row reads as a static label to most users.
+    const editIcon = '<span class="pencil" title="Click to edit">✎</span>';
     if (p.type === 9) {
       // TEXT_SELECTION — dropdown
       const opts = (p.options || '').split(';');
-      valueCell = '<select onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)">' +
+      valueCell = editIcon + '<select onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" title="Click to edit">' +
         opts.map((o, i) => '<option value="' + i + '"' + (i === p.value ? ' selected' : '') + '>' + o + '</option>').join('') +
       '</select>';
     } else if (p.type === 0 || p.type === 1 || p.type === 2 || p.type === 3) {
       // Numeric — inline input
-      valueCell = '<input type="number" value="' + p.value + '" min="' + p.min + '" max="' + p.max +
-        '" onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" style="width:80px;padding:2px">';
+      valueCell = editIcon + '<input type="number" value="' + p.value + '" min="' + p.min + '" max="' + p.max +
+        '" onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" title="Click to edit (range below)" style="width:80px;padding:2px">';
     } else if (p.type === 10) {
       // STRING
-      valueCell = '<input type="text" value="' + (p.value || '') + '" onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" style="width:160px;padding:2px">';
+      valueCell = editIcon + '<input type="text" value="' + (p.value || '') + '" onchange="rxCfgWrite(' + p.id + ',' + p.type + ',this.value)" title="Click to edit" style="width:160px;padding:2px">';
     } else if (p.type === 11) {
-      valueCell = '<em>(folder)</em>';
+      valueCell = '<em style="color:var(--text-dim)">▸ folder</em>';
     } else if (p.type === 12) {
-      valueCell = '<em>' + (p.value || '') + '</em>';
+      valueCell = '<em style="color:var(--text-dim)" title="Read-only INFO">' + (p.value || '') + '</em>';
     } else if (p.type === 13) {
-      valueCell = '<button onclick="rxCfgWrite(' + p.id + ',' + p.type + ',1)" style="padding:2px 8px">Execute</button>';
+      valueCell = '<button onclick="rxCfgWrite(' + p.id + ',' + p.type + ',1)" title="Run command on RX" style="padding:2px 8px">▶ Execute</button>';
     }
     const range = (p.min !== undefined) ? ('[' + p.min + '..' + p.max + '] def=' + p.default) : '';
     tr.innerHTML =
@@ -3470,13 +3555,14 @@ async function rxFlashStub(slot) {
   const fwInfo = r && r.textContent && r.textContent !== '-'
     ? ' (current catalog selection: ' + r.textContent + ')'
     : '';
-  if (!confirm(
+  if (!(await confirmModal(
       'Auto-flash via in-app stub to app' + slot + '?\n\n' +
       '1. Receiver must be running the app (LED on, vanilla ELRS or MILELRS).\n' +
       '2. Plate will send CRSF \'bl\' frame → RX enters stub @ 420000 on same pins.\n' +
       '3. Flash proceeds without physical BOOT + power-cycle.\n\n' +
-      'Requires firmware already uploaded to plate PSRAM (use Catalog Fetch or the file-upload card below).' + fwInfo
-  )) return;
+      'Requires firmware already uploaded to plate PSRAM (use Catalog Fetch or the file-upload card below).' + fwInfo,
+      {danger:true, okLabel:'Stub-flash'}
+  ))) return;
   const fd = new FormData();
   fd.append('offset', slot === 0 ? '0x10000' : '0x1f0000');
   fd.append('via', 'stub');
@@ -3490,7 +3576,7 @@ async function rxFlashStub(slot) {
   }
 }
 async function rxEraseSlot(slot) {
-  if (!confirm('Erase app' + slot + ' partition (1.88 MB)? This is irreversible.')) return;
+  if (!(await confirmModal('Erase app' + slot + ' partition (1.88 MB)? This is irreversible.', {danger:true, okLabel:'Erase'}))) return;
   const off = slot === 0 ? '0x10000' : '0x1f0000';
   const fd = new FormData();
   fd.append('offset', off);
@@ -3673,7 +3759,7 @@ async function uploadFw() {
 }
 let _flashPoll = null;
 async function startFlash() {
-  if (!confirm('Убедись что приёмник в DFU режиме!\nПродолжить прошивку?')) return;
+  if (!(await confirmModal('Убедись что приёмник в DFU режиме!\nПродолжить прошивку?', {danger:true, okLabel:'Прошивать'}))) return;
   const btn = document.getElementById('flashBtn');
   const result = document.getElementById('flashResult');
   btn.disabled = true;
@@ -3852,7 +3938,7 @@ async function slotFlash() {
   const eraseFirst = document.getElementById('slotEraseFirst').checked;
   const partSize = slotPartitionSize();
   const hexOff = '0x' + off.toString(16);
-  if (!confirm('Прошить по offset ' + hexOff + (eraseFirst ? ' (с erase ' + (partSize/1024/1024).toFixed(2) + ' MB)' : '') + '?\nRX должен быть в DFU!')) return;
+  if (!(await confirmModal('Прошить по offset ' + hexOff + (eraseFirst ? ' (с erase ' + (partSize/1024/1024).toFixed(2) + ' MB)' : '') + '?\nRX должен быть в DFU!', {danger:true, okLabel:'Прошивать'}))) return;
 
   document.getElementById('slotFlashBtn').disabled = true;
   document.getElementById('slotBar').style.width = '0%';
@@ -3941,8 +4027,8 @@ function otadataRefresh() {
   });
 }
 
-function otadataSelect(slot) {
-  if (!confirm('Пометить app' + slot + ' как активный? RX должен быть в DFU.')) return;
+async function otadataSelect(slot) {
+  if (!(await confirmModal('Пометить app' + slot + ' как активный? RX должен быть в DFU.'))) return;
   fetch('/api/otadata/select?slot=' + slot, {method:'POST'})
     .then(r => r.text().then(t => ({ok: r.ok, t})))
     .then(({ok, t}) => {
@@ -4131,8 +4217,8 @@ function rxWizStepFlash() {
   slotFlash();  // slotFlashPollFn will call rxWizMark('flash', 'ok') on success
 }
 
-function rxWizStepOtadataWrite() {
-  if (!confirm('Записать OTADATA → app0 (POST /api/otadata/select?slot=0)?')) {
+async function rxWizStepOtadataWrite() {
+  if (!(await confirmModal('Записать OTADATA → app0 (POST /api/otadata/select?slot=0)?'))) {
     rxWizMark('otadata_write', 'fail');
     return;
   }
@@ -4159,8 +4245,8 @@ function saveWifi() {
   fetch('/api/wifi/save', {method:'POST', body:JSON.stringify({ssid,pass})})
     .then(r=>r.text()).then(t=>alert(t));
 }
-function clearWifi() {
-  if (!confirm('Reset WiFi to AP mode?')) return;
+async function clearWifi() {
+  if (!(await confirmModal('Reset WiFi to AP mode?', {danger:true}))) return;
   fetch('/api/wifi/clear').then(r=>r.text()).then(t=>alert(t));
 }
 
@@ -4307,10 +4393,10 @@ function _usbSelectedMode() {
   const r = document.querySelector('input[name=usbmode]:checked');
   return r ? r.value : null;
 }
-function usbApplyReboot() {
+async function usbApplyReboot() {
   const mode = _usbSelectedMode();
   if (mode === null) { document.getElementById('usbMsg').textContent = 'Выберите режим'; return; }
-  if (!confirm('Сохранить USB-режим в NVS и перезагрузить плату?')) return;
+  if (!(await confirmModal('Сохранить USB-режим в NVS и перезагрузить плату?', {okLabel:'Reboot'}))) return;
   const fd = new FormData(); fd.append('mode', mode);
   document.getElementById('usbMsg').textContent = 'Сохраняю...';
   fetch('/api/usb/mode', {method:'POST', body:fd}).then(r=>r.text()).then(t=>{
@@ -4446,8 +4532,8 @@ function otaCheck() {
 }
 
 let otaPullPoll = null;
-function otaPull() {
-  if (!confirm('Скачать и прошить последнюю версию из GitHub?\nПлата перезагрузится.')) return;
+async function otaPull() {
+  if (!(await confirmModal('Скачать и прошить последнюю версию из GitHub?\nПлата перезагрузится.', {okLabel:'Pull & Flash'}))) return;
   const stage = document.getElementById('otaPullStage');
   const bar = document.getElementById('otaPullBar');
   stage.textContent = 'starting';
@@ -4483,10 +4569,10 @@ function otaAbort() {
     document.getElementById('otaStage').textContent = 'aborted';
   });
 }
-function otaUpload() {
+async function otaUpload() {
   const f = document.getElementById('otaFile').files[0];
   if (!f) return alert('Выбери firmware.bin');
-  if (!confirm('Прошить ' + f.name + ' (' + fmtBytes(f.size) + ')?\nПлата перезагрузится.')) return;
+  if (!(await confirmModal('Прошить ' + f.name + ' (' + fmtBytes(f.size) + ')?\nПлата перезагрузится.', {okLabel:'Upload & Flash'}))) return;
 
   const fd = new FormData();
   fd.append('update', f, f.name);

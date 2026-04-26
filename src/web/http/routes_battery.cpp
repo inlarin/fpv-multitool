@@ -441,6 +441,19 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
         req->send(200, "application/json", out);
     });
 
+    // ====================================================================
+    // CLONE-RESEARCH ENDPOINTS (gated behind RESEARCH_MODE)
+    //
+    // 22 routes for SMBus clone analysis: register harvest, MAC brute,
+    // PEC fuzzing, timing attack, async catch, etc. Only useful with a
+    // physical clone battery on the bench. Strip from production builds
+    // to (a) shrink the binary by ~40 KB and (b) remove the WiFi-creds
+    // leak surface flagged by the audit (a clone dump can include AP
+    // creds in DF blocks). To enable: add `-D RESEARCH_MODE` to
+    // platformio.ini build_flags.
+    // ====================================================================
+#ifdef RESEARCH_MODE
+
     s_server->on("/api/batt/clone/harvest", HTTP_GET, [](AsyncWebServerRequest *req) {
         uint8_t reg = req->hasParam("reg") ?
             (uint8_t)strtoul(req->getParam("reg")->value().c_str(), nullptr, 0) : 0xEE;
@@ -1271,6 +1284,8 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
                   from, to, n_probes, stable, hitCount, flappyCount);
         req->send(r);
     });
+
+#endif // RESEARCH_MODE — end clone-research block
 
     // Battery service actions
     s_server->on("/api/batt", HTTP_GET, [](AsyncWebServerRequest *req) {
