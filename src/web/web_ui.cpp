@@ -96,8 +96,12 @@ button { padding: 10px 16px; background: var(--accent-dim); color: #fff; border:
 button.danger { background: #aa2222; }
 button.success { background: #22aa44; }
 button:disabled { background: var(--text-muted); cursor: not-allowed; }
-button.mode-blocked { opacity: .5; cursor: help; }
-button.mode-blocked:hover { opacity: .6; }
+/* Mode-gated buttons (data-need-mode="app|dfu|dfustub" mismatch with current
+   RX mode). Distinct from generic :disabled — clearly disabled BUT marked as
+   "would work with right mode" via dashed border. Tooltip explains the mode. */
+button.mode-blocked { background: var(--text-muted); color: rgba(255,255,255,0.65);
+                      border: 1px dashed var(--text-dim); cursor: help; opacity: .85; }
+button.mode-blocked:hover { opacity: 1; }
 .status { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; }
 .status.on { background: var(--status-on); color: #fff; }
 .status.off { background: var(--status-off); color: #ccc; }
@@ -673,10 +677,7 @@ button.mode-blocked:hover { opacity: .6; }
        compile-time (ExpressLRS RX / expresslrs); home-STA creds are patched
        into the ELRSOPTS JSON blob at end of active app partition.         -->
   <div class="card" id="identCard">
-    <h2>Device identity</h2>
-    <div class="warning">
-      Вытаскивает из RX через ROM DFU: bind UID (hex), WiFi AP SSID + password. Нужен RX в DFU (BOOT + power-cycle). ~5-6 sec.
-    </div>
+    <h2>Device identity <small style="color:var(--text-dim);font-weight:normal;font-size:11px">— ROM DFU · ~5-6 s</small></h2>
     <div class="row"><span class="label">Current UID:</span>
       <span class="value" id="identUid" style="font-family:monospace">—</span>
     </div>
@@ -692,6 +693,9 @@ button.mode-blocked:hover { opacity: .6; }
     <div class="row"><span class="label">Flash discriminator:</span>
       <span class="value" id="identDisc" style="font-family:monospace;font-size:11px">—</span>
     </div>
+    <small id="identPlaceholder" style="display:block;color:var(--text-dim);font-size:11px;margin:4px 0 8px">
+      Положи RX в DFU (зажми BOOT + power-cycle), потом нажми кнопку ниже.
+    </small>
     <button onclick="identRead()" id="identReadBtn" data-need-mode="dfu" style="width:100%">⬇ Read identity from device</button>
     <div id="identStatus" style="margin-top:6px;font-size:11px;color:var(--text-dim);white-space:pre-wrap"></div>
 
@@ -739,6 +743,9 @@ button.mode-blocked:hover { opacity: .6; }
     </div>
     <button onclick="rxCfgLoad()" id="rxCfgLoadBtn" data-need-mode="app" title="Read all ~40 LUA parameters via CRSF (RX must be in app)" style="width:100%">🔄 Load parameters</button>
     <div id="rxCfgStatus" style="margin-top:6px;font-size:11px;color:var(--text-dim)"></div>
+    <small id="rxCfgPlaceholder" style="display:block;color:var(--text-dim);font-size:11px;margin-top:8px">
+      Нажми Load — таблица заполнится полями LUA. Клик на value → редактируется.
+    </small>
     <table id="rxCfgTable" style="width:100%;margin-top:8px;font-size:11px;display:none">
       <thead><tr style="text-align:left;border-bottom:1px solid var(--border)">
         <th style="padding:3px">#</th><th>Name</th><th>Type</th><th>Value</th><th>Range</th>
@@ -819,6 +826,9 @@ button.mode-blocked:hover { opacity: .6; }
 
   <!-- ===== rcv-live: Live link monitor (merged from old CRSF tab) ===== -->
   <div id="rcv-live" class="rcv-section" style="display:none">
+    <div id="rcvFlashBanner" style="display:none;padding:8px;margin-bottom:6px;background:#c60;color:#fff;border-radius:4px;font-size:13px">
+      ⚠ <b>Flash в процессе</b> — Live monitor временно отключён. Кнопка Start заблокирована до окончания прошивки. CRSF будет автоматически возобновлён после flash, если был запущен.
+    </div>
     <div id="crsfNoLinkHint" style="display:none;padding:8px;margin-bottom:6px;background:#335;color:#ccf;border-radius:4px;font-size:12px">
       ℹ <b>No TX link detected</b> — Link Stats / Channels / FC Telemetry требуют связанный handset TX, который активно передаёт на этот RX. Plate+RX-only режим покажет только Device Info через другие разделы.
     </div>
@@ -836,7 +846,7 @@ button.mode-blocked:hover { opacity: .6; }
       <div class="row"><span class="label">Inverted CRSF:</span>
         <span><input type="checkbox" id="crsfInverted"> <small style="color:var(--text-dim)">для F3/F4 FC</small></span>
       </div>
-      <button class="success" onclick="crsfStart()" style="width:100%;padding:10px;font-size:14px">▶ Start live monitor</button>
+      <button class="success" id="crsfStartBtn" onclick="crsfStart()" style="width:100%;padding:10px;font-size:14px">▶ Start live monitor</button>
       <button class="danger" onclick="crsfStop()" style="width:100%;margin-top:4px">■ Stop</button>
     </div>
     <div class="card">
@@ -849,10 +859,16 @@ button.mode-blocked:hover { opacity: .6; }
       <div class="row"><span class="label">TX Power:</span><span class="value" id="crsfPower">-</span></div>
       <div class="row"><span class="label">Downlink:</span><span class="value" id="crsfDl">-</span></div>
       <div class="row"><span class="label">Frames/Errors:</span><span class="value" id="crsfFrames">0 / 0</span></div>
+      <small id="liveLinkPlaceholder" style="display:block;color:var(--text-dim);font-size:11px;margin-top:6px">
+        Запусти monitor выше — данные обновятся, если в эфире есть связанный TX-handset.
+      </small>
     </div>
     <div class="card">
       <h2>Channels</h2>
       <div id="channelsGrid"></div>
+      <small id="channelsPlaceholder" style="display:block;color:var(--text-dim);font-size:11px;margin-top:6px">
+        16 RC-каналов появятся здесь когда TX отдаёт RC-данные через RX.
+      </small>
     </div>
     <div class="card">
       <h2>FC Telemetry</h2>
@@ -860,6 +876,9 @@ button.mode-blocked:hover { opacity: .6; }
       <div class="row"><span class="label">Battery:</span><span class="value" id="crsfBatt">-</span></div>
       <div class="row"><span class="label">Attitude:</span><span class="value" id="crsfAtt">-</span></div>
       <div class="row"><span class="label">GPS:</span><span class="value" id="crsfGPS">-</span></div>
+      <small style="display:block;color:var(--text-dim);font-size:11px;margin-top:6px">
+        Заполняется только если к RX подключён FC, передающий MSP/SBUS-телеметрию.
+      </small>
     </div>
   </div>  <!-- /rcv-live -->
 
@@ -2795,6 +2814,9 @@ async function identRead() {
     }
     st.textContent = msg;
     st.style.color = '#0f0';
+    // Hide the "put RX in DFU" hint once we got a result.
+    const ph = document.getElementById('identPlaceholder');
+    if (ph) ph.style.display = 'none';
   } catch (e) {
     st.textContent = '✗ ' + (e.message || e);
     st.style.color = '#f66';
@@ -3191,19 +3213,44 @@ async function fwFlash() {
     fd.append('stay', bootAfter && slotName ? '1' : '0');  // keep DFU open if we'll flip OTADATA next
     const reply = await postForm('/api/flash/start', fd);
     status.textContent = reply;
-    // Poll /api/flash/status
+    // Show inverse "flash in progress" banner on rcv-live (so if user
+    // switches sections they see Start is gated). Hidden on completion.
+    const liveBanner = document.getElementById('rcvFlashBanner');
+    const startBtn   = document.getElementById('crsfStartBtn');
+    if (liveBanner) liveBanner.style.display = '';
+    if (startBtn)   { startBtn.disabled = true; startBtn._flashGated = true; }
+    // Poll /api/flash/status with elapsed + ETA in stage label.
+    const t0 = Date.now();
+    let lastPct = 0;
     for (let i = 0; i < 120; i++) {
       await new Promise(r => setTimeout(r, 3000));
       const s = await getJson('/api/flash/status');
-      stage.textContent = s.stage || '-';
-      bar.style.width = (s.progress || 0) + '%';
+      const pct = s.progress || 0;
+      const elapsed = Math.round((Date.now() - t0) / 1000);
+      // ETA: linear extrapolation from current progress. Skip first ~5s
+      // (progress ramps non-linearly during erase) to avoid wild numbers.
+      let etaTxt = '';
+      if (pct >= 5 && pct < 100 && elapsed > 5) {
+        const total = elapsed * 100 / pct;
+        const remaining = Math.max(0, Math.round(total - elapsed));
+        etaTxt = `  · elapsed ${elapsed}s · ETA ~${remaining}s`;
+      } else if (elapsed > 5) {
+        etaTxt = `  · elapsed ${elapsed}s`;
+      }
+      stage.textContent = (s.stage || '-') + etaTxt;
+      bar.style.width = pct + '%';
+      lastPct = pct;
       if (!s.in_progress && s.lastResult) {
         flashOk = s.lastResult.startsWith('OK');
-        status.textContent = (flashOk ? '✓ ' : '✗ ') + s.lastResult;
+        status.textContent = (flashOk ? '✓ ' : '✗ ') + s.lastResult
+                           + `  (total ${elapsed}s)`;
         status.style.color = flashOk ? '#0f0' : '#f66';
         break;
       }
     }
+    // Clear inverse banner when flash ends (success OR fail OR timeout).
+    if (liveBanner) liveBanner.style.display = 'none';
+    if (startBtn) { startBtn._flashGated = false; startBtn.disabled = false; }
 
     // Auto-flip OTADATA to the newly-flashed slot if requested + successful.
     if (flashOk && bootAfter && slotName) {
@@ -3293,6 +3340,8 @@ function rxCfgRender() {
     body.appendChild(tr);
   }
   tbl.style.display = body.childElementCount ? 'table' : 'none';
+  const ph = document.getElementById('rxCfgPlaceholder');
+  if (ph) ph.style.display = body.childElementCount ? 'none' : '';
 }
 async function rxCfgWrite(id, type, value) {
   try {
@@ -3900,7 +3949,15 @@ function otadataSelect(slot) {
 }
 
 function otadataEraseRegion() {
-  if (!confirm('Стереть OTADATA (@0xe000, 8 KB)?\nBootloader упадёт на app0 по умолчанию (если MILELRS не перезапишет).')) return;
+  // Type-to-confirm — same pattern as EraseApp1. confirm() is too easy to
+  // dismiss accidentally; OTADATA loss can brick a fork-RX whose bootloader
+  // doesn't fall back gracefully to app0.
+  const typed = prompt(
+    'Стереть OTADATA (@0xe000, 8 KB)?\n' +
+    'Bootloader будет грузить app0 по умолчанию.\n' +
+    'Стандартная ELRS пережёвывает; форки могут потерять конфиг.\n\n' +
+    'Введи ERASE OTADATA чтобы подтвердить:');
+  if (typed !== 'ERASE OTADATA') { otadataLog('erase OTADATA cancelled', false); return; }
   const fd = new FormData();
   fd.append('offset', '0xe000');
   fd.append('size', '0x2000');
