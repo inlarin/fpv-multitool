@@ -1,0 +1,70 @@
+<div id="tab-motor" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>Motor Tester DShot (GPIO 2)</h2>
+    <div class="warning">⚠ СНИМИ ПРОПЕЛЛЕРЫ перед тестом!</div>
+    <div class="row"><span class="label">Status:</span><span id="motorStatus" class="status off">DISARMED</span></div>
+    <div class="row"><span class="label">Protocol:</span>
+      <select id="dshotSpeed" onchange="setDshotSpeed()" style="padding:6px;background:#0a0a14;color:#fff;border:1px solid #333;">
+        <option value="150">DShot150</option>
+        <option value="300" selected>DShot300</option>
+        <option value="600">DShot600</option>
+      </select>
+    </div>
+    <div class="big"><span id="throttleVal">0</span> <span style="color:#888;font-size:18px">/ 2000</span></div>
+    <div class="bar"><div class="bar-fill" id="throttleBar" style="width:0%"></div></div>
+    <input type="range" id="throttleSlider" min="0" max="2000" value="0" disabled oninput="onThrottle()">
+    <div class="grid">
+      <button class="success" id="armBtn" onclick="motorArm()">ARM</button>
+      <button class="danger" onclick="motorDisarm()">DISARM</button>
+    </div>
+    <div class="row"><span class="label">Beacon tones:</span></div>
+    <div class="grid" style="grid-template-columns:repeat(5,1fr);gap:4px">
+      <button onclick="motorBeep(1)">1</button>
+      <button onclick="motorBeep(2)">2</button>
+      <button onclick="motorBeep(3)">3</button>
+      <button onclick="motorBeep(4)">4</button>
+      <button onclick="motorBeep(5)">5</button>
+    </div>
+    <div class="grid"><button onclick="setThrottle(0)">Zero</button></div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid #333;">
+      <div class="row">
+        <span class="label">Max throttle:</span>
+        <span class="value"><span id="maxThrottleVal">2000</span> / 2000</span>
+      </div>
+      <input type="range" id="maxThrottleSlider" min="100" max="2000" step="100" value="2000" oninput="onMaxThrottle()">
+      <div class="row" style="margin-top:8px"><span class="label">Direction (armed):</span></div>
+      <div class="grid">
+        <button onclick="motorDirCW()">Dir CW</button>
+        <button onclick="motorDirCCW()">Dir CCW</button>
+      </div>
+      <div class="row" style="margin-top:8px"><span class="label">3D mode (armed):</span></div>
+      <div class="grid">
+        <button onclick="motor3DOn()">3D ON</button>
+        <button onclick="motor3DOff()">3D OFF</button>
+      </div>
+      <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+      <div class="row"><span class="label">ESC Telemetry (KISS / BLHeli_32):</span></div>
+      <div class="warning" style="font-size:11px">
+        ESC telemetry wire (single byte UART @ 115200) подключи к <b>GPIO 44</b> (ELRS_RX),
+        GND общий. Работает при armed — ESC шлёт кадр ~каждые 20&nbsp;ms.
+      </div>
+      <div class="row"><span class="label">Motor pole count:</span>
+        <input id="escTelemPoles" type="number" min="2" max="40" value="14" style="width:70px;padding:4px;background:#0a0a14;color:#fff;border:1px solid #333">
+      </div>
+      <div class="grid">
+        <button onclick="escTelemStart()" class="success">Start Telem</button>
+        <button onclick="escTelemStop()" class="danger">Stop</button>
+      </div>
+      <div id="escTelemStatus" class="row" style="margin-top:6px">
+        <span class="label">Status:</span><span id="escTelemConn" class="status off">OFF</span>
+      </div>
+      <div class="row"><span class="label">Frame rate:</span><span id="escTelemRate" class="value">--</span></div>
+      <div class="row"><span class="label">Temp / Voltage:</span><span id="escTelemTV" class="value">--</span></div>
+      <div class="row"><span class="label">Current / mAh:</span><span id="escTelemCI" class="value">--</span></div>
+      <div class="row"><span class="label">eRPM / RPM:</span><span id="escTelemRPM" class="value">--</span></div>
+      <div class="row"><span class="label">Session max (T/I/V min/V peak/RPM):</span></div>
+      <div id="escTelemMax" style="font-family:monospace;font-size:11px;color:var(--text-dim)">--</div>
+      <div class="row" style="margin-top:4px"><span class="label">Frames / CRC errors:</span><span id="escTelemStats" class="value">--</span></div>
+    </div>
+  </div>
+</div>

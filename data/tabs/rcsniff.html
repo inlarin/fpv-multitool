@@ -1,0 +1,34 @@
+<div id="tab-rcsniff" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>RC Protocol Sniffer</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px">
+      Подключи сигнал с приёмника на GPIO 10 (ESP RX), GND, 5V. Плата автоматически
+      определит протокол (SBUS / iBus / PPM) или выбери вручную.<br>
+      ⚠ Убедись что <b>Port B</b> (вкладка System → Port B Mode) в режиме <code>UART</code> или <code>GPIO</code>.
+    </p>
+    <div class="row"><span class="label">Status:</span>
+      <span>
+        <span id="rcStatus" class="status off">STOPPED</span>
+        <span id="rcConn" class="status off">NO LINK</span>
+      </span>
+    </div>
+    <div class="row"><span class="label">Proto:</span><span class="value" id="rcProto">-</span></div>
+    <div class="row"><span class="label">Rate:</span><span class="value" id="rcRate">- Hz</span></div>
+    <div class="row"><span class="label">Frames / CRC errors:</span><span class="value" id="rcFrames">0 / 0</span></div>
+    <div class="row"><span class="label">Failsafe:</span><span class="value" id="rcFS">-</span></div>
+    <div class="grid">
+      <button class="success" onclick="rcStart('auto')">Auto-detect</button>
+      <button onclick="rcStart('sbus')">SBUS</button>
+    </div>
+    <div class="grid">
+      <button onclick="rcStart('ibus')">iBus</button>
+      <button onclick="rcStart('ppm')">PPM</button>
+    </div>
+    <button class="danger" onclick="rcStop()" style="width:100%">Stop</button>
+  </div>
+
+  <div class="card">
+    <h2>Channels (μs)</h2>
+    <div id="rcChannels" style="font-family:monospace;font-size:12px"></div>
+  </div>
+</div>

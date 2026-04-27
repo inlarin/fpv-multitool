@@ -42,6 +42,31 @@ def read_bytes(path):
         return f.read()
 
 
+# Tabs are stored under data/tabs/ — one HTML fragment per tab. They're
+# concatenated into index.html at build time at the {{TABS}} marker so
+# the wire result is a single HTML document (byte-identical to the old
+# pre-2026-04-28 monolith ordering).
+#
+# Editor benefit: each tab opens as a small file with HTML highlighting
+# and grep is cheap. Wire benefit: still one cached HTML resource —
+# runtime lazy-load is deferred until the JS is split per-tab too.
+TAB_ORDER = ["servo", "motor", "battery", "receiver",
+             "rcsniff", "setup", "sys", "usb", "ota"]
+
+
+def assemble_index_html(project_dir):
+    raw = read_bytes(os.path.join(project_dir, "data", "index.html"))
+    if b"{{TABS}}" not in raw:
+        return raw  # no marker → nothing to substitute (legacy case)
+    parts = []
+    for name in TAB_ORDER:
+        path = os.path.join(project_dir, "data", "tabs", f"{name}.html")
+        if not os.path.isfile(path):
+            raise RuntimeError(f"missing tab fragment {path}")
+        parts.append(read_bytes(path))
+    return raw.replace(b"<!-- {{TABS}} -->", b"\n".join(parts))
+
+
 def emit_array(name, gz):
     out = [f"const uint8_t {name}_GZ[] PROGMEM = {{"]
     for i in range(0, len(gz), 16):
@@ -61,10 +86,13 @@ def main():
                 ""]
     summary = []
     for rel, prefix in ASSETS:
-        src = os.path.join(PROJECT_DIR, "data", rel)
-        if not os.path.isfile(src):
-            raise RuntimeError(f"missing {src}")
-        raw = read_bytes(src)
+        if rel == "index.html":
+            raw = assemble_index_html(PROJECT_DIR)
+        else:
+            src = os.path.join(PROJECT_DIR, "data", rel)
+            if not os.path.isfile(src):
+                raise RuntimeError(f"missing {src}")
+            raw = read_bytes(src)
         gz = gzip.compress(raw, compresslevel=9)
         sections.append(f"// {rel}: {len(raw)} B raw -> {len(gz)} B gzip "
                         f"({len(gz)*100/len(raw):.1f}%)")

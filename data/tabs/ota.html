@@ -1,0 +1,42 @@
+<div id="tab-ota" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>OTA Update</h2>
+    <div class="row"><span class="label">FW version:</span><span class="value" id="otaFwVer">-</span></div>
+    <div class="row"><span class="label">Running:</span><span class="value" id="otaRunning">-</span></div>
+    <div class="row"><span class="label">Next slot:</span><span class="value" id="otaNext">-</span></div>
+    <div class="row"><span class="label">App size:</span><span class="value" id="otaAppSize">-</span></div>
+    <div class="row"><span class="label">Free:</span><span class="value" id="otaFree">-</span></div>
+    <div class="row"><span class="label">SDK:</span><span class="value" id="otaSdk">-</span></div>
+    <button onclick="otaRefresh()">Refresh info</button>
+  </div>
+  <div class="card">
+    <h2>GitHub releases</h2>
+    <div class="row"><span class="label">Repo:</span><span class="value" id="otaRepo">-</span></div>
+    <div class="row"><span class="label">Latest:</span><span class="value" id="otaLatest">-</span></div>
+    <div class="row"><span class="label">Status:</span><span class="value" id="otaCompare">-</span></div>
+    <div style="margin-top:8px">
+      <button onclick="otaCheck()" id="otaCheckBtn">Проверить обновления</button>
+      <button onclick="otaPull()" id="otaPullBtn" disabled>Установить из GitHub</button>
+    </div>
+    <div class="row" style="margin-top:10px"><span class="label">Progress:</span><span class="value" id="otaPullStage">-</span></div>
+    <div class="bar"><div class="bar-fill" id="otaPullBar" style="width:0%;background:#0af"></div></div>
+    <p style="color:#888;font-size:11px;margin:8px 0 0">
+      Для онлайн-апдейта плата должна быть в STA-режиме (подключена к WiFi с интернетом).
+    </p>
+  </div>
+  <div class="card">
+    <h2>Upload firmware.bin</h2>
+    <p style="color:#888;font-size:12px;margin:4px 0 10px">
+      PlatformIO: <code>.pio/build/esp32s3/firmware.bin</code>.
+      Плата перезагрузится автоматически после прошивки.
+    </p>
+    <input type="file" id="otaFile" accept=".bin">
+    <div class="row"><span class="label">Статус:</span><span class="value" id="otaStage">idle</span></div>
+    <div class="bar"><div class="bar-fill" id="otaBar" style="width:0%;background:#0af"></div></div>
+    <div style="margin-top:10px">
+      <button id="otaBtn" onclick="otaUpload()">Upload & Flash</button>
+      <button class="danger" onclick="otaAbort()">Abort</button>
+    </div>
+    <div id="otaResult" style="margin-top:10px;color:#0f0;word-break:break-word"></div>
+  </div>
+</div>

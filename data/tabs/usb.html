@@ -1,0 +1,39 @@
+<div id="tab-usb" class="tab-content" style="display:none">
+  <div class="card">
+    <h2>USB Mode</h2>
+    <p style="color:#888;font-size:12px;margin:4px 0 10px">
+      USB-дескриптор фиксируется при загрузке — любое переключение <b>требует перезагрузки</b>.<br>
+      • <b>CDC</b> — стандартный USB Serial (прошивка, отладка).<br>
+      • <b>USB2TTL</b> — CDC + прозрачный мост на аппаратный UART1.<br>
+      • <b>USB2I2C</b> — эмулятор CP2112 HID (DJI Battery Killer, bqStudio, SMBus-инструменты).
+    </p>
+    <div class="row"><span class="label">Активен сейчас:</span><span class="value" id="usbActive">-</span></div>
+    <div class="row"><span class="label">Выбран в NVS:</span>
+      <span><span class="value" id="usbPreferred">-</span>
+      <span id="usbPendingBadge" class="status off" style="display:none;margin-left:8px">REBOOT PENDING</span></span>
+    </div>
+    <div id="usbModes" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="usbRefresh()">Refresh</button>
+      <button class="danger" onclick="usbApplyReboot()" id="usbApplyBtn">Применить и перезагрузить</button>
+    </div>
+    <div id="usbMsg" style="margin-top:10px;color:#0f0"></div>
+    <p style="color:#f80;font-size:11px;margin:12px 0 0">
+      ⚠ В режиме <code>USB2I2C</code> USB-Serial отключается —
+      прошивка только через <b>OTA</b> вкладку или физический UART0.
+    </p>
+  </div>
+  <div class="card">
+    <h2>CP2112 transaction log</h2>
+    <p style="color:#888;font-size:11px;margin:4px 0 8px">
+      Каждая транзакция шины от USB2I2C. Колонки: <code>ms dir s=slave7 err=wireErr r=reqLen g=gotLen data…</code>
+    </p>
+    <pre id="cpLog" style="background:#000;color:#0f0;font-size:11px;padding:8px;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-all">(idle)</pre>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button onclick="cpLogRefresh()">Refresh</button>
+      <button onclick="cpLogExport()">Export .txt</button>
+      <label><input type="checkbox" id="cpLogAuto" checked onchange="cpLogAutoToggle()"> Auto-refresh 1s</label>
+      <span id="cpLogStats" style="color:#888;font-size:11px"></span>
+    </div>
+  </div>
+</div>
