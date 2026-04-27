@@ -59,7 +59,7 @@ function send(obj) {
 let _curWs = localStorage.getItem('ws') || 'batt';
 const _wsDefTab = {batt:'battery', fpv:'servo', sys:'setup'};
 const _wsValid = name => ['batt','fpv','sys'].includes(name);
-const _tabValid = name => ['servo','motor','battery','receiver','rcsniff','setup','sys','usb','ota'].includes(name);
+const _tabValid = name => ['servo','motor','battery','receiver','rcsniff','setup','sys','usb','ota','_styleguide'].includes(name);
 // Back-compat: any old saved 'elrs' or 'crsf' tab name maps to merged 'receiver' tab
 if (localStorage.getItem('tab_fpv') === 'elrs' || localStorage.getItem('tab_fpv') === 'crsf') {
   localStorage.setItem('tab_fpv', 'receiver');

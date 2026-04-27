@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — USB (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab"        href="receiver.html">FPV Tools</a>
+      <a class="ws-tab active" href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="System tabs">
+    <a class="tab"        href="setup.html">Setup</a>
+    <a class="tab"        href="sys.html">System</a>
+    <a class="tab"        href="ota.html">OTA</a>
+    <a class="tab active" href="usb.html">USB</a>
+  </nav>
+
+  <!-- Current state -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">USB descriptor</span>
+      <span class="badge badge-success">CDC active</span>
+    </div>
+    <p class="field-help" style="margin-bottom: var(--s-3);">
+      USB-дескриптор фиксируется при загрузке — переключение требует <b>перезагрузки платы</b>.
+      Выбор сохраняется в NVS.
+    </p>
+    <div class="kv"><span class="kv-label">Active now</span><span class="kv-value">CDC (Serial)</span></div>
+    <div class="kv"><span class="kv-label">Stored in NVS</span><span class="kv-value">CDC (Serial)</span></div>
+    <div class="kv"><span class="kv-label">Reboot pending</span><span class="kv-value"><span class="badge badge-neutral">no</span></span></div>
+  </div>
+
+  <!-- Mode picker -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">Switch mode</span>
+    </div>
+
+    <div class="action-picker" style="margin: 0;">
+      <div class="action-card active">
+        <span class="action-card-icon">⌨</span>
+        <span class="action-card-title">CDC (Serial)</span>
+        <span class="action-card-desc">Standard USB Serial. PlatformIO upload, debug печать. Default.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">🔌</span>
+        <span class="action-card-title">USB2TTL</span>
+        <span class="action-card-desc">CDC + transparent UART bridge на Port B. esptool, флешер RX, любой UART tool.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">🔋</span>
+        <span class="action-card-title">USB2I2C</span>
+        <span class="action-card-desc">CP2112 HID emulator. DJI Battery Killer, bqStudio, Linux ioctl I2C.</span>
+      </div>
+    </div>
+
+    <div class="banner banner-warn" style="margin-top: var(--s-4);">
+      ⚠ В режиме <b>USB2I2C</b> USB-Serial отключается — прошивка только через
+      <a href="ota.html"><b>OTA</b></a> или физический UART0 (TX0/RX0 pads).
+    </div>
+
+    <div class="cluster" style="margin-top: var(--s-3);">
+      <button class="danger" disabled>Switch & reboot</button>
+      <button class="ghost">Refresh</button>
+    </div>
+  </div>
+
+  <!-- CP2112 transaction log (only relevant in USB2I2C mode) -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">CP2112 transaction log</span>
+      <span class="badge badge-neutral">USB2I2C only</span>
+    </div>
+    <p class="field-help" style="margin-bottom: var(--s-3);">
+      Каждая транзакция шины от USB2I2C client. Формат:
+      <code>ms · dir · slave7 · err · req · got · data</code>
+    </p>
+
+    <pre style="background: var(--input-bg); color: var(--text-muted); padding: var(--s-3); border-radius: var(--r); font-size: var(--text-xs); max-height: 280px; overflow: auto; line-height: 1.5; border: 1px solid var(--border-subtle); margin: 0;">[USB2I2C inactive — switch mode above to enable logging]</pre>
+
+    <div class="cluster" style="margin-top: var(--s-3);">
+      <button class="secondary" disabled>Refresh</button>
+      <button class="ghost" disabled>Export .txt</button>
+      <label class="kv-label"><input type="checkbox" disabled> Auto-refresh 1s</label>
+    </div>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">USB</span>
+    <span class="kv-value">CDC (Serial) · COM5</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">VID 303A · PID 1001 · TinyUSB session</span>
+  </div>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — Motor (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab active" href="receiver.html">FPV Tools</a>
+      <a class="ws-tab"        href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="FPV tabs">
+    <a class="tab"        href="servo.html">Servo</a>
+    <a class="tab active" href="motor.html">Motor</a>
+    <a class="tab"        href="receiver.html">Receiver</a>
+    <a class="tab"        href="rcsniff.html">RC Sniff</a>
+  </nav>
+
+  <!-- Safety banner (always visible, can't dismiss) -->
+  <div class="banner banner-error" style="margin-bottom: var(--s-4);">
+    ⚠ <b>Снять пропеллеры перед любым тестом.</b> ESC подключён к Port B (signal=GP11),
+    направление вращения может неожиданно измениться. Привязать мотор к чему-то тяжёлому.
+  </div>
+
+  <!-- ============== ACTION PICKER ============== -->
+  <div class="action-picker">
+    <div class="action-card active" onclick="pickAction('throttle')">
+      <span class="action-card-icon">⚡</span>
+      <span class="action-card-title">Test throttle</span>
+      <span class="action-card-desc">Arm → slider → disarm. DShot150/300/600 + max throttle cap.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('control')">
+      <span class="action-card-icon">↪</span>
+      <span class="action-card-title">Direction & 3D</span>
+      <span class="action-card-desc">Сменить spin direction (CW/CCW), включить 3D mode (центр → reverse).</span>
+    </div>
+    <div class="action-card" onclick="pickAction('beep')">
+      <span class="action-card-icon">🔊</span>
+      <span class="action-card-title">Beep test</span>
+      <span class="action-card-desc">5 вариантов BEACON tone. Найти потерянный квадрик.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('telem')">
+      <span class="action-card-icon">📊</span>
+      <span class="action-card-title">ESC telemetry</span>
+      <span class="action-card-desc">KISS / BLHeli_32 — RPM, voltage, current, temp. <b>10-byte frame</b>.</span>
+    </div>
+  </div>
+
+  <!-- ============== THROTTLE ACTION ============== -->
+  <div id="action-throttle">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Throttle test</span>
+        <span class="badge" id="armBadge"><span class="dot"></span>DISARMED</span>
+      </div>
+
+      <!-- Big throttle display -->
+      <div class="big mono">0 <span style="font-size: var(--text-md); color: var(--text-muted);">/ 2000</span></div>
+
+      <!-- Throttle slider (disabled until armed) -->
+      <input type="range" min="0" max="2000" value="0" step="1" disabled>
+
+      <!-- Quick steps -->
+      <div class="grid">
+        <button class="secondary" disabled>0</button>
+        <button class="secondary" disabled>200</button>
+        <button class="secondary" disabled>500</button>
+        <button class="secondary" disabled>1000</button>
+      </div>
+
+      <hr>
+
+      <!-- Arm/disarm -->
+      <div class="cluster">
+        <button class="success">⚡ Arm motor</button>
+        <button class="danger">🛑 Disarm</button>
+      </div>
+
+      <hr>
+
+      <!-- Settings -->
+      <div class="field">
+        <span class="field-label">DShot speed</span>
+        <div class="cluster">
+          <label><input type="radio" name="dshot"> DShot150</label>
+          <label><input type="radio" name="dshot" checked> DShot300</label>
+          <label><input type="radio" name="dshot"> DShot600</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Max throttle (safety cap)</span>
+        <div class="cluster">
+          <input type="number" min="100" max="2000" step="50" value="500" style="width: 100px;">
+          <span class="field-help">Slider не пойдёт выше этого значения. Default 500 = 25%.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== DIRECTION & 3D ============== -->
+  <div id="action-control" style="display:none">
+    <div class="banner banner-warn">
+      Эти команды отправляются как <b>DShot latch commands</b> (≥6 повторов).
+      Мотор должен быть <b>armed</b>. ESC сохранит изменение в свою EEPROM после первого spin-up.
+    </div>
+
+    <div class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Spin direction</span>
+        </div>
+        <div class="kv"><span class="kv-label">Current</span><span class="kv-value">CW (DShot SPIN_DIR_1)</span></div>
+        <div class="cluster" style="margin-top: var(--s-3);">
+          <button>↻ CW (DShot 7)</button>
+          <button>↺ CCW (DShot 8)</button>
+        </div>
+        <p class="field-help" style="margin-top: var(--s-3);">
+          Альтернатива physical rewire (поменять 2 фазы из 3). Все BLHeli_32 ESC поддерживают эту команду.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">3D mode</span>
+          <span class="badge badge-neutral">OFF</span>
+        </div>
+        <div class="kv">
+          <span class="kv-label">3D mode</span>
+          <span class="kv-value">throttle = 1000 → центр (stop), 0 / 2000 → max forward / max reverse</span>
+        </div>
+        <div class="cluster" style="margin-top: var(--s-3);">
+          <button>3️⃣ 3D ON (DShot 10)</button>
+          <button class="ghost">3D OFF (DShot 9)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== BEEP ============== -->
+  <div id="action-beep" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Beep test</span>
+      </div>
+      <p class="field-help" style="margin-bottom: var(--s-3);">
+        5 разных BEACON tone в BLHeli_32. Использует pin → motor coil как звуковой драйвер.
+        Мотор не вращается — только издаёт писк. Полезно чтобы найти потерянный коптер.
+      </p>
+      <div class="grid grid-3">
+        <button>🔊 Beep 1 · short</button>
+        <button>🔊 Beep 2 · low</button>
+        <button>🔊 Beep 3 · medium</button>
+        <button>🔊 Beep 4 · high</button>
+        <button>🔊 Beep 5 · long</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== TELEMETRY ============== -->
+  <div id="action-telem" style="display:none">
+    <div class="toolbar">
+      <button>▶ Start telemetry</button>
+      <button class="ghost" disabled>⏸ Stop</button>
+      <span class="toolbar-spacer"></span>
+      <span class="kv-label">Frame rate:</span>
+      <span class="kv-value mono">— Hz</span>
+      <span class="badge badge-neutral">7 pole pairs</span>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-tile success">
+        <div class="stat-tile-value mono">12 480</div>
+        <div class="stat-tile-label">RPM</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono">14.78 V</div>
+        <div class="stat-tile-label">Voltage</div>
+      </div>
+      <div class="stat-tile warn">
+        <div class="stat-tile-value mono">11.4 A</div>
+        <div class="stat-tile-label">Current</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono">42 °C</div>
+        <div class="stat-tile-label">Temp</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono">128</div>
+        <div class="stat-tile-label">mAh used</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono">0</div>
+        <div class="stat-tile-label">CRC errors</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: var(--s-4);">
+      <div class="card-header">
+        <span class="card-title">Session peaks</span>
+        <button class="btn-ghost btn-sm">Reset</button>
+      </div>
+      <div class="kv"><span class="kv-label">Max RPM</span><span class="kv-value mono">14 200</span></div>
+      <div class="kv"><span class="kv-label">Max current</span><span class="kv-value mono">18.7 A</span></div>
+      <div class="kv"><span class="kv-label">Max temp</span><span class="kv-value mono">52 °C</span></div>
+      <div class="kv"><span class="kv-label">Voltage min/max</span><span class="kv-value mono">11.2 V / 16.8 V</span></div>
+      <div class="kv"><span class="kv-label">Pole pairs (motor)</span>
+        <input type="number" min="2" max="40" step="1" value="14" style="width: 80px;">
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== CONNECTION RAIL ============== -->
+  <div class="connection-rail">
+    <span class="dot warn"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">PWM @ GP11 (GP10 idle)</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Owner: <code>motor_dispatch</code> · DShot300 · 500 Hz frame</span>
+  </div>
+
+</div>
+
+<script>
+function pickAction(name) {
+  document.querySelectorAll('.action-card').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  ['throttle','control','beep','telem'].forEach(a => {
+    const el = document.getElementById('action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+}
+</script>
+
+</body>
+</html>

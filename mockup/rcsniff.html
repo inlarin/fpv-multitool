@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — RC Sniffer (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab active" href="receiver.html">FPV Tools</a>
+      <a class="ws-tab"        href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="FPV tabs">
+    <a class="tab"        href="servo.html">Servo</a>
+    <a class="tab"        href="motor.html">Motor</a>
+    <a class="tab"        href="receiver.html">Receiver</a>
+    <a class="tab active" href="rcsniff.html">RC Sniff</a>
+  </nav>
+
+  <div class="banner banner-info" style="margin-bottom: var(--s-4);">
+    Подключи сигнал с приёмника на <code>GP10</code> (ESP RX), GND, 5V.
+    Плата автоматически попробует определить протокол: <b>SBUS · iBus · PPM</b>.
+  </div>
+
+  <!-- Detection card — primary action -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Protocol detection</span>
+      <span class="badge badge-success" id="protoBadge"><span class="dot on"></span>Detected: SBUS</span>
+    </div>
+
+    <div class="cluster">
+      <button>🔍 Auto-detect</button>
+      <span class="kv-label">or force:</span>
+      <button class="ghost">SBUS</button>
+      <button class="ghost">iBus</button>
+      <button class="ghost">PPM</button>
+      <span class="toolbar-spacer"></span>
+      <button class="danger ghost">Stop</button>
+    </div>
+  </div>
+
+  <!-- Live channels -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">Channels</span>
+      <span class="badge badge-neutral">16 ch · 100 Hz · 0 CRC errors</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--s-2);">
+      <div>
+        <div class="kv-label">CH1 · roll</div>
+        <div class="kv-value mono">1502</div>
+        <div class="bar"><div class="bar-fill" style="width: 50%;"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH2 · pitch</div>
+        <div class="kv-value mono">1499</div>
+        <div class="bar"><div class="bar-fill" style="width: 50%;"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH3 · throttle</div>
+        <div class="kv-value mono">988</div>
+        <div class="bar"><div class="bar-fill" style="width: 5%; background: var(--success);"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH4 · yaw</div>
+        <div class="kv-value mono">1501</div>
+        <div class="bar"><div class="bar-fill" style="width: 50%;"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH5 · arm</div>
+        <div class="kv-value mono">1000</div>
+        <div class="bar"><div class="bar-fill" style="width: 5%; background: var(--text-subtle);"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH6</div>
+        <div class="kv-value mono">1500</div>
+        <div class="bar"><div class="bar-fill" style="width: 50%;"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH7</div>
+        <div class="kv-value mono">1500</div>
+        <div class="bar"><div class="bar-fill" style="width: 50%;"></div></div>
+      </div>
+      <div>
+        <div class="kv-label">CH8</div>
+        <div class="kv-value mono">1500</div>
+        <div class="bar"><div class="bar-fill" style="width: 50%;"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stat-grid" style="margin-top: var(--s-4);">
+    <div class="stat-tile success">
+      <div class="stat-tile-value">CONNECTED</div>
+      <div class="stat-tile-label">Status</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">100 Hz</div>
+      <div class="stat-tile-label">Frame rate</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">12 489</div>
+      <div class="stat-tile-label">Frames</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">0</div>
+      <div class="stat-tile-label">CRC errors</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value">no</div>
+      <div class="stat-tile-label">Failsafe</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value">no</div>
+      <div class="stat-tile-label">Lost frame</div>
+    </div>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">UART @ GP10/11</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Owner: <code>rc_sniffer</code> · 100000 baud · 8E2 inverted (SBUS)</span>
+  </div>
+
+</div>
+
+</body>
+</html>

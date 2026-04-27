@@ -8,6 +8,12 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+
+<!-- Floating chrome -->
+<div id="connStatus" class="disconnected">offline</div>
+<button id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
+
+<!-- Confirm modal — async wrapper around browser confirm() with proper theming -->
 <div id="confirmBackdrop" class="modal-backdrop" onclick="if(event.target===this)_modalCancel()">
   <div class="modal-box" id="confirmBox" role="alertdialog" aria-modal="true" aria-labelledby="confirmMsg">
     <p class="modal-msg" id="confirmMsg"></p>
@@ -17,41 +23,50 @@
     </div>
   </div>
 </div>
-<div id="connStatus" class="disconnected">...</div>
-<button id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark theme">🌙</button>
-<h1>FPV MultiTool</h1>
 
-<div class="ws-tabs" id="wsTabs">
-  <div class="ws-tab active" onclick="showWorkspace('batt')">Battery Lab</div>
-  <div class="ws-tab" onclick="showWorkspace('fpv')">FPV Tools</div>
-  <div class="ws-tab" onclick="showWorkspace('sys')">System</div>
-</div>
+<div class="app-shell">
 
-<div id="ws-batt">
-  <div class="tabs">
-    <div class="tab active" onclick="showTab('battery')">Battery</div>
-  </div>
-</div>
-<div id="ws-fpv" style="display:none">
-  <div class="tabs">
-    <div class="tab active" onclick="showTab('servo')">Servo</div>
-    <div class="tab" onclick="showTab('motor')">Motor</div>
-    <div class="tab" onclick="showTab('receiver')">Receiver</div>
-    <div class="tab" onclick="showTab('rcsniff')">RC Sniff</div>
-  </div>
-</div>
-<div id="ws-sys" style="display:none">
-  <div class="tabs">
-    <div class="tab active" onclick="showTab('setup')">Setup</div>
-    <div class="tab" onclick="showTab('sys')">System</div>
-    <div class="tab" onclick="showTab('ota')">OTA</div>
-  </div>
-</div>
+  <header class="app-header">
+    <span class="app-title">FPV MultiTool</span>
+    <span class="app-title-mono" id="appVersion"></span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" id="wsTabs" aria-label="Workspaces">
+      <div class="ws-tab active" onclick="showWorkspace('batt')">Battery Lab</div>
+      <div class="ws-tab"        onclick="showWorkspace('fpv')">FPV Tools</div>
+      <div class="ws-tab"        onclick="showWorkspace('sys')">System</div>
+    </nav>
+  </header>
 
-<!-- ===== SERVO ===== -->
-<!-- {{TABS}} -->
+  <div id="ws-batt">
+    <nav class="tabs" aria-label="Battery tabs">
+      <div class="tab active" onclick="showTab('battery')">Battery</div>
+    </nav>
+  </div>
+
+  <div id="ws-fpv" style="display:none">
+    <nav class="tabs" aria-label="FPV tabs">
+      <div class="tab active" onclick="showTab('servo')">Servo</div>
+      <div class="tab"        onclick="showTab('motor')">Motor</div>
+      <div class="tab"        onclick="showTab('receiver')">Receiver</div>
+      <div class="tab"        onclick="showTab('rcsniff')">RC Sniff</div>
+    </nav>
+  </div>
+
+  <div id="ws-sys" style="display:none">
+    <nav class="tabs" aria-label="System tabs">
+      <div class="tab active" onclick="showTab('setup')">Setup</div>
+      <div class="tab"        onclick="showTab('sys')">System</div>
+      <div class="tab"        onclick="showTab('ota')">OTA</div>
+      <div class="tab"        onclick="showTab('usb')">USB</div>
+      <div class="tab"        onclick="showTab('_styleguide')" title="Design system reference (developer)">Styleguide</div>
+    </nav>
+  </div>
+
+  <!-- {{TABS}} -->
+
+</div>  <!-- /.app-shell -->
 
 <script src="/ui.js"></script>
-<div id="fwFooter" style="text-align:center;color:#444;font-size:11px;margin:20px 0 8px;font-family:monospace"></div>
+
 </body>
 </html>

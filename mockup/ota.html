@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — OTA (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab"        href="receiver.html">FPV Tools</a>
+      <a class="ws-tab active" href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="System tabs">
+    <a class="tab"        href="setup.html">Setup</a>
+    <a class="tab"        href="sys.html">System</a>
+    <a class="tab active" href="ota.html">OTA</a>
+    <a class="tab"        href="usb.html">USB</a>
+  </nav>
+
+  <!-- Current state -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Current firmware</span>
+      <span class="badge badge-success">app1 active</span>
+    </div>
+    <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono">v0.28.6</span></div>
+    <div class="kv"><span class="kv-label">Built</span><span class="kv-value mono">9ca3ff4 · 2026-04-27</span></div>
+    <div class="kv"><span class="kv-label">App size</span><span class="kv-value mono">1.50 MB / 6.25 MB</span></div>
+    <div class="kv"><span class="kv-label">Repo</span><span class="kv-value mono">inlarin/fpv-multitool</span></div>
+  </div>
+
+  <!-- Update from GitHub -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">Update from GitHub</span>
+      <span class="badge badge-info">latest: v0.29.0</span>
+    </div>
+
+    <div class="banner banner-info" style="margin-bottom: var(--s-3);">
+      Доступна <b>v0.29.0</b> — UI redesign. <a href="#">Release notes →</a>
+    </div>
+
+    <div class="cluster">
+      <button>📥 Pull & install v0.29.0</button>
+      <button class="ghost">🔄 Re-check</button>
+      <span class="toolbar-spacer"></span>
+      <span class="kv-label">Last check: 12 min ago</span>
+    </div>
+
+    <p class="field-help" style="margin-top: var(--s-3);">
+      Скачается в PSRAM (~250 KB), запишется в pending app slot, плата перезагрузится.
+      Если новая версия не загрузится — bootloader откатит на текущую (rollback partition).
+    </p>
+  </div>
+
+  <!-- Manual upload -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">Manual upload</span>
+      <span class="badge badge-neutral">advanced</span>
+    </div>
+    <p class="field-help" style="margin-bottom: var(--s-3);">
+      Залить произвольный <code>firmware.bin</code> с компьютера. Полезно для dev-сборок,
+      собственных форков, или когда GitHub недоступен.
+    </p>
+    <div class="cluster">
+      <button class="secondary">📁 Choose file…</button>
+      <span class="kv-label">no file selected</span>
+    </div>
+    <div class="cluster" style="margin-top: var(--s-3);">
+      <button disabled>Upload & flash</button>
+      <button class="ghost">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Progress (shown during update) -->
+  <div class="card" style="margin-top: var(--s-4); display: none;" id="progressCard">
+    <div class="card-header">
+      <span class="card-title">Updating…</span>
+    </div>
+    <div class="kv"><span class="kv-label">Stage</span><span class="kv-value">Writing</span></div>
+    <div class="kv"><span class="kv-label">Progress</span><span class="kv-value mono">68% · 1.02 / 1.50 MB</span></div>
+    <div class="bar" style="height: 8px;"><div class="bar-fill" style="width: 68%;"></div></div>
+    <p class="field-help" style="margin-top: var(--s-3);">
+      Не закрывай вкладку. После записи плата перезагрузится автоматически (~50 секунд до восстановления WiFi).
+    </p>
+    <button class="danger ghost" style="margin-top: var(--s-3);">Abort</button>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Plate</span>
+    <span class="kv-value">192.168.32.50 · WiFi STA</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Free heap: 187 KB · PSRAM: 7.8 MB free</span>
+  </div>
+
+</div>
+
+</body>
+</html>

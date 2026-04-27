@@ -1,67 +1,86 @@
 <div id="tab-sys" class="tab-content" style="display:none">
+
   <div class="card">
-    <h2>System Info</h2>
-    <div class="row"><span class="label">IP:</span><span class="value" id="sysIP">-</span></div>
-    <div class="row"><span class="label">Uptime:</span><span class="value" id="sysUptime">-</span></div>
-    <div class="row"><span class="label">Free heap:</span><span class="value" id="sysHeap">-</span></div>
-    <div class="row"><span class="label">WiFi clients:</span><span class="value" id="sysClients">-</span></div>
+    <div class="card-header">
+      <span class="card-title">System Info</span>
+    </div>
+    <div class="kv"><span class="kv-label">IP</span><span class="kv-value mono" id="sysIP">—</span></div>
+    <div class="kv"><span class="kv-label">Uptime</span><span class="kv-value mono" id="sysUptime">—</span></div>
+    <div class="kv"><span class="kv-label">Free heap</span><span class="kv-value mono" id="sysHeap">—</span></div>
+    <div class="kv"><span class="kv-label">WiFi clients</span><span class="kv-value mono" id="sysClients">—</span></div>
   </div>
 
-  <details class="card" style="padding:0">
-    <summary style="padding:14px 16px;cursor:pointer;font-weight:600;color:var(--accent)">⚙ Advanced — Port B / USB / WiFi (ручной режим)</summary>
-    <div style="padding:0 16px 16px">
-    <div class="warning" style="font-size:11px;margin-bottom:10px">
-      Обычно не нужно — выбирай «Setup» выше. Здесь — ручной контроль
-      электрической раскладки пинов и USB-дескриптора для прошаренного
-      использования.
+  <details class="card">
+    <summary class="card-title" style="cursor:pointer; list-style:none;">
+      ⚙ Advanced — Port B / WiFi (manual)
+    </summary>
+    <div class="banner banner-warn" style="margin-top: var(--s-3)">
+      Обычно не нужно — выбирай <b>Setup</b> в верхнем меню. Здесь — ручной контроль
+      электрической раскладки пинов и WiFi для прошаренного использования.
     </div>
-  <div class="card" style="background:var(--bg);border:1px dashed var(--border)">
-    <h2 style="font-size:15px">Port B Mode <span id="portBPins" style="color:var(--text-dim);font-size:11px;font-weight:normal"></span></h2>
-    <p style="color:#888;font-size:11px;margin:4px 0 8px">
-      Единственный сигнальный разъём платы (<code>GP10</code>/<code>GP11</code> + <code>5V</code>/<code>GND</code>)
-      используется для всех фич: батарея, приёмник, сервопривод/мотор. Одновременно работает только один режим.
-      Выбранный режим сохраняется между перезагрузками.
-    </p>
-    <div class="row">
-      <span class="label">Current:</span>
-      <span>
-        <span id="portBMode" class="status off">IDLE</span>
-        <span id="portBOwner" class="value" style="font-size:11px;color:var(--text-dim);margin-left:6px"></span>
-      </span>
+
+    <div class="card compact" style="margin-top: var(--s-3); border-style: dashed;">
+      <div class="card-header">
+        <span class="card-title">Port B Mode</span>
+        <span class="kv-value mono" id="portBPins"></span>
+      </div>
+      <p class="field-help" style="margin-bottom: var(--s-3)">
+        Единственный сигнальный разъём (<code>GP10</code>/<code>GP11</code> + <code>5V</code>/<code>GND</code>)
+        используется для всех фич: батарея, приёмник, сервопривод/мотор. Одновременно работает один режим.
+        Выбор сохраняется между перезагрузками.
+      </p>
+      <div class="kv">
+        <span class="kv-label">Current</span>
+        <div class="cluster">
+          <span id="portBMode" class="badge badge-neutral">IDLE</span>
+          <span class="kv-label" id="portBOwner"></span>
+        </div>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Preferred (boot)</span>
+        <span class="kv-value" id="portBPref">—</span>
+      </div>
+      <div class="field">
+        <span class="field-label">Switch mode</span>
+        <div id="portBModeBtns" class="cluster"></div>
+      </div>
+      <button class="danger" onclick="portBRelease()" style="width:100%;">Force Release</button>
+      <div id="portBMsg" class="field-help" style="color: var(--success); min-height: 1em;"></div>
+
+      <details style="margin-top: var(--s-3);">
+        <summary class="kv-label" style="cursor: pointer;">Mode reference</summary>
+        <div class="banner" style="background: var(--bg-subtle); color: var(--text-muted); font-size: var(--text-xs); border: none;">
+          <code>IDLE</code> — пины отключены<br>
+          <code>I2C</code> — SDA=GPIO 11, SCL=GPIO 10 — DJI/SBS battery, CP2112 USB2I2C<br>
+          <code>UART</code> — TX=GPIO 11, RX=GPIO 10 — ELRS Flash, CRSF, USB2TTL<br>
+          <code>PWM</code> — signal=GPIO 11 — Servo, Motor DShot, ESC test<br>
+          <code>GPIO</code> — raw bit-bang — RC Sniffer (PPM)
+        </div>
+      </details>
     </div>
-    <div class="row">
-      <span class="label">Preferred (boot):</span>
-      <span class="value" id="portBPref">-</span>
-    </div>
-    <div class="row" style="margin-top:8px;flex-direction:column;align-items:flex-start;gap:4px">
-      <span class="label" style="margin-bottom:4px">Выбрать режим:</span>
-      <div id="portBModeBtns" style="display:flex;flex-wrap:wrap;gap:4px;width:100%"></div>
-    </div>
-    <button class="danger" onclick="portBRelease()" style="width:100%;margin-top:6px">Force Release</button>
-    <div id="portBMsg" style="margin-top:8px;color:var(--status-on);font-size:12px"></div>
-    <div style="margin-top:10px;padding:6px;background:var(--input-bg);border-radius:4px;font-size:11px;color:var(--text-dim)">
-      <b>Режимы:</b><br>
-      <code>IDLE</code> — пины отключены (ничего не работает)<br>
-      <code>I2C</code> — SDA=GPIO 11, SCL=GPIO 10 — DJI/SBS battery, CP2112 USB2I2C<br>
-      <code>UART</code> — TX=GPIO 11, RX=GPIO 10 — ELRS Flash, CRSF, USB2TTL<br>
-      <code>PWM</code> — signal=GPIO 11 — Servo, Motor DShot, ESC test<br>
-      <code>GPIO</code> — raw bit-bang — RC Sniffer (PPM)
-    </div>
-  </div>
-  <div class="card" style="background:var(--bg);border:1px dashed var(--border)">
-    <h2 style="font-size:15px">WiFi Config</h2>
-    <div style="margin-bottom:8px">
-      <button onclick="scanWifi()" id="wifiScanBtn">Scan networks</button>
-      <span id="wifiScanStatus" style="color:#888;margin-left:8px;font-size:12px"></span>
-    </div>
-    <div id="wifiScanList" style="margin-bottom:10px"></div>
-    <div class="label">SSID:</div>
-    <input type="text" id="wifiSSID" placeholder="your WiFi name">
-    <div class="label">Password:</div>
-    <input type="password" id="wifiPASS" placeholder="password">
-    <button onclick="saveWifi()">Save & Connect STA</button>
-    <button class="danger" onclick="clearWifi()">Clear (back to AP)</button>
-  </div>
+
+    <div class="card compact" style="margin-top: var(--s-3); border-style: dashed;">
+      <div class="card-header">
+        <span class="card-title">WiFi Config</span>
+      </div>
+      <div class="cluster" style="margin-bottom: var(--s-3);">
+        <button class="secondary" onclick="scanWifi()" id="wifiScanBtn">Scan networks</button>
+        <span class="field-help" id="wifiScanStatus"></span>
+      </div>
+      <div id="wifiScanList" style="margin-bottom: var(--s-3);"></div>
+      <div class="field">
+        <span class="field-label">SSID</span>
+        <input type="text" id="wifiSSID" placeholder="your WiFi name">
+      </div>
+      <div class="field">
+        <span class="field-label">Password</span>
+        <input type="password" id="wifiPASS" placeholder="password">
+      </div>
+      <div class="cluster">
+        <button onclick="saveWifi()">Save & Connect STA</button>
+        <button class="danger" onclick="clearWifi()">Clear (back to AP)</button>
+      </div>
     </div>
   </details>
+
 </div>

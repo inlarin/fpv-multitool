@@ -51,7 +51,7 @@ def read_bytes(path):
 # and grep is cheap. Wire benefit: still one cached HTML resource —
 # runtime lazy-load is deferred until the JS is split per-tab too.
 TAB_ORDER = ["servo", "motor", "battery", "receiver",
-             "rcsniff", "setup", "sys", "usb", "ota"]
+             "rcsniff", "setup", "sys", "usb", "ota", "_styleguide"]
 
 
 def assemble_index_html(project_dir):

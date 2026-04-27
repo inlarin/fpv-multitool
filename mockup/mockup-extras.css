@@ -1,0 +1,183 @@
+/* Mockup-only additions — extra primitives we need for the new IA that
+   should eventually merge back into data/style.css when the design is
+   approved. Kept separate during iteration so style.css stays "ready to
+   ship" while we explore. */
+
+/* Action picker — large decision cards, used at the top of each tab */
+.action-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s-3);
+  margin-bottom: var(--s-5);
+}
+.action-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-4);
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  transition: border-color var(--t-fast), background var(--t-fast),
+              transform var(--t-fast);
+  user-select: none;
+}
+.action-card:hover {
+  border-color: var(--primary);
+  background: var(--card-elevated);
+}
+.action-card.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  box-shadow: var(--shadow);
+}
+.action-card-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+.action-card-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semi);
+  color: var(--text);
+}
+.action-card-desc {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+/* Page section — header + body, replaces ad-hoc <h2> + cards */
+.page-section {
+  margin-bottom: var(--s-6);
+}
+.page-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.page-section-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semi);
+}
+.page-section-subtitle {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Stat tile — single big number display, used for cell voltages / RSSI / etc */
+.stat-tile {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+  text-align: center;
+  min-width: 0;
+}
+.stat-tile-value {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semi);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.stat-tile-label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: var(--s-1);
+}
+.stat-tile.success .stat-tile-value { color: var(--success); }
+.stat-tile.warn .stat-tile-value    { color: var(--warn); }
+.stat-tile.danger .stat-tile-value  { color: var(--danger); }
+
+/* Stat grid — auto-fit grid of stat tiles */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--s-2);
+}
+
+/* Connection rail — sticky-ish footer showing what's on Port B right now */
+.connection-rail {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r);
+  font-size: var(--text-sm);
+  margin-top: var(--s-5);
+}
+.connection-rail .dot { margin-right: 0; }
+.connection-rail-spacer { flex: 1; }
+.connection-rail-action {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* Empty state — placeholder when no action picked yet */
+.empty-state {
+  padding: var(--s-8) var(--s-5);
+  text-align: center;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-subtle);
+}
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: var(--s-3);
+  opacity: 0.5;
+}
+.empty-state-title {
+  font-size: var(--text-md);
+  color: var(--text);
+  margin-bottom: var(--s-2);
+}
+.empty-state-hint {
+  font-size: var(--text-sm);
+}
+
+/* Stepper — for guided multi-step flows like cycle reset */
+.stepper {
+  display: flex;
+  gap: 0;
+  margin-bottom: var(--s-4);
+}
+.step {
+  flex: 1;
+  padding: var(--s-2);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+  border-bottom: 2px solid var(--border);
+  text-align: center;
+  position: relative;
+}
+.step.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: var(--weight-medium);
+}
+.step.done {
+  color: var(--success);
+  border-bottom-color: var(--success);
+}
+.step.done::before { content: "✓ "; }
+
+/* Toolbar — horizontal action bar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  margin-bottom: var(--s-3);
+  flex-wrap: wrap;
+}
+.toolbar-spacer { flex: 1; }

@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — Receiver (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab active" href="receiver.html">FPV Tools</a>
+      <a class="ws-tab"        href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="FPV tabs">
+    <a class="tab"        href="servo.html">Servo</a>
+    <a class="tab"        href="motor.html">Motor</a>
+    <a class="tab active" href="receiver.html">Receiver</a>
+    <a class="tab"        href="rcsniff.html">RC Sniff</a>
+  </nav>
+
+  <!-- ============== MODE BANNER (sticky at top) ============== -->
+  <div class="card" style="margin-bottom: var(--s-4); padding: var(--s-3) var(--s-4);">
+    <div class="cluster" style="gap: var(--s-3);">
+      <span class="dot on"></span>
+      <span style="font-weight: var(--weight-semi);">RX detected · ROM DFU</span>
+      <span class="badge badge-info">115200 baud</span>
+      <span class="kv-label" style="font-family: ui-monospace, monospace; font-size: var(--text-xs);">ESP32-C3 · 80:f1:b2:62:fe:a4 · 4 MB flash</span>
+      <span class="connection-rail-spacer"></span>
+      <button class="ghost btn-sm">Re-probe</button>
+      <button class="ghost btn-sm">Exit DFU</button>
+    </div>
+  </div>
+
+  <!-- ============== ACTION PICKER (mode-gated) ============== -->
+  <div class="action-picker">
+    <div class="action-card active" onclick="pickAction('identify')">
+      <span class="action-card-icon">🔍</span>
+      <span class="action-card-title">Identify</span>
+      <span class="action-card-desc">Chip, MAC, partition layout, firmware in each slot, NVS keys.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('flash')">
+      <span class="action-card-icon">📥</span>
+      <span class="action-card-title">Flash firmware</span>
+      <span class="action-card-desc">Guided upload to slot / partition. Vanilla ELRS, MILELRS, custom .bin.</span>
+    </div>
+    <div class="action-card" data-need="app" style="opacity: 0.55;" onclick="pickAction('watch')">
+      <span class="action-card-icon">📡</span>
+      <span class="action-card-title">Watch link</span>
+      <span class="action-card-desc">RSSI, LQ, SNR, channels real-time. <b>Needs RX in app mode.</b></span>
+    </div>
+    <div class="action-card" data-need="app" style="opacity: 0.55;" onclick="pickAction('params')">
+      <span class="action-card-icon">⚙</span>
+      <span class="action-card-title">Edit parameters</span>
+      <span class="action-card-desc">Bind phrase, TX power, switch mode, telemetry. <b>App mode.</b></span>
+    </div>
+    <div class="action-card" data-need="app" style="opacity: 0.55;" onclick="pickAction('bind')">
+      <span class="action-card-icon">🔄</span>
+      <span class="action-card-title">Bind to TX</span>
+      <span class="action-card-desc">60-second bind mode. <b>App mode.</b></span>
+    </div>
+    <div class="action-card" onclick="pickAction('recovery')">
+      <span class="action-card-icon">🩺</span>
+      <span class="action-card-title">Recovery</span>
+      <span class="action-card-desc">Slot switch, erase OTADATA, full flash dump. Bricked RX rescue.</span>
+    </div>
+  </div>
+
+  <!-- ============== IDENTIFY ACTION ============== -->
+  <div id="action-identify">
+
+    <div class="toolbar">
+      <button>Re-scan now</button>
+      <button class="secondary">Quick (5s)</button>
+      <button class="ghost">+ SPIFFS scan (slower, finds TX UID)</button>
+      <span class="toolbar-spacer"></span>
+      <span class="badge badge-success"><span class="dot on"></span>Sticky DFU session active</span>
+    </div>
+
+    <!-- Top stat tiles -->
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="stat-tile-value" style="font-size: var(--text-md);">ESP32-C3</div>
+        <div class="stat-tile-label">Chip</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" style="font-size: var(--text-sm);">80:f1:b2:62:fe:a4</div>
+        <div class="stat-tile-label">MAC</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value">4 MB</div>
+        <div class="stat-tile-label">Flash</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value">app1</div>
+        <div class="stat-tile-label">Active slot</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value">6</div>
+        <div class="stat-tile-label">OTA seq</div>
+      </div>
+    </div>
+
+    <div class="tab-content" style="margin-top: var(--s-4);">
+
+      <!-- Slot 0 — vanilla ELRS -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Slot 0 (app0)</span>
+          <span class="badge badge-neutral">dormant</span>
+          <button class="btn-ghost btn-sm" style="margin-left:auto;">Activate</button>
+        </div>
+        <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value">ExpressLRS</span></div>
+        <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono">3.5.3 (40555e)</span></div>
+        <div class="kv"><span class="kv-label">Target</span><span class="kv-value mono">UNIFIED_ESP32C3_LR1121_RX</span></div>
+        <div class="kv"><span class="kv-label">Product</span><span class="kv-value">BAYCKRC C3 900/2400 Dual Band 100mW</span></div>
+        <div class="kv"><span class="kv-label">Offset</span><span class="kv-value mono">0x010000 · 1.88 MB</span></div>
+        <div class="kv"><span class="kv-label">Image valid</span><span class="kv-value"><span class="badge badge-success">✓ ESP magic 0xE9</span></span></div>
+      </div>
+
+      <!-- Slot 1 — MILELRS (active) -->
+      <div class="card" style="border-color: var(--primary);">
+        <div class="card-header">
+          <span class="card-title">Slot 1 (app1)</span>
+          <span class="badge badge-info">active</span>
+          <button class="btn-ghost btn-sm" style="margin-left:auto;">Re-flash</button>
+        </div>
+        <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value">MILELRS (fork)</span></div>
+        <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono">v3.48 (8bced9)</span></div>
+        <div class="kv"><span class="kv-label">Target</span><span class="kv-value mono">MILELRS_v348</span></div>
+        <div class="kv"><span class="kv-label">CRSF name</span><span class="kv-value mono">BK DB 100 GRX</span></div>
+        <div class="kv"><span class="kv-label">Builder</span><span class="kv-value">danko · framework-arduinoespressif32@3.20011</span></div>
+        <div class="kv"><span class="kv-label">Notable</span><span class="kv-value">ew_scanner · multi_band · custom_freq · swarm_id · encryption_key</span></div>
+        <div class="kv"><span class="kv-label">Offset</span><span class="kv-value mono">0x1F0000 · 1.88 MB</span></div>
+      </div>
+
+      <!-- NVS / Identity -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">NVS / Identity</span>
+          <span class="badge badge-neutral">28 KB scanned</span>
+        </div>
+        <div class="kv"><span class="kv-label">TX UID</span><span class="kv-value mono">3F:A2:18:7C:2B:00</span></div>
+        <div class="kv"><span class="kv-label">Bind phrase</span><span class="kv-value mono">…not found in scan</span></div>
+        <div class="kv"><span class="kv-label">STA SSID</span><span class="kv-value mono">— (never connected)</span></div>
+        <div class="kv"><span class="kv-label">STA password</span><span class="kv-value mono">—</span></div>
+        <div class="kv"><span class="kv-label">SPIFFS partition</span><span class="kv-value mono">0x3D0000 · 192 KB · 0xFF (empty)</span></div>
+      </div>
+
+      <!-- Partition table -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Partition table</span>
+        </div>
+        <div class="kv"><span class="kv-label">nvs</span><span class="kv-value mono">0x09000 · 20 KB</span></div>
+        <div class="kv"><span class="kv-label">otadata</span><span class="kv-value mono">0x0E000 · 8 KB · seq=6 → app1</span></div>
+        <div class="kv"><span class="kv-label">app0</span><span class="kv-value mono">0x10000 · 1.88 MB · ELRS 3.5.3</span></div>
+        <div class="kv"><span class="kv-label">app1</span><span class="kv-value mono">0x1F0000 · 1.88 MB · MILELRS v3.48</span></div>
+        <div class="kv"><span class="kv-label">spiffs</span><span class="kv-value mono">0x3D0000 · 128 KB · empty</span></div>
+        <div class="kv"><span class="kv-label">coredump</span><span class="kv-value mono">0x3F0000 · 64 KB</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== FLASH ACTION ============== -->
+  <div id="action-flash" style="display:none">
+
+    <div class="stepper">
+      <div class="step done">1. Source</div>
+      <div class="step active">2. Target slot</div>
+      <div class="step">3. Confirm</div>
+      <div class="step">4. Write</div>
+      <div class="step">5. Verify</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Source firmware</span>
+        <span class="badge badge-success">✓ vanilla_elrs_3.6.3 · 1.18 MB · ELRS magic 0xE9</span>
+      </div>
+      <div class="cluster">
+        <button class="secondary">📁 Upload .bin / .bin.gz</button>
+        <button class="ghost">🌐 Pull latest from GitHub (ELRS / MILELRS / ZLRS)</button>
+        <button class="ghost">📚 From library</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: var(--s-3);">
+      <div class="card-header">
+        <span class="card-title">Target slot</span>
+      </div>
+      <div class="action-picker" style="margin: 0;">
+        <div class="action-card">
+          <span class="action-card-icon">⓪</span>
+          <span class="action-card-title">app0 (slot 0)</span>
+          <span class="action-card-desc">Currently dormant · ELRS 3.5.3 · 1.88 MB. Safe — keeps app1 (active) untouched.</span>
+        </div>
+        <div class="action-card active">
+          <span class="action-card-icon">①</span>
+          <span class="action-card-title">app1 (slot 1)</span>
+          <span class="action-card-desc">Currently <b>active</b> · MILELRS v3.48. Will brick RX briefly until reboot.</span>
+        </div>
+        <div class="action-card" style="border-style: dashed;">
+          <span class="action-card-icon">⚠</span>
+          <span class="action-card-title">Custom offset</span>
+          <span class="action-card-desc">Raw write at 0x____. For partition table / bootloader / experts only.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: var(--s-3);">
+      <div class="card-header">
+        <span class="card-title">Options</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">After flash</span>
+        <div class="cluster">
+          <label><input type="radio" name="post" checked> Boot new firmware</label>
+          <label><input type="radio" name="post"> Stay in DFU (chain more)</label>
+        </div>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Erase OTADATA after</span>
+        <label><input type="checkbox"> (force fallback to slot 0 next boot)</label>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Verify mode</span>
+        <div class="cluster">
+          <label><input type="radio" name="verify" checked> 5-sample readback</label>
+          <label><input type="radio" name="verify"> + Full MD5 (slow, ROM-fragile)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="banner banner-warn" style="margin-top: var(--s-3);">
+      Запишет <b>vanilla_elrs_3.6.3</b> (1.18 MB) поверх <b>app1 / MILELRS v3.48</b>. Slot 0 (ELRS 3.5.3)
+      не пострадает — можно вернуться erase OTADATA. Будет ~30-50 секунд при 115200 baud.
+    </div>
+
+    <div class="cluster">
+      <button class="danger btn-lg">Confirm & Flash</button>
+      <button class="ghost">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ============== WATCH LINK ============== -->
+  <div id="action-watch" style="display:none">
+    <div class="banner banner-warn">
+      RX сейчас в <b>ROM DFU</b>. Live link недоступен — для CRSF telemetry нужно перевести RX в <b>app mode</b> (отпустить BOOT, power-cycle).
+    </div>
+    <div class="empty-state">
+      <div class="empty-state-icon">📡</div>
+      <div class="empty-state-title">Watch link telemetry</div>
+      <div class="empty-state-hint">
+        Mockup TBD: 4 stat tiles (RSSI / LQ / SNR / RF mode) + per-channel bars + Frame rate · CRC errors counter.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== PARAMS ACTION ============== -->
+  <div id="action-params" style="display:none">
+    <div class="banner banner-warn">RX в DFU — params нужен app mode.</div>
+    <div class="empty-state">
+      <div class="empty-state-icon">⚙</div>
+      <div class="empty-state-title">Edit RX parameters</div>
+      <div class="empty-state-hint">
+        Mockup TBD: tree view of CRSF LUA params (Bind Phrase / Power / Switch Mode / Telemetry rate / VTX / Wifi update).
+        Inline edit с pencil-affordance, save сразу через PARAMETER_WRITE.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== BIND ACTION ============== -->
+  <div id="action-bind" style="display:none">
+    <div class="banner banner-warn">RX в DFU — bind нужен app mode.</div>
+    <div class="empty-state">
+      <div class="empty-state-icon">🔄</div>
+      <div class="empty-state-title">Bind to TX</div>
+      <div class="empty-state-hint">
+        Mockup TBD: один большой button "Enter bind mode" (60s timeout countdown), live status of bind phrase / new TX UID detected.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== RECOVERY ACTION ============== -->
+  <div id="action-recovery" style="display:none">
+
+    <div class="banner banner-warn">
+      Bricked RX rescue. Все действия требуют RX в DFU. Destructive — каждое спрашивает подтверждение.
+    </div>
+
+    <div class="tab-content">
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Switch boot slot</span>
+          <span class="badge badge-info">non-destructive</span>
+        </div>
+        <p class="field-help" style="margin-bottom: var(--s-3);">
+          Изменить otadata так чтобы при следующем boot грузился другой slot. Полезно если активный slot убит (бесконечный crash loop).
+          Текущий: <b>app1 (MILELRS)</b>. Переключить на <b>app0 (ELRS 3.5.3)</b>?
+        </p>
+        <div class="cluster">
+          <button>Boot slot 0 next</button>
+          <button class="ghost">Boot slot 1 next</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Erase OTADATA</span>
+          <span class="badge badge-warn">destructive</span>
+        </div>
+        <p class="field-help" style="margin-bottom: var(--s-3);">
+          Erase 8 KB at <code>0xE000</code>. ESP-IDF bootloader fallback на app0 при пустой otadata.
+          Не трогает сами app-партиции. Защита: type "ERASE OTADATA" в modal.
+        </p>
+        <button class="danger">Erase OTADATA · 8 KB</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Erase partition</span>
+          <span class="badge badge-warn">destructive</span>
+        </div>
+        <p class="field-help" style="margin-bottom: var(--s-3);">
+          Wipe entire partition (chunked 64 KB blocks, single ROM session). Choose what:
+        </p>
+        <div class="cluster">
+          <button class="secondary">app0 · 1.88 MB</button>
+          <button class="secondary">app1 · 1.88 MB</button>
+          <button class="secondary">spiffs · 128 KB</button>
+          <button class="secondary">nvs · 20 KB</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Full flash dump</span>
+          <span class="badge badge-info">read-only</span>
+        </div>
+        <p class="field-help" style="margin-bottom: var(--s-3);">
+          Read 4 MB SPI flash → save as <code>dump_YYYY-MM-DD.bin</code>. ~9 min @ 115200 (ROM CMD_READ_FLASH_SLOW).
+          Stub mode: ~1 min (CMD_READ_FLASH 0xD2 streaming).
+        </p>
+        <div class="cluster">
+          <button>Dump 4 MB · ROM (~9 min)</button>
+          <button class="ghost">+ stub uploader · ~1 min</button>
+        </div>
+      </div>
+
+      <div class="card" style="grid-column: 1 / -1;">
+        <div class="card-header">
+          <span class="card-title">Restore from backup</span>
+          <span class="badge badge-warn">destructive</span>
+        </div>
+        <p class="field-help" style="margin-bottom: var(--s-3);">
+          Upload a previous dump.bin → flash back at offset 0x000000 (full image including bootloader).
+          Use case: undo botched experiment. <b>Backup must match this RX's chip + flash size</b> — dump's MAC is checked.
+        </p>
+        <div class="cluster">
+          <button class="secondary">📁 Upload dump.bin</button>
+          <button class="danger" disabled>Restore (select file first)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== CONNECTION RAIL ============== -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">UART @ GP10/11</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Owner: <code>dfu_session</code> · 115200 baud · sticky 18s</span>
+  </div>
+
+</div>
+
+<script>
+function pickAction(name) {
+  document.querySelectorAll('.action-card').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  ['identify','flash','watch','params','bind','recovery'].forEach(a => {
+    const el = document.getElementById('action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+}
+</script>
+
+</body>
+</html>

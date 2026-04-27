@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — Servo (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab active" href="receiver.html">FPV Tools</a>
+      <a class="ws-tab"        href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="FPV tabs">
+    <a class="tab active" href="servo.html">Servo</a>
+    <a class="tab"        href="motor.html">Motor</a>
+    <a class="tab"        href="receiver.html">Receiver</a>
+    <a class="tab"        href="rcsniff.html">RC Sniff</a>
+  </nav>
+
+  <!-- ============== ACTION PICKER ============== -->
+  <div class="action-picker">
+    <div class="action-card active" onclick="pickAction('test')">
+      <span class="action-card-icon">🎮</span>
+      <span class="action-card-title">Pulse test</span>
+      <span class="action-card-desc">Slider 500–2500 μs + presets. Поменять frequency 50 / 330 Hz.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('calibrate')">
+      <span class="action-card-icon">📐</span>
+      <span class="action-card-title">Range calibration</span>
+      <span class="action-card-desc">Найти физические endstops серво. Mark Min / Max → Apply to sweep.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('sweep')">
+      <span class="action-card-icon">🔄</span>
+      <span class="action-card-title">Sweep mode</span>
+      <span class="action-card-desc">Авто triangle wave min↔max за выставленный period. Тест на залипание.</span>
+    </div>
+  </div>
+
+  <!-- ============== PULSE TEST ============== -->
+  <div id="action-test">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Pulse test</span>
+        <span class="badge badge-neutral">GPIO 11 · 50 Hz</span>
+      </div>
+
+      <div class="big mono">1500 <span style="font-size: var(--text-md); color: var(--text-muted);">μs</span></div>
+
+      <input type="range" min="500" max="2500" value="1500" step="10">
+
+      <div class="grid">
+        <button class="secondary">Min · 500</button>
+        <button class="secondary">Center · 1500</button>
+        <button class="secondary">Max · 2500</button>
+        <button class="danger">Stop</button>
+      </div>
+
+      <hr>
+
+      <div class="field">
+        <span class="field-label">PWM frequency</span>
+        <div class="cluster">
+          <label><input type="radio" name="freq" checked> 50 Hz (standard)</label>
+          <label><input type="radio" name="freq"> 330 Hz (digital servos)</label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== CALIBRATION ============== -->
+  <div id="action-calibrate" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Range calibration</span>
+      </div>
+
+      <div class="banner banner-info">
+        Двигай ползунок до крайней позиции (где сервомашинка <b>физически упирается</b>),
+        нажми <b>Mark Min</b>. Так же для Max. Потом <b>Apply to Sweep</b> — sweep будет
+        ходить только в реальном диапазоне без зажёвывания шестерёнок.
+      </div>
+
+      <div class="big mono">1500 <span style="font-size: var(--text-md); color: var(--text-muted);">μs</span></div>
+      <input type="range" min="500" max="2500" value="1500" step="10">
+
+      <div class="grid">
+        <button class="secondary">📍 Mark Min · <span class="kv-value mono" style="margin-left: 4px;">920 μs</span></button>
+        <button class="secondary">📍 Mark Max · <span class="kv-value mono" style="margin-left: 4px;">2180 μs</span></button>
+      </div>
+
+      <div class="cluster" style="margin-top: var(--s-3);">
+        <button>✓ Apply to sweep</button>
+        <button class="danger ghost">Reset marks</button>
+      </div>
+
+      <hr>
+
+      <div class="kv"><span class="kv-label">Marked Min</span><span class="kv-value mono">920 μs</span></div>
+      <div class="kv"><span class="kv-label">Marked Max</span><span class="kv-value mono">2180 μs</span></div>
+      <div class="kv"><span class="kv-label">Observed range</span><span class="kv-value mono">488–2497 μs (vs full slider)</span></div>
+    </div>
+  </div>
+
+  <!-- ============== SWEEP ============== -->
+  <div id="action-sweep" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Sweep mode</span>
+        <span class="badge badge-neutral">stopped</span>
+      </div>
+
+      <div class="big mono">920 ↔ 2180 <span style="font-size: var(--text-md); color: var(--text-muted);">μs</span></div>
+
+      <div class="field">
+        <span class="field-label">Sweep range</span>
+        <div class="cluster">
+          <input type="number" min="500" max="2500" step="10" value="920" style="width: 100px;">
+          <span class="kv-label">to</span>
+          <input type="number" min="500" max="2500" step="10" value="2180" style="width: 100px;">
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">Period (ms — full min→max→min)</span>
+        <div class="cluster">
+          <input type="number" min="200" max="20000" step="100" value="2000" style="width: 100px;">
+          <button class="secondary">Apply</button>
+        </div>
+      </div>
+
+      <div class="cluster" style="margin-top: var(--s-3);">
+        <button>▶ Start sweep</button>
+        <button class="danger ghost">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== CONNECTION RAIL ============== -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">PWM @ GP11</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Owner: <code>servo_pwm</code> · 50 Hz · LEDC channel 0</span>
+  </div>
+
+</div>
+
+<script>
+function pickAction(name) {
+  document.querySelectorAll('.action-card').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  ['test','calibrate','sweep'].forEach(a => {
+    const el = document.getElementById('action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+}
+</script>
+
+</body>
+</html>

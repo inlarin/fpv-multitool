@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — Battery (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab active" href="battery.html">Battery Lab</a>
+      <a class="ws-tab"        href="receiver.html">FPV Tools</a>
+      <a class="ws-tab"        href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <!-- ============== ACTION PICKER ============== -->
+  <div class="action-picker">
+    <div class="action-card active" onclick="pickAction('read')">
+      <span class="action-card-icon">🔋</span>
+      <span class="action-card-title">Read battery</span>
+      <span class="action-card-desc">Cells, voltage, %, temp, cycles, MAC. DJI / Mavic / generic SBS.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('reset')">
+      <span class="action-card-icon">🔄</span>
+      <span class="action-card-title">Reset cycle count</span>
+      <span class="action-card-desc">Гайдед 3-шаговая процедура. UNSEAL → write → SEAL.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('probe')">
+      <span class="action-card-icon">🔍</span>
+      <span class="action-card-title">Probe unknown</span>
+      <span class="action-card-desc">SBS register sweep + MAC enumeration. Для клонов и не-DJI.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('forensics')">
+      <span class="action-card-icon">🔬</span>
+      <span class="action-card-title">Forensics</span>
+      <span class="action-card-desc">Dataflash dump, brute keys, clone fingerprint. Research mode.</span>
+    </div>
+    <div class="action-card" onclick="pickAction('library')">
+      <span class="action-card-icon">📚</span>
+      <span class="action-card-title">Library</span>
+      <span class="action-card-desc">Known profiles + MAC catalog (reference, no I2C).</span>
+    </div>
+  </div>
+
+  <!-- ============== READ ACTION (default) ============== -->
+  <div id="action-read">
+
+    <div class="toolbar">
+      <button>Read now</button>
+      <button class="secondary">Snapshot JSON</button>
+      <button class="ghost">Export CSV</button>
+      <span class="toolbar-spacer"></span>
+      <span class="badge badge-success"><span class="dot on"></span>I2C alive · 0x0B</span>
+    </div>
+
+    <!-- Top-level summary tiles -->
+    <div class="stat-grid">
+      <div class="stat-tile success">
+        <div class="stat-tile-value">14.82V</div>
+        <div class="stat-tile-label">Voltage</div>
+      </div>
+      <div class="stat-tile success">
+        <div class="stat-tile-value">87%</div>
+        <div class="stat-tile-label">SoC</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value">4S</div>
+        <div class="stat-tile-label">Cells</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value">2480</div>
+        <div class="stat-tile-label">mAh design</div>
+      </div>
+      <div class="stat-tile warn">
+        <div class="stat-tile-value">37°C</div>
+        <div class="stat-tile-label">Temp</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value">142</div>
+        <div class="stat-tile-label">Cycles</div>
+      </div>
+    </div>
+
+    <div class="tab-content" style="margin-top: var(--s-4);">
+
+      <!-- Identity card -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Identity</span>
+          <span class="badge badge-info">DJI Mavic 3 Battery</span>
+        </div>
+        <div class="kv"><span class="kv-label">MAC</span><span class="kv-value mono">8C:1F:64:1A:33:B7</span></div>
+        <div class="kv"><span class="kv-label">Serial</span><span class="kv-value mono">2K8YDCK0123456</span></div>
+        <div class="kv"><span class="kv-label">Manufacturer</span><span class="kv-value">DJI</span></div>
+        <div class="kv"><span class="kv-label">Device name</span><span class="kv-value mono">BJ20-2453-15.4</span></div>
+        <div class="kv"><span class="kv-label">Chemistry</span><span class="kv-value">LiPo (Li-Po)</span></div>
+        <div class="kv"><span class="kv-label">Mfr date</span><span class="kv-value mono">2023-04-12</span></div>
+        <div class="kv"><span class="kv-label">First use</span><span class="kv-value mono">2023-04-28</span></div>
+        <div class="kv"><span class="kv-label">Sealed</span><span class="kv-value">
+          <span class="badge badge-warn">SEALED</span>
+        </span></div>
+      </div>
+
+      <!-- Per-cell card -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Cells</span>
+          <span class="badge badge-neutral">Δ 12 mV</span>
+        </div>
+        <div class="kv">
+          <span class="kv-label">Cell 1</span>
+          <span class="kv-value mono">3.706 V</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width: 87%; background: var(--success);"></div></div>
+        <div class="kv">
+          <span class="kv-label">Cell 2</span>
+          <span class="kv-value mono">3.708 V</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width: 87%; background: var(--success);"></div></div>
+        <div class="kv">
+          <span class="kv-label">Cell 3</span>
+          <span class="kv-value mono">3.703 V</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width: 86%; background: var(--success);"></div></div>
+        <div class="kv">
+          <span class="kv-label">Cell 4</span>
+          <span class="kv-value mono">3.694 V</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width: 85%; background: var(--success);"></div></div>
+      </div>
+
+      <!-- Health card -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Health</span>
+        </div>
+        <div class="kv"><span class="kv-label">Capacity (full charge)</span><span class="kv-value mono">2358 mAh</span></div>
+        <div class="kv"><span class="kv-label">Capacity (design)</span><span class="kv-value mono">2480 mAh</span></div>
+        <div class="kv"><span class="kv-label">SoH</span><span class="kv-value">95.1% <span class="badge badge-success" style="margin-left: 8px;">healthy</span></span></div>
+        <div class="kv"><span class="kv-label">Cycles</span><span class="kv-value mono">142</span></div>
+        <div class="kv"><span class="kv-label">Internal R</span><span class="kv-value mono">38 mΩ</span></div>
+        <div class="kv"><span class="kv-label">Charge state</span><span class="kv-value">Idle</span></div>
+        <div class="kv"><span class="kv-label">Last charge</span><span class="kv-value mono">2 d ago</span></div>
+      </div>
+
+      <!-- Permanent fail / status flags -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Status flags</span>
+          <span class="badge badge-success">All clear</span>
+        </div>
+        <div class="kv"><span class="kv-label">Permanent fail</span><span class="kv-value">
+          <span class="badge badge-success"><span class="dot on"></span>OK</span>
+        </span></div>
+        <div class="kv"><span class="kv-label">Operation status</span><span class="kv-value mono">0x0498</span></div>
+        <div class="kv"><span class="kv-label">Charging FET</span><span class="kv-value">
+          <span class="badge badge-success">ON</span>
+        </span></div>
+        <div class="kv"><span class="kv-label">Discharging FET</span><span class="kv-value">
+          <span class="badge badge-success">ON</span>
+        </span></div>
+        <div class="kv"><span class="kv-label">Pre-charge FET</span><span class="kv-value">
+          <span class="badge badge-neutral">OFF</span>
+        </span></div>
+        <div class="kv"><span class="kv-label">Safety</span><span class="kv-value mono">0x0000 (none)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== RESET ACTION ============== -->
+  <div id="action-reset" style="display:none">
+
+    <div class="banner banner-warn">
+      <b>Сбрасывает счётчик циклов</b> у DJI battery до 0. Это меняет dataflash IT-блок (3-block update),
+      требует UNSEAL ключ и ре-SEAL после. Поддерживаемые модели: Mavic 3 / Mini 3 Pro / Air 2S
+      (см. Library → Compatibility).
+    </div>
+
+    <div class="stepper">
+      <div class="step done">1. Connect</div>
+      <div class="step done">2. UNSEAL</div>
+      <div class="step active">3. Write IT</div>
+      <div class="step">4. SEAL</div>
+      <div class="step">5. Verify</div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Step 3: Write IT block</span>
+        <span class="badge badge-warn">UNSEALED</span>
+      </div>
+      <p style="color: var(--text-muted); font-size: var(--text-sm); line-height: 1.5; margin-bottom: var(--s-3);">
+        Сейчас выполню запись 3-block обновления (rollover counters, cycle count, full-charge capacity).
+        После записи RAM ↔ flash sync задержка 2 секунды.
+      </p>
+
+      <div class="kv"><span class="kv-label">Detected model</span><span class="kv-value">DJI Mavic 3 Battery (BQ40Z80)</span></div>
+      <div class="kv"><span class="kv-label">Current cycle count</span><span class="kv-value mono">142</span></div>
+      <div class="kv"><span class="kv-label">Target after write</span><span class="kv-value mono">0</span></div>
+      <div class="kv"><span class="kv-label">Will preserve</span><span class="kv-value">SoH, capacity, mfr data</span></div>
+
+      <div class="cluster" style="margin-top: var(--s-4);">
+        <button class="danger">Write & continue</button>
+        <button class="secondary">Cancel & re-SEAL</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: var(--s-3);">
+      <div class="card-header">
+        <span class="card-title">Live log</span>
+        <button class="btn-ghost btn-sm">Copy</button>
+      </div>
+      <pre style="background: var(--input-bg); color: var(--text); padding: var(--s-3); border-radius: var(--r); font-size: var(--text-xs); max-height: 240px; overflow: auto; line-height: 1.5; border: 1px solid var(--border-subtle); margin: 0;">[12:04:18] I2C scan @0x0B  → ACK
+[12:04:18] ManufacturerName  = "DJI"
+[12:04:18] DeviceName        = "BJ20-2453-15.4"
+[12:04:18] Detected profile  = MAVIC3_BQ40Z80
+[12:04:19] UNSEAL with key1  = 0x0414
+[12:04:19] UNSEAL with key2  = 0x3672
+[12:04:19] OperationStatus   = 0x0498  (UNSEALED ✓)
+[12:04:19] FullAccess key1   = 0x4554
+[12:04:19] FullAccess key2   = 0x6020
+[12:04:20] OperationStatus   = 0x049C  (FULL ACCESS ✓)
+[12:04:20] Reading IT block  ... 32 bytes
+[12:04:20] Computing patch   ...
+[12:04:20] Ready to write    [click "Write & continue"]</pre>
+    </div>
+  </div>
+
+  <!-- ============== PROBE ACTION ============== -->
+  <div id="action-probe" style="display:none">
+    <div class="empty-state">
+      <div class="empty-state-icon">🔍</div>
+      <div class="empty-state-title">SBS probe / unknown battery</div>
+      <div class="empty-state-hint">
+        Mockup TBD: автоматический register sweep 0x00..0x7F, parse manufacturer, vendor block.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== FORENSICS ACTION ============== -->
+  <div id="action-forensics" style="display:none">
+    <div class="empty-state">
+      <div class="empty-state-icon">🔬</div>
+      <div class="empty-state-title">Clone forensics (research mode)</div>
+      <div class="empty-state-hint">
+        Mockup TBD: MAC bruteforce 0x0001..0xFFFF, DF dump, fingerprint compare с known clones.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== LIBRARY ACTION ============== -->
+  <div id="action-library" style="display:none">
+    <div class="empty-state">
+      <div class="empty-state-icon">📚</div>
+      <div class="empty-state-title">Battery library</div>
+      <div class="empty-state-hint">
+        Mockup TBD: searchable list of profiles (chip, unseal keys, layout) + MAC catalog reference.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== CONNECTION RAIL ============== -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">I2C @ GP10/11</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Owner: <code>battery_ui</code> · 100 kHz · pullups OK</span>
+  </div>
+
+</div>
+
+<script>
+function pickAction(name) {
+  document.querySelectorAll('.action-card').forEach(c => c.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  ['read','reset','probe','forensics','library'].forEach(a => {
+    const el = document.getElementById('action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+}
+</script>
+
+</body>
+</html>

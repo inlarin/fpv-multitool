@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — UI Mockup</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <span class="app-title">FPV MultiTool</span>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab active" href="battery.html">Battery Lab</a>
+      <a class="ws-tab"        href="receiver.html">FPV Tools</a>
+      <a class="ws-tab"        href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <div class="banner banner-info" style="margin-bottom: var(--s-4);">
+    <b>Mockup mode.</b> Это статичный preview нового UI без подключения к плате.
+    Открой <a href="battery.html"><b>Battery</b></a>,
+    <a href="receiver.html"><b>Receiver</b></a>,
+    <a href="motor.html"><b>Motor</b></a>,
+    <a href="ota.html"><b>OTA</b></a>,
+    <a href="usb.html"><b>USB</b></a>,
+    <a href="rcsniff.html"><b>RC Sniff</b></a>,
+    <a href="servo.html"><b>Servo</b></a>,
+    <a href="setup.html"><b>Setup</b></a>,
+    <a href="sys.html"><b>System</b></a>
+    — итерируем визуал и IA, потом переносим в живой код.
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Принципы</span>
+    </div>
+    <ul style="padding-left: var(--s-5); line-height: 1.8; color: var(--text-muted); font-size: var(--text-sm);">
+      <li><b>Goal-driven IA</b> — наверху каждого таба «Что ты хочешь сделать?» с decision-cards (как в Setup)</li>
+      <li><b>One thing at a time</b> — выбрал действие → увидел его экран. Остальные feature-knobs скрыты в Advanced.</li>
+      <li><b>Status panel снизу</b> — что сейчас активно / что в NVS на следующий boot</li>
+      <li><b>Apply gate</b> — destructive действия требуют подтверждения через modal</li>
+      <li><b>No inline styles</b> — всё через design tokens + utility-классы</li>
+    </ul>
+  </div>
+
+</div>
+
+</body>
+</html>

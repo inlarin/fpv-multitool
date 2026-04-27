@@ -1,53 +1,73 @@
 <div id="tab-servo" class="tab-content" style="display:none">
   <div class="card">
-    <h2>Servo Tester (GPIO 2)</h2>
+    <div class="card-header">
+      <span class="card-title">Servo Tester</span>
+      <span class="badge badge-neutral">GPIO 2</span>
+    </div>
+
     <div class="big" id="servoUs">1500 μs</div>
     <input type="range" id="servoSlider" min="500" max="2500" value="1500" step="10" oninput="onServo()">
+
     <div class="grid">
-      <button onclick="setServo(500)">Min 500</button>
-      <button onclick="setServo(1500)">Center</button>
+      <button class="secondary" onclick="setServo(500)">Min · 500</button>
+      <button class="secondary" onclick="setServo(1500)">Center</button>
+      <button class="secondary" onclick="setServo(2500)">Max · 2500</button>
+      <button class="danger" onclick="servoStop()">Stop</button>
     </div>
-    <div class="grid">
-      <button onclick="setServo(2500)">Max 2500</button>
-      <button class="danger" onclick="servoStop()">STOP</button>
+
+    <div class="kv">
+      <span class="kv-label">Frequency</span>
+      <div class="cluster">
+        <button class="ghost btn-sm" onclick="setServoFreq(50)">50 Hz</button>
+        <button class="ghost btn-sm" onclick="setServoFreq(330)">330 Hz</button>
+      </div>
     </div>
-    <div class="row"><span class="label">Frequency:</span>
-      <span>
-        <button onclick="setServoFreq(50)">50 Hz</button>
-        <button onclick="setServoFreq(330)">330 Hz</button>
-      </span>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Range calibration</span>
     </div>
-    <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
-    <div class="row"><span class="label">Range calibration:</span></div>
-    <div class="warning" style="font-size:11px">
+
+    <div class="banner banner-info">
       Двигай ползунок, нажимай <b>Mark Min/Max</b> где сервомашинка упирается физически.
-      Потом <b>Apply to Sweep</b> — и Sweep будет ходить только в этих пределах.
+      Потом <b>Apply to Sweep</b> — и sweep будет ходить только в этих пределах.
     </div>
+
     <div class="grid">
-      <button onclick="servoMark('Min')">Mark Min @<span id="servoMarkMinVal">--</span></button>
-      <button onclick="servoMark('Max')">Mark Max @<span id="servoMarkMaxVal">--</span></button>
-    </div>
-    <div class="grid">
+      <button class="secondary" onclick="servoMark('Min')">Mark Min · <span id="servoMarkMinVal">--</span></button>
+      <button class="secondary" onclick="servoMark('Max')">Mark Max · <span id="servoMarkMaxVal">--</span></button>
       <button onclick="servoApplyMarks()">Apply to Sweep</button>
-      <button class="danger" onclick="servoResetMarks()">Reset Marks</button>
+      <button class="danger" onclick="servoResetMarks()">Reset</button>
     </div>
-    <div class="row" style="margin-top:6px">
-      <span class="label">Sweep range:</span>
-      <span>
-        <input id="sweepMinUs" type="number" min="500" max="2500" step="10" value="1000" style="width:65px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
-        ..
-        <input id="sweepMaxUs" type="number" min="500" max="2500" step="10" value="2000" style="width:65px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
-        us
-      </span>
+
+    <hr>
+
+    <div class="field">
+      <span class="field-label">Sweep range (μs)</span>
+      <div class="cluster">
+        <input id="sweepMinUs" type="number" min="500" max="2500" step="10" value="1000">
+        <span class="kv-label">to</span>
+        <input id="sweepMaxUs" type="number" min="500" max="2500" step="10" value="2000">
+      </div>
     </div>
-    <div class="row">
-      <span class="label">Period (ms):</span>
-      <input id="sweepPeriodMs" type="number" min="200" max="20000" step="100" value="2000" style="width:75px;padding:3px;background:#0a0a14;color:#fff;border:1px solid #333">
-      <button onclick="servoSweepCfgSave()">Apply Cfg</button>
+
+    <div class="field">
+      <span class="field-label">Period (ms)</span>
+      <div class="cluster">
+        <input id="sweepPeriodMs" type="number" min="200" max="20000" step="100" value="2000">
+        <button class="secondary" onclick="servoSweepCfgSave()">Apply</button>
+      </div>
     </div>
-    <div class="row"><span class="label">Sweep:</span>
+
+    <div class="kv">
+      <span class="kv-label">Sweep</span>
       <button onclick="toggleSweep()"><span id="sweepBtn">Start</span></button>
     </div>
-    <div class="row"><span class="label">Observed range:</span><span id="servoObserved" class="value">--</span></div>
+
+    <div class="kv">
+      <span class="kv-label">Observed range</span>
+      <span class="kv-value mono" id="servoObserved">--</span>
+    </div>
   </div>
 </div>

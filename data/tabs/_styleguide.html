@@ -1,0 +1,382 @@
+<!-- Live design-system showcase. Hidden tab (no nav button by default —
+     access via System workspace's Styleguide link or ?tab=_styleguide).
+     Lint exempt — embeds raw markup samples on purpose. -->
+<div id="tab-_styleguide" class="tab-content" style="display:none">
+
+  <div class="banner banner-info" style="grid-column: 1 / -1;">
+    <b>Design system showcase.</b> Каждый компонент в работе с code-snippet рядом.
+    Полная документация — <code>docs/UI.md</code>. При изменениях <code>data/style.css</code>
+    проверяй здесь сначала, что ничего не сломалось.
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- TOKENS                                                       -->
+  <!-- =========================================================== -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-header">
+      <span class="card-title">Tokens</span>
+      <span class="card-subtitle">Color · spacing · type · radius — все семантические переменные</span>
+    </div>
+
+    <div class="page-section">
+      <div class="page-section-header">
+        <span class="page-section-title">Color — semantic</span>
+      </div>
+      <div class="cluster" style="gap: var(--s-3);">
+        <div class="stat-tile" style="background: var(--primary); color: white; min-width: 100px;">
+          <div class="stat-tile-value" style="color: white; font-size: var(--text-md);">primary</div>
+          <div class="stat-tile-label" style="color: rgba(255,255,255,0.7);">action</div>
+        </div>
+        <div class="stat-tile" style="background: var(--success); color: white; min-width: 100px;">
+          <div class="stat-tile-value" style="color: white; font-size: var(--text-md);">success</div>
+          <div class="stat-tile-label" style="color: rgba(255,255,255,0.7);">positive</div>
+        </div>
+        <div class="stat-tile" style="background: var(--warn); color: white; min-width: 100px;">
+          <div class="stat-tile-value" style="color: white; font-size: var(--text-md);">warn</div>
+          <div class="stat-tile-label" style="color: rgba(255,255,255,0.7);">caution</div>
+        </div>
+        <div class="stat-tile" style="background: var(--danger); color: white; min-width: 100px;">
+          <div class="stat-tile-value" style="color: white; font-size: var(--text-md);">danger</div>
+          <div class="stat-tile-label" style="color: rgba(255,255,255,0.7);">destructive</div>
+        </div>
+        <div class="stat-tile" style="background: var(--info); color: white; min-width: 100px;">
+          <div class="stat-tile-value" style="color: white; font-size: var(--text-md);">info</div>
+          <div class="stat-tile-label" style="color: rgba(255,255,255,0.7);">neutral</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page-section">
+      <div class="page-section-header">
+        <span class="page-section-title">Type scale</span>
+      </div>
+      <div style="font-size: var(--text-3xl);">3xl · 32 px (var(--text-3xl))</div>
+      <div style="font-size: var(--text-2xl);">2xl · 24 px (var(--text-2xl))</div>
+      <div style="font-size: var(--text-xl);">xl · 20 px (var(--text-xl))</div>
+      <div style="font-size: var(--text-lg);">lg · 17 px (var(--text-lg))</div>
+      <div style="font-size: var(--text-md);">md · 15 px (var(--text-md))</div>
+      <div style="font-size: var(--text-base);">base · 14 px — body default (var(--text-base))</div>
+      <div style="font-size: var(--text-sm);">sm · 13 px (var(--text-sm))</div>
+      <div style="font-size: var(--text-xs);">xs · 11 px — captions / dim (var(--text-xs))</div>
+    </div>
+
+    <div class="page-section">
+      <div class="page-section-header">
+        <span class="page-section-title">Spacing scale</span>
+        <span class="page-section-subtitle">4px base — никогда не пиши `padding: 7px`</span>
+      </div>
+      <div class="cluster">
+        <div style="background: var(--primary-soft); padding: var(--s-1);">s-1 (4)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-2);">s-2 (8)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-3);">s-3 (12)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-4);">s-4 (16)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-5);">s-5 (20)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-6);">s-6 (24)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-8);">s-8 (32)</div>
+        <div style="background: var(--primary-soft); padding: var(--s-10);">s-10 (40)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- BUTTONS                                                      -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Buttons</span>
+    </div>
+    <div class="cluster">
+      <button>Primary</button>
+      <button class="secondary">Secondary</button>
+      <button class="ghost">Ghost</button>
+      <button class="danger">Danger</button>
+      <button class="success">Success</button>
+    </div>
+    <div class="cluster" style="margin-top: var(--s-3);">
+      <button class="btn-sm">Small</button>
+      <button>Medium (default)</button>
+      <button class="btn-lg">Large</button>
+    </div>
+    <div class="cluster" style="margin-top: var(--s-3);">
+      <button disabled>Disabled</button>
+      <button class="mode-blocked" title="Needs RX in app mode">Mode-blocked</button>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- BADGES + DOTS                                                -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Badges</span>
+    </div>
+    <div class="cluster">
+      <span class="badge badge-success">success</span>
+      <span class="badge badge-neutral">neutral</span>
+      <span class="badge badge-warn">warn</span>
+      <span class="badge badge-danger">danger</span>
+      <span class="badge badge-info">info</span>
+    </div>
+    <div class="cluster" style="margin-top: var(--s-3);">
+      <span class="badge badge-success"><span class="dot on"></span>I2C alive</span>
+      <span class="badge badge-warn"><span class="dot warn"></span>UNSEALED</span>
+      <span class="badge badge-danger"><span class="dot danger"></span>FAIL</span>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- KV ROWS                                                      -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Key-value rows</span>
+      <span class="card-subtitle">replaces .row + .label + .value</span>
+    </div>
+    <div class="kv"><span class="kv-label">Label</span><span class="kv-value">Value</span></div>
+    <div class="kv"><span class="kv-label">Mono value</span><span class="kv-value mono">0x1F0000</span></div>
+    <div class="kv"><span class="kv-label">With badge</span><span class="kv-value">
+      Active <span class="badge badge-info" style="margin-left: 6px;">slot 1</span>
+    </span></div>
+    <div class="kv"><span class="kv-label">Long value wraps</span><span class="kv-value mono">UNIFIED_ESP32C3_LR1121_RX</span></div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- BANNERS                                                      -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Banners</span>
+    </div>
+    <div class="banner banner-info">Informational — context, links, references.</div>
+    <div class="banner banner-warn">⚠ Warning — что-то требует внимания, но не критично.</div>
+    <div class="banner banner-error">⛔ Error — destructive action или сбой.</div>
+    <div class="banner banner-success">✓ Success — операция прошла.</div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- FORM FIELDS                                                  -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Form fields</span>
+    </div>
+    <div class="field">
+      <span class="field-label">Text input</span>
+      <input type="text" placeholder="placeholder">
+    </div>
+    <div class="field">
+      <span class="field-label">Number input</span>
+      <input type="number" min="0" max="2000" step="100" value="500">
+      <span class="field-help">Helper text — context for the field.</span>
+    </div>
+    <div class="field">
+      <span class="field-label">Password</span>
+      <input type="password" placeholder="••••••••">
+    </div>
+    <div class="field">
+      <span class="field-label">Select</span>
+      <select>
+        <option>Option 1</option>
+        <option>Option 2</option>
+      </select>
+    </div>
+    <div class="field">
+      <span class="field-label">Range slider</span>
+      <input type="range" min="0" max="100" value="50">
+    </div>
+    <div class="field">
+      <span class="field-label">Checkboxes / radios</span>
+      <div class="cluster">
+        <label><input type="checkbox" checked> Option A</label>
+        <label><input type="checkbox"> Option B</label>
+      </div>
+      <div class="cluster" style="margin-top: var(--s-2);">
+        <label><input type="radio" name="rg" checked> Choice 1</label>
+        <label><input type="radio" name="rg"> Choice 2</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- STAT TILES                                                   -->
+  <!-- =========================================================== -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-header">
+      <span class="card-title">Stat tiles — top-row dashboards</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="stat-tile-value">14.82V</div>
+        <div class="stat-tile-label">Voltage</div>
+      </div>
+      <div class="stat-tile success">
+        <div class="stat-tile-value">87%</div>
+        <div class="stat-tile-label">SoC</div>
+      </div>
+      <div class="stat-tile warn">
+        <div class="stat-tile-value">37°C</div>
+        <div class="stat-tile-label">Temp</div>
+      </div>
+      <div class="stat-tile danger">
+        <div class="stat-tile-value">PF</div>
+        <div class="stat-tile-label">Status</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono">142</div>
+        <div class="stat-tile-label">Cycles</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- ACTION PICKER                                                -->
+  <!-- =========================================================== -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-header">
+      <span class="card-title">Action picker — primary entry point</span>
+      <span class="card-subtitle">верхняя decision-grid каждой вкладки</span>
+    </div>
+    <div class="action-picker">
+      <div class="action-card active">
+        <span class="action-card-icon">🔋</span>
+        <span class="action-card-title">Read</span>
+        <span class="action-card-desc">Active state — этот action выбран сейчас.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">🔄</span>
+        <span class="action-card-title">Reset</span>
+        <span class="action-card-desc">Default state — hover для подсветки.</span>
+      </div>
+      <div class="action-card" style="opacity: 0.55;">
+        <span class="action-card-icon">📡</span>
+        <span class="action-card-title">Disabled</span>
+        <span class="action-card-desc">Mode-gated — недоступно сейчас (например, нужен другой mode).</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- STEPPER                                                      -->
+  <!-- =========================================================== -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-header">
+      <span class="card-title">Stepper — multi-step destructive flows</span>
+    </div>
+    <div class="stepper">
+      <div class="step done">1. Connect</div>
+      <div class="step done">2. UNSEAL</div>
+      <div class="step active">3. Write</div>
+      <div class="step">4. SEAL</div>
+      <div class="step">5. Verify</div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- PROGRESS BAR                                                 -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Progress bar</span>
+    </div>
+    <div class="kv"><span class="kv-label">Writing</span><span class="kv-value mono">68% · 1.02 / 1.50 MB</span></div>
+    <div class="bar"><div class="bar-fill" style="width: 68%;"></div></div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- EMPTY STATE                                                  -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Empty state</span>
+    </div>
+    <div class="empty-state">
+      <div class="empty-state-icon">🔍</div>
+      <div class="empty-state-title">Probe unknown battery</div>
+      <div class="empty-state-hint">Click <b>Start scan</b> to enumerate SBS registers.</div>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- TOOLBAR                                                      -->
+  <!-- =========================================================== -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-header">
+      <span class="card-title">Toolbar</span>
+      <span class="card-subtitle">action bar at top of action panels</span>
+    </div>
+    <div class="toolbar">
+      <button>Primary action</button>
+      <button class="secondary">Secondary</button>
+      <button class="ghost">Tertiary</button>
+      <span class="toolbar-spacer"></span>
+      <span class="kv-label">Status:</span>
+      <span class="badge badge-success"><span class="dot on"></span>connected</span>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- CONNECTION RAIL                                              -->
+  <!-- =========================================================== -->
+  <div style="grid-column: 1 / -1;">
+    <div style="font-size: var(--text-sm); color: var(--text-muted); margin-bottom: var(--s-2);">Connection rail (always at bottom of tab):</div>
+    <div class="connection-rail">
+      <span class="dot on"></span>
+      <span class="kv-label">Port B</span>
+      <span class="kv-value">UART @ GP10/11</span>
+      <span class="connection-rail-spacer"></span>
+      <span class="connection-rail-action">Owner: <code>crsf_service</code> · 420000 baud</span>
+    </div>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- DETAILS / ACCORDION                                          -->
+  <!-- =========================================================== -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Accordion (details)</span>
+    </div>
+    <details>
+      <summary class="kv-label" style="cursor: pointer;">Expand for advanced</summary>
+      <div class="banner banner-info" style="margin-top: var(--s-3);">
+        Скрытый контент. Используется для редких advanced-настроек чтобы
+        не засорять основной view.
+      </div>
+    </details>
+  </div>
+
+  <!-- =========================================================== -->
+  <!-- TWO-COLUMN COMPOSITION (real-world example)                  -->
+  <!-- =========================================================== -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-header">
+      <span class="card-title">Composition — typical card</span>
+      <span class="card-subtitle">пример как cards комбинируются в реальных табах</span>
+    </div>
+
+    <div class="tab-content" style="margin-top: var(--s-2);">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Identity</span>
+          <span class="badge badge-info">DJI Mavic 3</span>
+        </div>
+        <div class="kv"><span class="kv-label">MAC</span><span class="kv-value mono">8C:1F:64:1A:33:B7</span></div>
+        <div class="kv"><span class="kv-label">Cycles</span><span class="kv-value mono">142</span></div>
+        <div class="kv"><span class="kv-label">SoH</span><span class="kv-value">95.1% <span class="badge badge-success" style="margin-left: 8px;">healthy</span></span></div>
+        <div class="kv"><span class="kv-label">Sealed</span><span class="kv-value">
+          <span class="badge badge-warn">SEALED</span>
+        </span></div>
+      </div>
+
+      <div class="card" style="border-color: var(--primary);">
+        <div class="card-header">
+          <span class="card-title">Active slot</span>
+          <span class="badge badge-info">primary border</span>
+        </div>
+        <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value">ExpressLRS</span></div>
+        <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono">3.5.3</span></div>
+        <button class="btn-ghost btn-sm" style="margin-top: var(--s-3);">Re-flash</button>
+      </div>
+    </div>
+  </div>
+
+</div>

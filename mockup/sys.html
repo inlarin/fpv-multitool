@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — System (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab"        href="receiver.html">FPV Tools</a>
+      <a class="ws-tab active" href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="System tabs">
+    <a class="tab"        href="setup.html">Setup</a>
+    <a class="tab active" href="sys.html">System</a>
+    <a class="tab"        href="ota.html">OTA</a>
+    <a class="tab"        href="usb.html">USB</a>
+  </nav>
+
+  <!-- Stat tiles -->
+  <div class="stat-grid">
+    <div class="stat-tile success">
+      <div class="stat-tile-value mono">192.168.32.50</div>
+      <div class="stat-tile-label">IP</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">2h 14m</div>
+      <div class="stat-tile-label">Uptime</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">187 KB</div>
+      <div class="stat-tile-label">Free heap</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">7.8 MB</div>
+      <div class="stat-tile-label">Free PSRAM</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono">3</div>
+      <div class="stat-tile-label">WiFi clients</div>
+    </div>
+  </div>
+
+  <div class="tab-content" style="margin-top: var(--s-4);">
+
+    <!-- Plate info -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Plate</span>
+      </div>
+      <div class="kv"><span class="kv-label">Board</span><span class="kv-value">Waveshare ESP32-S3-LCD-1.47B</span></div>
+      <div class="kv"><span class="kv-label">MCU</span><span class="kv-value mono">ESP32-S3R8 · 240 MHz</span></div>
+      <div class="kv"><span class="kv-label">Memory</span><span class="kv-value mono">512 KB SRAM · 8 MB PSRAM · 16 MB flash</span></div>
+      <div class="kv"><span class="kv-label">SDK</span><span class="kv-value mono">ESP-IDF v5.3.2</span></div>
+      <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value mono">v0.29.0 · 9ca3ff4</span></div>
+    </div>
+
+    <!-- WiFi -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">WiFi</span>
+        <span class="badge badge-success">STA connected</span>
+      </div>
+      <div class="kv"><span class="kv-label">Mode</span><span class="kv-value">STA</span></div>
+      <div class="kv"><span class="kv-label">SSID</span><span class="kv-value mono">workshop-2.4</span></div>
+      <div class="kv"><span class="kv-label">RSSI</span><span class="kv-value mono">-58 dBm</span></div>
+      <div class="kv"><span class="kv-label">IP</span><span class="kv-value mono">192.168.32.50</span></div>
+      <div class="kv"><span class="kv-label">Gateway</span><span class="kv-value mono">192.168.32.1</span></div>
+    </div>
+
+    <!-- Connected sensors -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">On-board hardware</span>
+      </div>
+      <div class="kv"><span class="kv-label">Display</span><span class="kv-value">ST7789 172×320 IPS · OK</span></div>
+      <div class="kv"><span class="kv-label">IMU</span><span class="kv-value">QMI8658 · 0x6B · OK</span></div>
+      <div class="kv"><span class="kv-label">SD card</span><span class="kv-value">— not detected</span></div>
+      <div class="kv"><span class="kv-label">RGB LED</span><span class="kv-value">WS2812 · GPIO 38 · OK</span></div>
+      <div class="kv"><span class="kv-label">Battery ADC</span><span class="kv-value mono">3.92 V (GPIO 1)</span></div>
+    </div>
+
+    <!-- Manual port B (advanced) -->
+    <details class="card">
+      <summary class="card-title" style="cursor: pointer; list-style: none;">⚙ Advanced — manual Port B</summary>
+      <div class="banner banner-warn" style="margin-top: var(--s-3);">
+        Обычно используй <a href="setup.html"><b>Setup</b></a> wizard. Здесь —
+        ручной override electrical mode для отладки.
+      </div>
+      <div class="kv"><span class="kv-label">Current</span><span class="kv-value"><span class="badge badge-info">UART</span></span></div>
+      <div class="kv"><span class="kv-label">Owner</span><span class="kv-value mono">crsf_service</span></div>
+      <div class="kv"><span class="kv-label">Preferred (boot)</span><span class="kv-value">UART</span></div>
+      <div class="field">
+        <span class="field-label">Switch mode (advanced)</span>
+        <div class="cluster">
+          <button class="secondary btn-sm">IDLE</button>
+          <button class="secondary btn-sm">I2C</button>
+          <button class="secondary btn-sm">UART</button>
+          <button class="secondary btn-sm">PWM</button>
+          <button class="secondary btn-sm">GPIO</button>
+        </div>
+      </div>
+      <button class="danger ghost" style="margin-top: var(--s-3);">Force release</button>
+    </details>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Plate</span>
+    <span class="kv-value">192.168.32.50 · USB CDC · COM5</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">CPU 8% · Heap 187 KB · PSRAM 7.8/8.0 MB</span>
+  </div>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV MultiTool — Setup (mockup)</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="mockup-extras.css">
+</head>
+<body>
+
+<div id="connStatus" class="connected">192.168.32.50</div>
+<button id="themeToggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'':'dark')" title="Toggle theme">🌙</button>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <a class="app-title" href="index.html" style="text-decoration:none;color:inherit">FPV MultiTool</a>
+    <span class="app-title-mono">v0.29-mockup</span>
+    <span class="app-header-spacer"></span>
+    <nav class="ws-tabs" aria-label="Workspaces">
+      <a class="ws-tab"        href="battery.html">Battery Lab</a>
+      <a class="ws-tab"        href="receiver.html">FPV Tools</a>
+      <a class="ws-tab active" href="setup.html">System</a>
+    </nav>
+  </header>
+
+  <nav class="tabs" aria-label="System tabs">
+    <a class="tab active" href="setup.html">Setup</a>
+    <a class="tab"        href="sys.html">System</a>
+    <a class="tab"        href="ota.html">OTA</a>
+    <a class="tab"        href="usb.html">USB</a>
+  </nav>
+
+  <div class="banner banner-info" style="margin-bottom: var(--s-4);">
+    Один вопрос за раз: <b>что подключаешь</b> к Port B, <b>кто работает</b>.
+    Остальное (USB descriptor, electrical mode) автоматически.
+  </div>
+
+  <!-- Step 1: Device -->
+  <div class="page-section">
+    <div class="page-section-header">
+      <span class="page-section-title">1 · What's connected to Port B?</span>
+    </div>
+    <div class="action-picker">
+      <div class="action-card">
+        <span class="action-card-icon">🔋</span>
+        <span class="action-card-title">Battery</span>
+        <span class="action-card-desc">DJI / SBS battery pack on SMBus.</span>
+      </div>
+      <div class="action-card active">
+        <span class="action-card-icon">📡</span>
+        <span class="action-card-title">Receiver</span>
+        <span class="action-card-desc">ELRS / CRSF receiver on UART.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">⚡</span>
+        <span class="action-card-title">Motor / Servo</span>
+        <span class="action-card-desc">ESC DShot / Servo PWM on signal pin.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">🔌</span>
+        <span class="action-card-title">Advanced</span>
+        <span class="action-card-desc">PPM / raw GPIO sniffer / custom protocol.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">💤</span>
+        <span class="action-card-title">Idle</span>
+        <span class="action-card-desc">Nothing connected, pins floating.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Role -->
+  <div class="page-section">
+    <div class="page-section-header">
+      <span class="page-section-title">2 · Who interacts with it?</span>
+    </div>
+    <div class="action-picker">
+      <div class="action-card active">
+        <span class="action-card-icon">🖥</span>
+        <span class="action-card-title">HOST — plate itself</span>
+        <span class="action-card-desc">Web UI читает данные, плата сама общается с устройством. CDC USB.</span>
+      </div>
+      <div class="action-card">
+        <span class="action-card-icon">💻</span>
+        <span class="action-card-title">BRIDGE — PC via plate</span>
+        <span class="action-card-desc">Прокидываю на компьютер: bqStudio / esptool / Battery Killer / любая SMBus tool.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Apply -->
+  <div class="card">
+    <div class="cluster">
+      <button class="success btn-lg">✓ Apply: Receiver · HOST</button>
+      <span class="kv-label">→ Port B = UART, USB = CDC</span>
+    </div>
+    <p class="field-help" style="margin-top: var(--s-3);">
+      Будет применено: Port B → UART (TX=GP11, RX=GP10), USB → CDC (Serial).
+      Reboot не нужен (Port B меняется на лету). Сохранится в NVS.
+    </p>
+  </div>
+
+  <!-- Auto-detect helper -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">Auto-detect wiring</span>
+      <span class="badge badge-neutral">helper</span>
+    </div>
+    <p class="field-help" style="margin-bottom: var(--s-3);">
+      Если RX/TX или SDA/SCL могут быть перепутаны — плата сама попробует обе раскладки
+      и запомнит ту, которая сработала. <b>GND и питание</b> должны быть подключены верно.
+    </p>
+    <div class="cluster">
+      <button class="secondary">📡 CRSF @ 420k</button>
+      <button class="secondary">📡 SBUS</button>
+      <button class="secondary">📡 iBus</button>
+      <button class="secondary">🔋 I2C scan</button>
+      <button class="secondary">🔧 ELRS ROM DFU</button>
+    </div>
+    <pre style="margin-top: var(--s-3); padding: var(--s-3); background: var(--input-bg); border-radius: var(--r); font-size: var(--text-xs); color: var(--text-muted); border: 1px solid var(--border-subtle);">[no detection run yet]</pre>
+  </div>
+
+  <!-- Status panel -->
+  <div class="card" style="margin-top: var(--s-4);">
+    <div class="card-header">
+      <span class="card-title">Current status</span>
+    </div>
+    <div class="kv"><span class="kv-label">Active now</span><span class="kv-value">Receiver / HOST → UART · CDC</span></div>
+    <div class="kv"><span class="kv-label">In NVS (next boot)</span><span class="kv-value">Receiver / HOST → UART · CDC <span class="badge badge-neutral" style="margin-left: 8px;">no reboot needed</span></span></div>
+    <div class="kv"><span class="kv-label">Port B owner</span><span class="kv-value mono">crsf_service</span></div>
+    <div class="kv"><span class="kv-label">Pin swap</span><span class="kv-value mono">direct (TX=GP11, RX=GP10)</span></div>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">UART @ GP10/11</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">USB: CDC · Wire owner: <code>crsf_service</code></span>
+  </div>
+
+</div>
+
+</body>
+</html>
