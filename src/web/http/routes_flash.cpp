@@ -38,8 +38,9 @@ namespace RoutesFlash {
 static const size_t MAX_FW_SIZE = 2 * 1024 * 1024;
 
 static void flashProgress(int pct, const char* stage) {
-    WebState::flashState.progress_pct = pct;
-    WebState::flashState.stage = stage;
+    // Atomic 2-field update — WS broadcast snapshot used to pull pct + stage
+    // separately and could observe (new pct, old stage). Now in one Lock.
+    WebState::flashState.setProgress(pct, stage);
 }
 
 // =====================================================================
@@ -167,10 +168,7 @@ void tick() {
 // Non-static — declared in routes_flash.h as RoutesFlash::executeFlash()
 // for the main-loop dispatcher. File-local would clash with namespace decl.
 void executeFlash() {
-    WebState::flashState.in_progress = true;
-    WebState::flashState.progress_pct = 0;
-    WebState::flashState.stage = "Detecting format";
-    WebState::flashState.lastResult = "";
+    WebState::flashState.markFlashStart();
 
     const uint8_t *fw_ptr = WebState::flashState.fw_data;
     size_t fw_size = WebState::flashState.fw_size;
@@ -187,14 +185,11 @@ void executeFlash() {
                   WebState::flashState.flash_raw ? 1 : 0);
 
     if (fmt == FirmwareUnpack::FMT_GZIP) {
-        WebState::flashState.stage = "Decompressing";
+        WebState::flashState.setProgress(0, "Decompressing");
         size_t out_size = 0;
         decompressed = FirmwareUnpack::gunzip(fw_ptr, fw_size, &out_size);
         if (!decompressed) {
-            WebState::flashState.stage = "Failed";
-            WebState::flashState.progress_pct = 0;
-            WebState::flashState.in_progress = false;
-            WebState::flashState.lastResult = "Gzip decompress failed";
+            WebState::flashState.markFlashFailed("Gzip decompress failed");
             return;
         }
         fw_ptr = decompressed;
@@ -203,34 +198,25 @@ void executeFlash() {
         size_t out_size = 0;
         const uint8_t *extracted = FirmwareUnpack::extractELRS(fw_ptr, fw_size, &out_size);
         if (!extracted) {
-            WebState::flashState.stage = "Failed";
-            WebState::flashState.progress_pct = 0;
-            WebState::flashState.in_progress = false;
-            WebState::flashState.lastResult = "ELRS container parse failed";
+            WebState::flashState.markFlashFailed("ELRS container parse failed");
             return;
         }
         fw_ptr = extracted;
         fw_size = out_size;
     } else if (fmt != FirmwareUnpack::FMT_RAW_BIN) {
-        WebState::flashState.stage = "Failed";
-        WebState::flashState.progress_pct = 0;
-        WebState::flashState.in_progress = false;
-        WebState::flashState.lastResult = "Unknown firmware format (not .bin/.gz/.elrs)";
+        WebState::flashState.markFlashFailed("Unknown firmware format (not .bin/.gz/.elrs)");
         return;
     }
 
     Serial.printf("[Flash] Flashing %u bytes\n", fw_size);
-    WebState::flashState.stage = "Starting";
+    WebState::flashState.setProgress(0, "Starting");
 
     // RX state changes during flash (reboot into new firmware) — discard the
     // resume signal. User restarts CRSF Live monitor manually after flash.
     (void)crsfPauseForPortB();
 
     if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
-        WebState::flashState.stage = "Failed";
-        WebState::flashState.progress_pct = 0;
-        WebState::flashState.in_progress = false;
-        WebState::flashState.lastResult = "Port B busy — switch to UART";
+        WebState::flashState.markFlashFailed("Port B busy — switch to UART");
         if (decompressed) free(decompressed);
         return;
     }
@@ -356,18 +342,10 @@ void executeFlash() {
     if (decompressed) free(decompressed);
 
     // Free the uploaded firmware buffer after flashing — successful or not
-    // (user can re-upload to try again)
-    {
-        WebState::Lock lock;
-        if (WebState::flashState.fw_data) {
-            free(WebState::flashState.fw_data);
-            WebState::flashState.fw_data = nullptr;
-        }
-        WebState::flashState.fw_size = 0;
-        WebState::flashState.fw_received = 0;
-        WebState::flashState.in_progress = false;
-        WebState::flashState.lastResult = String(ESPFlasher::errorString(r)) + verifyMsg;
-    }
+    // (user can re-upload to try again). markFlashComplete is atomic so the
+    // WS broadcast can't observe (in_progress=false, fw_data=stale).
+    WebState::flashState.markFlashComplete(
+        String(ESPFlasher::errorString(r)) + verifyMsg);
     Serial.printf("[Flash] Result: %s%s\n", ESPFlasher::errorString(r), verifyMsg.c_str());
 }
 
@@ -778,15 +756,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         },
         [](AsyncWebServerRequest *req, String filename, size_t index, uint8_t *data, size_t len, bool final) {
             if (index == 0) {
-                WebState::Lock lock;
-                // Free previous buffer (critical — prevents PSRAM leak)
-                if (WebState::flashState.fw_data) {
-                    free(WebState::flashState.fw_data);
-                    WebState::flashState.fw_data = nullptr;
-                }
-                WebState::flashState.fw_size = 0;
-                WebState::flashState.fw_received = 0;
-                WebState::flashState.lastResult = "";
+                // Atomic: free old fw_data + clear fw_size/received/lastResult.
+                WebState::flashState.resetForUpload();
 
                 // Determine content length from Content-Length header.
                 // Multipart adds boundary overhead — 1 KB is plenty, and we
@@ -820,9 +791,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             if (index + len > MAX_FW_SIZE) {
                 // Truncated upload — mark explicitly so POST handler returns 413
                 // instead of reporting a short success.
-                WebState::Lock lock;
-                WebState::flashState.fw_size = 0;
-                WebState::flashState.lastResult = "Upload exceeds MAX_FW_SIZE — file too large";
+                WebState::flashState.markUploadRejected(
+                    "Upload exceeds MAX_FW_SIZE — file too large");
                 return;
             }
             // Fork-specific format rejects — first chunk of a new upload.
@@ -838,12 +808,10 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 bool zlrs_enc = (b0 == 0x11 && b1 == 0xE8 && b2 == 0xC6 && b3 == 0xCA);
                 bool foxeer_enc = (b0 == 0x71 && b1 == 0x9F && b2 == 0x96 && b3 == 0xE6);
                 if (zlrs_enc || foxeer_enc) {
-                    WebState::Lock lock;
-                    WebState::flashState.fw_size = 0;
-                    WebState::flashState.lastResult =
+                    WebState::flashState.markUploadRejected(
                         zlrs_enc
                           ? "ZLRS SubGHz encrypted container — used non-ENC variant"
-                          : "ZLRS/Foxeer 400 MHz encrypted container — use non-ENC variant";
+                          : "ZLRS/Foxeer 400 MHz encrypted container — use non-ENC variant");
                     return;  // quietly drop further chunks; POST handler returns 413
                 }
             }
@@ -896,17 +864,10 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         if (req->hasParam("via", true)) via = req->getParam("via", true)->value();
         else if (req->hasParam("via")) via = req->getParam("via")->value();
         bool via_stub = (via == "stub");
-        {
-            WebState::Lock lock;
-            WebState::flashState.flash_offset = offset;
-            WebState::flashState.flash_raw = raw;
-            WebState::flashState.flash_stay = stay;
-            WebState::flashState.flash_via_stub = via_stub;
-            WebState::flashState.stage = "Queued";
-            WebState::flashState.progress_pct = 0;
-            WebState::flashState.lastResult = "";
-            WebState::flashState.flash_request = true;
-        }
+        // Atomic — sets flash_* params + queue trio (stage/progress/lastResult)
+        // + flash_request=true in one Lock so the main-loop dispatcher can't
+        // pick up flash_request before the offset is set.
+        WebState::flashState.queueFlash(offset, raw, stay, via_stub);
         char msg[160];
         snprintf(msg, sizeof(msg), "Flashing started @ 0x%x%s%s via %s",
                  (unsigned)offset,

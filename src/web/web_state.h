@@ -105,6 +105,12 @@ struct CRSFState {
 extern CRSFState crsf;
 
 // ===== ELRS flash state =====
+// Migration 2026-04-27: typed Facade methods added for race-prone
+// multi-field updates. Public fields still exposed during transition;
+// new code SHOULD prefer the methods. The flashProgress callback,
+// queueFlash, executeFlash entry / exit, and the upload reset cases
+// are the ones that have to be atomic — single-field reads (used by
+// /api/flash/status) stay unlocked since they're word-atomic.
 struct FlashState {
     uint8_t *fw_data = nullptr;     // firmware buffer (PSRAM)
     size_t fw_size = 0;
@@ -118,6 +124,86 @@ struct FlashState {
     bool flash_raw = false;          // skip format detection (writes arbitrary blobs, e.g. partition tables)
     bool flash_stay = false;         // after write, keep RX in DFU (for chaining multiple flashes)
     bool flash_via_stub = false;     // use in-app ELRS stub flasher @ 420000 (no physical BOOT req'd)
+
+    // ---- Typed Facade methods (atomic under recursive Lock) ----------
+
+    // Begin a fresh upload — frees prior buffer, clears fw_size/received,
+    // wipes lastResult. Caller should follow up with allocFwBuffer().
+    void resetForUpload() {
+        Lock lock;
+        if (fw_data) { free(fw_data); fw_data = nullptr; }
+        fw_size = 0;
+        fw_received = 0;
+        lastResult = "";
+    }
+
+    // Set stage + progress in one go — used by ESPFlasher's progress
+    // callback. WS broadcast can no longer observe (pct, stage) skew.
+    void setProgress(int pct, const char *stage_str) {
+        Lock lock;
+        progress_pct = pct;
+        if (stage_str) stage = stage_str;
+    }
+
+    // Reject an upload chunk early (size limit, encrypted container, etc).
+    // Sets fw_size=0 + lastResult so the POST handler reports the reason.
+    void markUploadRejected(const char *reason) {
+        Lock lock;
+        fw_size = 0;
+        if (reason) lastResult = reason;
+    }
+
+    // Queue an executeFlash dispatch from /api/flash/start. Atomically
+    // sets all four flash_* params + the queue trio + flash_request=true.
+    void queueFlash(uint32_t offset, bool raw, bool stay, bool via_stub) {
+        Lock lock;
+        flash_offset = offset;
+        flash_raw = raw;
+        flash_stay = stay;
+        flash_via_stub = via_stub;
+        stage = "Queued";
+        progress_pct = 0;
+        lastResult = "";
+        flash_request = true;
+    }
+
+    // Atomic "did the user request a flash?" — test-and-clear so the
+    // main-loop dispatch can't fire twice.
+    bool consumeFlashRequest() {
+        Lock lock;
+        if (!flash_request) return false;
+        flash_request = false;
+        return true;
+    }
+
+    // Mark the flash task as starting — called at the top of executeFlash.
+    void markFlashStart() {
+        Lock lock;
+        in_progress = true;
+        progress_pct = 0;
+        stage = "Detecting format";
+        lastResult = "";
+    }
+
+    // Early exit from executeFlash (Port B busy, alloc failure, etc.).
+    void markFlashFailed(const char *reason) {
+        Lock lock;
+        stage = "Failed";
+        progress_pct = 0;
+        in_progress = false;
+        if (reason) lastResult = reason;
+    }
+
+    // executeFlash success/error path — free buffer, clear sizes, set
+    // final result line, mark not-in-progress.
+    void markFlashComplete(const String &result) {
+        Lock lock;
+        if (fw_data) { free(fw_data); fw_data = nullptr; }
+        fw_size = 0;
+        fw_received = 0;
+        in_progress = false;
+        lastResult = result;
+    }
 };
 extern FlashState flashState;
 

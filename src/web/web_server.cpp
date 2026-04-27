@@ -762,8 +762,11 @@ void WebServer::loop() {
     // battery service) for ~3 minutes; worse, the idle-task watchdog on core 0
     // fired mid-flash and rebooted the plate. The dump path already uses a
     // task for the same reason.
-    if (WebState::flashState.flash_request && !WebState::flashState.in_progress) {
-        WebState::flashState.flash_request = false;
+    // consumeFlashRequest is atomic test-and-clear — guarantees the task is
+    // never spawned twice for the same request. Re-entrancy guard via
+    // in_progress: don't dequeue while a previous flash is still running.
+    if (!WebState::flashState.in_progress &&
+        WebState::flashState.consumeFlashRequest()) {
         xTaskCreate([](void *){
             RoutesFlash::executeFlash();
             vTaskDelete(nullptr);
