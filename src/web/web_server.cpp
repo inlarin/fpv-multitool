@@ -428,14 +428,27 @@ void WebServer::start() {
     s_ws->onEvent(onWsEvent);
     s_server->addHandler(s_ws);
 
-    // Root — gzipped HTML from PROGMEM (~4x smaller over the wire)
-    // Browser transparently decompresses via Content-Encoding: gzip.
-    s_server->on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-        AsyncWebServerResponse *r = req->beginResponse_P(
-            200, "text/html", WEB_INDEX_HTML_GZ, WEB_INDEX_HTML_GZ_LEN);
+    // Root + assets — each gzipped from PROGMEM. Browser transparently
+    // decompresses via Content-Encoding: gzip. Three resources (HTML,
+    // CSS, JS) instead of one monolith — first paint is faster (parser
+    // doesn't block on the JS), and per-asset cache invalidation is now
+    // possible. Cache-Control: 1 hour is conservative; tune up to 1d
+    // once the UI stabilises.
+    auto serveGzip = [](AsyncWebServerRequest *req, const char *mime,
+                        const uint8_t *data, size_t len) {
+        AsyncWebServerResponse *r = req->beginResponse_P(200, mime, data, len);
         r->addHeader("Content-Encoding", "gzip");
         r->addHeader("Cache-Control", "max-age=3600");
         req->send(r);
+    };
+    s_server->on("/", HTTP_GET, [serveGzip](AsyncWebServerRequest *req) {
+        serveGzip(req, "text/html", WEB_INDEX_HTML_GZ, WEB_INDEX_HTML_GZ_LEN);
+    });
+    s_server->on("/style.css", HTTP_GET, [serveGzip](AsyncWebServerRequest *req) {
+        serveGzip(req, "text/css", WEB_STYLE_CSS_GZ, WEB_STYLE_CSS_GZ_LEN);
+    });
+    s_server->on("/ui.js", HTTP_GET, [serveGzip](AsyncWebServerRequest *req) {
+        serveGzip(req, "application/javascript", WEB_UI_JS_GZ, WEB_UI_JS_GZ_LEN);
     });
 
     // Battery service actions
