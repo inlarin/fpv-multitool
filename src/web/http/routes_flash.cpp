@@ -22,6 +22,13 @@
 #include <esp_heap_caps.h>
 #include <MD5Builder.h>
 
+// Cross-TU debug ring — global scope (NOT inside RoutesFlash namespace) so
+// esp_rom_flasher.cpp's `extern char *g_dfu_debug_buf;` finds it. Used by
+// the stub-protocol diagnostics in readFlashStream(). Static buffer below.
+static char s_dfu_debug_storage[256] = {0};
+char *g_dfu_debug_buf = s_dfu_debug_storage;
+size_t g_dfu_debug_len = 0;
+
 // Static state used by the dump endpoints. Inside a function-scope static so
 // lambdas capture it; moved out here verbatim from WebServer::start().
 namespace RoutesFlash {
@@ -75,6 +82,85 @@ static void crsfResumeAfterPortB(bool was_running) {
     CRSFConfig::init();
     WebState::crsf.enabled = true;
     Serial.println("[ELRS] CRSF service resumed after Port B op");
+}
+
+// =====================================================================
+// Sticky DFU session — shared by /api/elrs/dfu/begin, /end, /status and
+// any DFU-mode endpoint (chip_info, identity/fast, erase_partition,
+// flash/md5). When a session is open, the session owns Port B and the
+// ESPFlasher Serial1+sync state across HTTP calls — so the user can chain
+// chip_info → identity/fast → erase_partition without cycling the RX into
+// DFU between each call (BUG-ID1: ESP32-C3 ROM autobauder fails the second
+// sync after a Serial1.end()/begin() cycle).
+//
+// State is owned here, not in ESPFlasher: ESPFlasher just exposes
+// open/close/InOpenSession primitives. The route layer tracks PinPort
+// ownership + whether CRSF needs to resume on /end + when the session
+// started (for the idle watchdog).
+// =====================================================================
+static bool     s_dfu_session_active        = false;
+static bool     s_dfu_session_crsf_was_run  = false;
+static uint32_t s_dfu_session_opened_ms     = 0;
+// Cached chip identity captured at /dfu/begin. ESP32-C3 ROM autobauder
+// gets unhappy when READ_REG (chip_info) is issued AFTER a long
+// READ_FLASH_SLOW chain inside the same Serial1 session — sync() inside
+// the session also fails to recover. So we read chip_info once at
+// /dfu/begin (right after the fresh sync) and serve it from cache for the
+// rest of the session. This keeps /api/elrs/chip_info responsive even if
+// the user already pulled identity/fast.
+static ESPFlasher::ChipInfo s_dfu_session_chip = {};
+
+// (Debug ring globals defined in this file's global-scope block above.)
+
+// 60 s of inactivity → auto-close. Long enough to cover human reaction
+// time between successive curl/UI calls but short enough that an abandoned
+// session frees Port B for CRSF before the user gets confused.
+static const uint32_t DFU_SESSION_IDLE_TIMEOUT_MS = 60000;
+
+// Acquire Port B + open ESPFlasher session for an endpoint. If a sticky
+// /dfu/begin session is already in effect, reuse it (no PinPort/CRSF churn).
+// On false, the response has already been sent.
+//
+// `*out_was_paused` indicates whether THIS CALL paused CRSF and is therefore
+// responsible for resuming it on its own release. When sticky is in effect,
+// it's set to false — the /dfu/begin handler owns CRSF resume.
+static bool dfuPortAcquireOrSticky(AsyncWebServerRequest *req, const char *who,
+                                   bool *out_was_paused) {
+    if (s_dfu_session_active) {
+        ESPFlasher::touchSession();
+        *out_was_paused = false;
+        return true;
+    }
+    *out_was_paused = crsfPauseForPortB();
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, who)) {
+        crsfResumeAfterPortB(*out_was_paused);
+        req->send(409, "text/plain", "Port B busy");
+        return false;
+    }
+    return true;
+}
+
+static void dfuPortReleaseOrSticky(bool was_paused) {
+    if (s_dfu_session_active) return;
+    PinPort::release(PinPort::PORT_B);
+    crsfResumeAfterPortB(was_paused);
+}
+
+// Idle watchdog — called from RoutesFlash::tick() in the web loop.
+static void dfuSessionTimeoutCheck() {
+    if (!s_dfu_session_active) return;
+    if (!ESPFlasher::sessionIdleSince(DFU_SESSION_IDLE_TIMEOUT_MS)) return;
+    Serial.printf("[DFU] sticky session idle %u ms — auto-closing\n",
+                  (unsigned)DFU_SESSION_IDLE_TIMEOUT_MS);
+    ESPFlasher::closeSession();
+    s_dfu_session_active = false;
+    PinPort::release(PinPort::PORT_B);
+    crsfResumeAfterPortB(s_dfu_session_crsf_was_run);
+    s_dfu_session_crsf_was_run = false;
+}
+
+void tick() {
+    dfuSessionTimeoutCheck();
 }
 
 // Non-static — declared in routes_flash.h as RoutesFlash::executeFlash()
@@ -1094,12 +1180,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
         uint32_t offset = strtoul(req->getParam("offset", true)->value().c_str(), nullptr, 0);
         uint32_t size   = strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0);
-        bool _crsf = crsfPauseForPortB();
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "flash_md5")) {
-            crsfResumeAfterPortB(_crsf);
-            req->send(409, "text/plain", "Port B busy");
-            return;
-        }
+        bool _crsf;
+        if (!dfuPortAcquireOrSticky(req, "flash_md5", &_crsf)) return;
         ESPFlasher::Config cfg;
         cfg.uart = &Serial1;
         cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
@@ -1107,8 +1189,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.baud_rate = 115200;
         uint8_t digest[16];
         ESPFlasher::Result r = ESPFlasher::spiFlashMd5(cfg, offset, size, digest);
-        PinPort::release(PinPort::PORT_B);
-        crsfResumeAfterPortB(_crsf);
+        dfuPortReleaseOrSticky(_crsf);
         if (r != ESPFlasher::FLASH_OK) {
             req->send(500, "text/plain", ESPFlasher::errorString(r));
             return;
@@ -1140,12 +1221,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         bool wantSpiffs = req->hasParam("spiffs", true)
             ? (req->getParam("spiffs", true)->value().toInt() != 0)
             : false;
-        bool _crsf = crsfPauseForPortB();
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "identity_fast")) {
-            crsfResumeAfterPortB(_crsf);
-            req->send(409, "text/plain", "Port B busy");
-            return;
-        }
+        bool _crsf;
+        if (!dfuPortAcquireOrSticky(req, "identity_fast", &_crsf)) return;
         ESPFlasher::Config cfg;
         cfg.uart = &Serial1;
         cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
@@ -1180,8 +1257,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         const uint32_t BUF_SZ    = PT_SZ + NVS_OTA + 2 * TAIL_SZ + SPIFFS_SZ;
         uint8_t *buf = (uint8_t *)heap_caps_malloc(BUF_SZ, MALLOC_CAP_SPIRAM);
         if (!buf) {
-            PinPort::release(PinPort::PORT_B);
-            crsfResumeAfterPortB(_crsf);
+            dfuPortReleaseOrSticky(_crsf);
             req->send(500, "text/plain", "PSRAM alloc failed");
             return;
         }
@@ -1197,8 +1273,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         ESPFlasher::Result r = ESPFlasher::readFlashMulti(cfg, regions, n_regions);
         if (r != ESPFlasher::FLASH_OK) {
             heap_caps_free(buf);
-            PinPort::release(PinPort::PORT_B);
-            crsfResumeAfterPortB(_crsf);
+            dfuPortReleaseOrSticky(_crsf);
             req->send(500, "text/plain",
                 String("Flash read failed: ") + ESPFlasher::errorString(r));
             return;
@@ -1214,8 +1289,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         if (seq1 != 0xFFFFFFFF && seq1 > max_seq) {
             max_seq = seq1; active_slot = (seq1 - 1) & 1;
         }
-        PinPort::release(PinPort::PORT_B);
-        crsfResumeAfterPortB(_crsf);
+        dfuPortReleaseOrSticky(_crsf);
 
         // Build chunked text response: header line + hex per section. 5 sections:
         //   PT       @ 0x8000  — 4 KB  partition table (for Phase M1)
@@ -1361,12 +1435,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             return;
         }
         // Erases an entire partition — RX state changes; don't resume CRSF.
-        bool _crsf = crsfPauseForPortB();
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "erase_part")) {
-            crsfResumeAfterPortB(_crsf);  // restore on early-fail only
-            req->send(409, "text/plain", "Port B busy");
-            return;
-        }
+        bool _crsf;
+        if (!dfuPortAcquireOrSticky(req, "erase_part", &_crsf)) return;
         ESPFlasher::Config cfg;
         cfg.uart = &Serial1;
         cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
@@ -1388,7 +1458,10 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             done += n;
         }
         ESPFlasher::Result r = ESPFlasher::eraseRegionMulti(cfg, regions, n_regions);
-        PinPort::release(PinPort::PORT_B);
+        // Erase changes RX state — drop CRSF resume by passing `false`. If
+        // a sticky session is in effect, dfuPortReleaseOrSticky is a no-op
+        // (the sticky owner stays in DFU until /dfu/end).
+        dfuPortReleaseOrSticky(false);
         if (r == ESPFlasher::FLASH_OK) {
             char msg[96];
             snprintf(msg, sizeof(msg), "Erased %u bytes @ 0x%x in %u chunks",
@@ -1399,13 +1472,49 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
     });
 
-    s_server->on("/api/elrs/chip_info", HTTP_POST, [](AsyncWebServerRequest *req) {
+    // ---------- Sticky DFU session ----------
+    // POST /api/elrs/dfu/begin  → opens ROM DFU session, holds Port B + Serial1
+    //                              across subsequent DFU-mode endpoints. Returns
+    //                              chip_info JSON. Idempotent if already open.
+    // POST /api/elrs/dfu/end    → closes session, releases Port B, resumes CRSF.
+    // GET  /api/elrs/dfu/status → JSON: open/uptime_ms.
+    //
+    // Session auto-closes after DFU_SESSION_IDLE_TIMEOUT_MS of inactivity (the
+    // ESPFlasher last-use timestamp is bumped on every InOpenSession call).
+    s_server->on("/api/elrs/dfu/begin", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (WebState::flashState.in_progress || s_dump.running) {
-            req->send(409, "text/plain", "flash/dump in progress — wait for it to finish");
+            req->send(409, "text/plain", "flash/dump in progress");
+            return;
+        }
+        // ?stub=1 → upload esptool stub after sync. Stub is robust to mixed
+        // READ_REG/READ_FLASH/MD5 chains (BUG-ID2 workaround) — recommended
+        // for the sticky-session pattern. Default OFF for backward compat
+        // with callers that don't need the stub.
+        bool wantStub = req->hasParam("stub", true)
+            ? (req->getParam("stub", true)->value().toInt() != 0)
+            : false;
+
+        if (s_dfu_session_active) {
+            // Idempotent: report state of the already-open session. Use
+            // cached chip_info — fresh chipInfoInOpenSession() against ROM
+            // might fail if a READ_FLASH chain has run since /dfu/begin.
+            const ESPFlasher::ChipInfo &ci = s_dfu_session_chip;
+            JsonDocument d;
+            d["session"]    = "already_open";
+            d["uptime_ms"]  = millis() - s_dfu_session_opened_ms;
+            d["chip"]       = ci.chip_name ? ci.chip_name : "unknown";
+            d["magic_hex"]  = String("0x") + String(ci.magic_value, HEX);
+            char macStr[18];
+            snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     ci.mac[0], ci.mac[1], ci.mac[2], ci.mac[3], ci.mac[4], ci.mac[5]);
+            d["mac"] = macStr;
+            d["stub_loaded"] = ESPFlasher::sessionStubLoaded();
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
             return;
         }
         bool _crsf = crsfPauseForPortB();
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_chip_info")) {
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "dfu_session")) {
             crsfResumeAfterPortB(_crsf);
             req->send(409, "text/plain", "Port B busy");
             return;
@@ -1415,11 +1524,134 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
         cfg.baud_rate = 115200;
+        ESPFlasher::Result r = ESPFlasher::openSession(cfg);
+        if (r != ESPFlasher::FLASH_OK) {
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(500, "text/plain",
+                String("DFU sync failed: ") + ESPFlasher::errorString(r));
+            return;
+        }
+        s_dfu_session_active       = true;
+        s_dfu_session_crsf_was_run = _crsf;
+        s_dfu_session_opened_ms    = millis();
+        Serial.println("[DFU] sticky session opened");
+
+        ESPFlasher::ChipInfo ci;
+        ESPFlasher::chipInfoInOpenSession(&ci);
+        s_dfu_session_chip = ci;
+
+        // Optional stub upload. Done BEFORE any READ_FLASH chain so the
+        // ROM is still in a clean post-sync state. If no embedded stub
+        // matches the detected chip, return a hint but keep the session.
+        bool stub_attempted = false, stub_ok = false;
+        String stub_msg;
+        if (wantStub) {
+            stub_attempted = true;
+            ESPFlasher::Result sr = ESPFlasher::loadStub(ci.magic_value);
+            stub_ok = (sr == ESPFlasher::FLASH_OK);
+            if (sr == ESPFlasher::FLASH_ERR_INVALID_INPUT) {
+                stub_msg = "no embedded stub for this chip";
+            } else if (!stub_ok) {
+                stub_msg = String("stub load failed: ") + ESPFlasher::errorString(sr);
+            } else {
+                stub_msg = "stub running";
+                Serial.println("[DFU] stub flasher loaded");
+            }
+        }
+
+        JsonDocument d;
+        d["session"]    = "opened";
+        d["uptime_ms"]  = 0;
+        d["chip"]       = ci.chip_name;
+        d["magic_hex"]  = String("0x") + String(ci.magic_value, HEX);
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 ci.mac[0], ci.mac[1], ci.mac[2], ci.mac[3], ci.mac[4], ci.mac[5]);
+        d["mac"] = macStr;
+        bool macBlank = true;
+        for (int i = 0; i < 6; i++) if (ci.mac[i]) { macBlank = false; break; }
+        d["mac_ok"] = !macBlank;
+        d["stub_loaded"]    = stub_ok;
+        if (stub_attempted) d["stub_msg"] = stub_msg;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    s_server->on("/api/elrs/dfu/end", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!s_dfu_session_active) {
+            req->send(200, "text/plain", "no session open");
+            return;
+        }
+        ESPFlasher::closeSession();
+        s_dfu_session_active = false;
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(s_dfu_session_crsf_was_run);
+        s_dfu_session_crsf_was_run = false;
+        Serial.println("[DFU] sticky session closed by /end");
+        req->send(200, "text/plain", "session closed");
+    });
+
+    s_server->on("/api/elrs/dfu/debug", HTTP_GET, [](AsyncWebServerRequest *req) {
+        String s = "";
+        if (g_dfu_debug_len > 0)
+            s = String((const char *)g_dfu_debug_buf).substring(0, g_dfu_debug_len);
+        req->send(200, "text/plain", s.length() ? s : String("(no debug data)"));
+    });
+
+    s_server->on("/api/elrs/dfu/status", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["open"] = s_dfu_session_active;
+        if (s_dfu_session_active) {
+            d["uptime_ms"]       = millis() - s_dfu_session_opened_ms;
+            d["idle_timeout_ms"] = DFU_SESSION_IDLE_TIMEOUT_MS;
+            d["stub_loaded"]     = ESPFlasher::sessionStubLoaded();
+            d["chip"]            = s_dfu_session_chip.chip_name
+                                       ? s_dfu_session_chip.chip_name : "unknown";
+        }
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    s_server->on("/api/elrs/chip_info", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress || s_dump.running) {
+            req->send(409, "text/plain", "flash/dump in progress — wait for it to finish");
+            return;
+        }
+        // Sticky session WITHOUT stub: serve cached chip_info captured at
+        // /dfu/begin. Live READ_REG against the ROM after a READ_FLASH_SLOW
+        // chain is unreliable on ESP32-C3 — see s_dfu_session_chip comment.
+        // With stub loaded, the stub responds reliably to all commands, so
+        // we fall through to the live path for fresh data.
+        if (s_dfu_session_active && !ESPFlasher::sessionStubLoaded()) {
+            ESPFlasher::touchSession();
+            const ESPFlasher::ChipInfo &info = s_dfu_session_chip;
+            JsonDocument d;
+            d["chip"]      = info.chip_name ? info.chip_name : "unknown";
+            d["magic_hex"] = String("0x") + String(info.magic_value, HEX);
+            char macStr[18];
+            snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     info.mac[0], info.mac[1], info.mac[2], info.mac[3], info.mac[4], info.mac[5]);
+            d["mac"]       = macStr;
+            bool macBlank = true;
+            for (int i = 0; i < 6; i++) if (info.mac[i]) { macBlank = false; break; }
+            d["mac_ok"]    = !macBlank;
+            d["cached"]    = true;  // hint for the UI / debugging
+            String out; serializeJson(d, out);
+            req->send(200, "application/json", out);
+            return;
+        }
+        bool _crsf;
+        if (!dfuPortAcquireOrSticky(req, "elrs_chip_info", &_crsf)) return;
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
 
         ESPFlasher::ChipInfo info;
         ESPFlasher::Result r = ESPFlasher::chipInfo(cfg, &info);
-        PinPort::release(PinPort::PORT_B);
-        crsfResumeAfterPortB(_crsf);
+        dfuPortReleaseOrSticky(_crsf);
         if (r != ESPFlasher::FLASH_OK) {
             req->send(500, "text/plain", ESPFlasher::errorString(r));
             return;

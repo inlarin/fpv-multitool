@@ -53,6 +53,41 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
 // acks, terminated by a 16-byte MD5 trailer (ignored here).
 Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out);
 
+// Sticky DFU session ---------------------------------------------------------
+// Lets multiple operations share a single ROM DFU session, avoiding the
+// ESP32-C3 ROM autobauder quirk where Serial1.end()+begin() between calls
+// fails the second SLIP sync (BUG-ID1).
+//
+// Lifecycle:
+//   1. openSession(cfg, flash_size) — UART begin + sync + spiAttach + spiSetParams
+//   2. issue *InOpenSession() helpers in any order
+//   3. closeSession() — UART end (or auto-close on idle timeout)
+//
+// All non-session helpers (readFlash, chipInfo, etc.) keep their self-
+// contained begin/sync/end semantics — they're refactored to call open/close
+// internally so existing callers don't change. The InOpenSession variants
+// just send SLIP commands assuming the session is live.
+Result openSession(const Config &cfg, uint32_t flash_size_bytes = 0x400000);
+void   closeSession();
+bool   sessionOpen();
+void   touchSession();                 // mark recent activity
+bool   sessionIdleSince(uint32_t ms);  // true if open AND inactive ≥ ms
+
+// Upload the embedded esptool stub flasher matching the chip identified by
+// `chip_magic` (return value from chipInfoInOpenSession). After this, the
+// session is "stub-mode" — the same SLIP protocol still works, but commands
+// hit the in-RAM stub which is robust to mixed READ_REG/READ_FLASH chains
+// where bare ROM falls over (BUG-ID2 on ESP32-C3).
+//
+// Must be called inside an open session, BEFORE any READ_FLASH chains. Stubs
+// are embedded in src/bridge/esp_rom_stubs.h (auto-generated from esptool
+// JSONs by tools/gen_stubs.py).
+//
+// Returns FLASH_OK on success and sets sessionStubLoaded()=true. Returns
+// FLASH_ERR_INVALID_INPUT if no stub matches the magic.
+Result loadStub(uint32_t chip_magic);
+bool   sessionStubLoaded();
+
 // Read multiple non-contiguous regions in a SINGLE ROM DFU session.
 //
 // Rationale: ESP32-C3 ROM's autobauder latches on first sync; subsequent
@@ -69,6 +104,12 @@ struct ReadRegion {
     uint8_t *dst;
 };
 Result readFlashMulti(const Config &cfg, const ReadRegion *regions, size_t n);
+
+// Same as readFlashMulti, but assumes openSession() is already in effect.
+// Caller does NOT pass a Config — session is global. Used by the sticky-
+// session route handlers so chip_info / identity / md5 / erase chain on
+// the same Serial1 + sync.
+Result readFlashMultiInOpenSession(const ReadRegion *regions, size_t n);
 
 // Erase `size` bytes starting at `offset` on the attached ROM bootloader.
 // Size is rounded up to the nearest 4 KB sector internally by the ROM.
@@ -89,6 +130,7 @@ struct EraseRegion {
     uint32_t size;
 };
 Result eraseRegionMulti(const Config &cfg, const EraseRegion *regions, size_t n);
+Result eraseRegionMultiInOpenSession(const EraseRegion *regions, size_t n);
 
 // Tell the stub/ROM to exit and run user code (boots the OTADATA-selected
 // app partition). Opcode CMD_RUN_USER_CODE (0xD3). Works on both the ELRS
@@ -100,6 +142,7 @@ Result runUserCode(const Config &cfg);
 // ~600× faster than full-readback for verifying a flash write integrity.
 // Works on ESP32-S2/S3/C3 ROM (and all stubs). Does not touch flash.
 Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t out[16]);
+Result spiFlashMd5InOpenSession(uint32_t offset, uint32_t size, uint8_t out[16]);
 
 // Detect attached chip. Syncs + issues READ_REG against the SoC-identifying
 // registers (UART_DATE + EFUSE_BASE + MAC words) to derive chip family, MAC,
@@ -114,6 +157,7 @@ struct ChipInfo {
     uint32_t flash_size;       // derived from JEDEC (0 if unknown)
 };
 Result chipInfo(const Config &cfg, ChipInfo *out);
+Result chipInfoInOpenSession(ChipInfo *out);
 
 // Send the CRSF "reboot to bootloader" command frame (EC 04 32 62 6C 0A) at
 // the given baud. On ESP32-C3 + ELRS 3.x this switches the RX from the app

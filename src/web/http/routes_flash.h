@@ -11,4 +11,7 @@
 namespace RoutesFlash {
 void registerRoutesFlash(AsyncWebServer *server);
 void executeFlash();
+// Periodic tick from the web loop — handles sticky DFU session idle-timeout
+// auto-close. Cheap (single millis() compare) — safe to call every loop tick.
+void tick();
 }

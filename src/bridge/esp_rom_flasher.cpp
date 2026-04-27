@@ -1,4 +1,11 @@
 #include "esp_rom_flasher.h"
+#include "esp_rom_stubs.h"
+
+// Cross-TU debug ring (defined in routes_flash.cpp). Declared at global
+// scope so it lives outside both ESPFlasher and RoutesFlash namespaces —
+// otherwise the linker silently builds two unrelated symbols.
+extern char *g_dfu_debug_buf;
+extern size_t g_dfu_debug_len;
 
 // ESP ROM Bootloader Protocol for ESP8266/ESP8285
 // Reference: esptool.py, espressif/esp-serial-flasher
@@ -28,6 +35,9 @@ namespace ESPFlasher {
 static const uint8_t CMD_FLASH_BEGIN  = 0x02;
 static const uint8_t CMD_FLASH_DATA   = 0x03;
 static const uint8_t CMD_FLASH_END    = 0x04;
+static const uint8_t CMD_MEM_BEGIN    = 0x05;  // alloc RAM region for stub
+static const uint8_t CMD_MEM_END      = 0x06;  // jump to entry / commit
+static const uint8_t CMD_MEM_DATA     = 0x07;  // RAM data block (stub upload)
 static const uint8_t CMD_SYNC         = 0x08;
 static const uint8_t CMD_READ_REG     = 0x0A;
 static const uint8_t CMD_SPI_SET_PARAMS = 0x0B;  // declare geometry before READ_FLASH
@@ -48,6 +58,15 @@ static const uint32_t DEFAULT_TIMEOUT_MS = 3000;
 static const uint32_t SYNC_TIMEOUT_MS = 100;
 
 static HardwareSerial *s_uart = nullptr;
+
+// Sticky DFU session state — see openSession()/closeSession() below.
+static bool     s_session_open     = false;
+static uint32_t s_session_last_use = 0;
+// True when the current sticky session has uploaded the esptool stub
+// flasher into RX RAM and ROM has jumped to it. Stub responds to the same
+// SLIP protocol as ROM but without the autobauder fragility — mixed
+// READ_REG / READ_FLASH_SLOW chains work reliably. See loadStub() below.
+static bool     s_session_stub_loaded = false;
 
 // ---- SLIP send ----
 static void slipStart() { s_uart->write(0xC0); }
@@ -236,6 +255,450 @@ static bool flashEnd(bool reboot) {
 // Forward declarations for helpers defined below.
 static bool spiAttach();
 static bool spiSetParams(uint32_t flash_size_bytes);
+
+// Sticky session: open Serial1 + sync + spiAttach + spiSetParams ONCE so
+// callers can chain readFlashMultiInOpenSession() / chipInfoInOpenSession() /
+// spiFlashMd5InOpenSession() / eraseRegionMultiInOpenSession() without ever
+// closing Serial1 between operations. This sidesteps the ESP32-C3 ROM
+// autobauder quirk (BUG-ID1) where Serial1.end()+begin() between two
+// SLIP exchanges fails the second sync.
+//
+// Idempotent if already open: returns FLASH_OK without re-syncing. Caller
+// must closeSession() first to reconfigure baud / pins.
+Result openSession(const Config &cfg, uint32_t flash_size_bytes) {
+    if (s_session_open) return FLASH_OK;
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(8192);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(100);
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    spiAttach();
+    if (flash_size_bytes < 0x400000) flash_size_bytes = 0x400000;
+    spiSetParams(flash_size_bytes);
+    s_session_open = true;
+    s_session_last_use = millis();
+    return FLASH_OK;
+}
+
+void closeSession() {
+    if (!s_session_open) return;
+    if (s_uart) s_uart->end();
+    s_session_open = false;
+    // Stub lives in RX RAM only while RX is powered; nothing to "unload".
+    // Clearing the flag prevents a future openSession() from assuming stub
+    // is still loaded — fresh session must re-upload if it wants stub mode.
+    s_session_stub_loaded = false;
+}
+
+bool sessionOpen() { return s_session_open; }
+void touchSession() { if (s_session_open) s_session_last_use = millis(); }
+bool sessionIdleSince(uint32_t ms) {
+    return s_session_open && (millis() - s_session_last_use >= ms);
+}
+bool sessionStubLoaded() { return s_session_stub_loaded; }
+
+// MEM_BEGIN: tell ROM to allocate `size` bytes in RAM at `offset`, expecting
+// `num_blocks` writes of `block_size` each. Returns ROM ack.
+static bool memBegin(uint32_t size, uint32_t num_blocks,
+                     uint32_t block_size, uint32_t offset) {
+    uint8_t data[16];
+    *(uint32_t*)(data + 0)  = size;
+    *(uint32_t*)(data + 4)  = num_blocks;
+    *(uint32_t*)(data + 8)  = block_size;
+    *(uint32_t*)(data + 12) = offset;
+    return sendCmd(CMD_MEM_BEGIN, data, 16, cksum(data, 16), 3000);
+}
+
+// MEM_DATA: write one block of stub binary to the allocated RAM region.
+// Header (16 B) + payload. Payload must be exactly block_size as declared
+// in memBegin (ROM doesn't tolerate short writes here, unlike FLASH_DATA).
+static bool memData(const uint8_t *block, size_t block_size, uint32_t seq) {
+    static uint8_t pkt[16 + 1536];
+    if (block_size > 1536) return false;
+    *(uint32_t*)(pkt + 0)  = block_size;
+    *(uint32_t*)(pkt + 4)  = seq;
+    *(uint32_t*)(pkt + 8)  = 0;
+    *(uint32_t*)(pkt + 12) = 0;
+    memcpy(pkt + 16, block, block_size);
+    uint32_t ck = cksum(pkt + 16, block_size);
+    return sendCmd(CMD_MEM_DATA, pkt, 16 + block_size, ck, 3000);
+}
+
+// MEM_END: commit the upload and either (a) jump to entry_point if stay=0,
+// or (b) leave it loaded and return control if stay=1. We always use stay=0
+// because the only point of uploading is to run the stub.
+//
+// IMPORTANT: ROM's reply to MEM_END comes BEFORE the jump. After we read it,
+// ROM transfers control to entry_point — at which point the stub starts up
+// and emits a 6-byte SLIP frame containing "OHAI" (\x4f\x48\x41\x49). We
+// consume that as the handshake confirming the stub is alive.
+static bool memEnd(uint32_t entry_point) {
+    uint8_t data[8];
+    *(uint32_t*)(data + 0) = 0;            // stay_in_loader = 0 → jump
+    *(uint32_t*)(data + 4) = entry_point;
+    return sendCmd(CMD_MEM_END, data, 8, cksum(data, 8), 3000);
+}
+
+// Wait for the stub's startup handshake — a SLIP-framed "OHAI" payload
+// (4 bytes, 0x4f 0x48 0x41 0x49). esptool calls this the "OHAI" probe.
+// Returns true if seen within timeout_ms.
+static bool waitStubOhai(uint32_t timeout_ms) {
+    uint8_t buf[16];
+    uint32_t deadline = millis() + timeout_ms;
+    while (millis() < deadline) {
+        int n = slipRead(buf, sizeof(buf), 100);
+        if (n >= 4 && buf[0] == 0x4f && buf[1] == 0x48
+                  && buf[2] == 0x41 && buf[3] == 0x49) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Upload the embedded stub matching `chip_magic` and jump to its entry
+// point. After this, ROM is dormant and stub answers all subsequent SLIP
+// commands. Stub IS robust to mixed READ_REG/READ_FLASH/MD5 sequences —
+// that's the whole reason this exists.
+//
+// Sequence (per esptool LoadELRSESP32C3.run_stub):
+//   1. memBegin(text_len, ceil(text_len/block_size), block_size, text_start)
+//   2. memData(seq, block_size, text_chunk) × num_blocks
+//   3. memBegin(data_len, ceil(data_len/block_size), block_size, data_start)
+//   4. memData(seq, block_size, data_chunk) × num_blocks
+//   5. memEnd(entry_point) → ROM jumps, stub starts
+//   6. waitStubOhai() → confirms stub alive
+//
+// 1024-byte blocks for both segments. ESP32-S3 stub is 4836 B text → 5 blocks.
+Result loadStub(uint32_t chip_magic) {
+    if (!s_session_open) return FLASH_ERR_INVALID_INPUT;
+    if (s_session_stub_loaded) return FLASH_OK;  // idempotent
+    const ESPRomStub::StubBin *stub = ESPRomStub::findStubByMagic(chip_magic);
+    if (!stub) return FLASH_ERR_INVALID_INPUT;
+    s_session_last_use = millis();
+
+    static const uint32_t BLOCK = 1024;
+
+    auto upload_segment = [&](const uint8_t *src_pgm, uint32_t len, uint32_t addr) -> bool {
+        uint32_t num_blocks = (len + BLOCK - 1) / BLOCK;
+        if (!memBegin(len, num_blocks, BLOCK, addr)) return false;
+        // Stub binaries live in PROGMEM — copy to a tmp buffer block-by-block.
+        static uint8_t blk[BLOCK];
+        for (uint32_t i = 0; i < num_blocks; i++) {
+            uint32_t off = i * BLOCK;
+            uint32_t sz  = (len - off > BLOCK) ? BLOCK : (len - off);
+            memcpy_P(blk, src_pgm + off, sz);
+            // ROM expects exactly block_size bytes regardless of actual
+            // payload — pad with 0 if the last block is short.
+            if (sz < BLOCK) memset(blk + sz, 0x00, BLOCK - sz);
+            if (!memData(blk, BLOCK, i)) return false;
+            s_session_last_use = millis();
+        }
+        return true;
+    };
+
+    if (!upload_segment(stub->text, stub->text_len, stub->text_start))
+        return FLASH_ERR_WRITE_FAILED;
+    if (stub->data_len > 0 &&
+        !upload_segment(stub->data, stub->data_len, stub->data_start))
+        return FLASH_ERR_WRITE_FAILED;
+
+    if (!memEnd(stub->entry)) return FLASH_ERR_END_FAILED;
+    // ROM has jumped to the stub. The stub's first action is to send "OHAI".
+    if (!waitStubOhai(2000)) return FLASH_ERR_NO_SYNC;
+
+    // Stub starts with its own SPI peripheral state — ROM's prior
+    // spiAttach() + spiSetParams() do NOT carry over. Re-initialize so
+    // subsequent READ_FLASH_SLOW / FLASH_BEGIN / SPI_FLASH_MD5 commands
+    // can talk to flash. Without this, reads silently fail (data area
+    // empty) while register-only commands (READ_REG, MD5 already-cached)
+    // appear to work — leading to confusing partial breakage.
+    spiAttach();
+    spiSetParams(0x400000);
+
+    s_session_stub_loaded = true;
+    s_session_last_use = millis();
+    return FLASH_OK;
+}
+
+// In-session variants — UART/sync/spi setup is assumed done. Each call
+// touches s_session_last_use on success so the idle watchdog resets.
+
+// Stub-only fast read: CMD_READ_FLASH (0xD2) streaming protocol. ESP32-C3
+// stub does NOT implement CMD_READ_FLASH_SLOW (0x0E) — only the streaming
+// 0xD2. Protocol per esptool 4.x:
+//   1. Send CMD_READ_FLASH with payload [offset:4, size:4, pkt_sz:4, max_inflight:4]
+//   2. Read normal command-status response.
+//   3. Repeat: read SLIP frame (data packet) → send 4-byte ack (total bytes
+//      received so far) wrapped in SLIP. Loop until `size` bytes collected.
+//   4. Read SLIP frame containing 16-byte MD5 trailer.
+//   5. Send final 4-byte ack.
+// Returns FLASH_OK / FLASH_ERR_READ_FAILED. ~5–10× faster than SLOW.
+static Result readFlashStream(uint32_t offset, uint32_t size, uint8_t *out) {
+    // Match esptool 4.x defaults exactly — stub validates these args and
+    // rejects the command if they don't fit its expectations:
+    //   FLASH_SECTOR_SIZE = 0x1000 (4 KB)  → packet size
+    //   max_inflight      = 64             → window size
+    static const uint32_t PKT_SZ       = 0x1000;
+    static const uint32_t MAX_INFLIGHT = 64;
+
+    uint8_t req[16];
+    *(uint32_t*)(req + 0)  = offset;
+    *(uint32_t*)(req + 4)  = size;
+    *(uint32_t*)(req + 8)  = PKT_SZ;
+    *(uint32_t*)(req + 12) = MAX_INFLIGHT;
+    // DEBUG: capture the raw response into the global last-debug buffer
+    // (read via /api/elrs/dfu/debug) so we can see WHY it's rejected.
+    while (s_uart->available()) s_uart->read();
+    slipStart();
+    slipWriteByte(0x00);
+    slipWriteByte(CMD_READ_FLASH);
+    slipWriteByte(16); slipWriteByte(0);
+    // chk=0 for non-data commands (esptool only validates chk on
+    // FLASH_DATA / MEM_DATA). Earlier we were sending cksum(req,16) which
+    // matched our own pattern but might be what stub treats as "wrong".
+    slipWriteByte(0); slipWriteByte(0); slipWriteByte(0); slipWriteByte(0);
+    slipWrite(req, 16);
+    slipEnd();
+    s_uart->flush();
+    static uint8_t dbg[64];
+    int dn = slipRead(dbg, sizeof(dbg), 5000);
+    if (::g_dfu_debug_buf) {
+        size_t off = snprintf(::g_dfu_debug_buf, 256,
+            "sent: cmd=%02x size=16 chk=0 args=ofs=%08x sz=%08x pkt=%08x inf=%08x\n"
+            "stub_resp len=%d",
+            CMD_READ_FLASH, (unsigned)offset, (unsigned)size, (unsigned)PKT_SZ,
+            (unsigned)MAX_INFLIGHT, dn);
+        if (dn > 0 && off < 200) {
+            off += snprintf(::g_dfu_debug_buf + off, 256 - off, " hex=");
+            for (int i = 0; i < dn && i < 24 && off < 250; i++) {
+                off += snprintf(::g_dfu_debug_buf + off, 256 - off, "%02x ", dbg[i]);
+            }
+        }
+        ::g_dfu_debug_len = off;
+    }
+    if (dn < 8 || dbg[0] != 0x01 || dbg[1] != CMD_READ_FLASH) {
+        return FLASH_ERR_READ_FAILED;
+    }
+    uint16_t rsz = dbg[2] | (dbg[3] << 8);
+    if (rsz >= 2 && dn >= 8 + rsz) {
+        uint8_t st = dbg[8 + rsz - 2];
+        if (st != 0) return FLASH_ERR_READ_FAILED;
+    }
+
+    auto sendAck = [](uint32_t total) {
+        uint8_t a[4];
+        *(uint32_t*)a = total;
+        slipStart();
+        for (int i = 0; i < 4; i++) slipWriteByte(a[i]);
+        slipEnd();
+        s_uart->flush();
+    };
+
+    // PSRAM buf for one packet — too big for stack/static at 4K+ on small
+    // RAM. esp_heap_caps_malloc not available here → use a static; 4160 B
+    // is fine in the .bss for an S3 with 8 MB PSRAM but tight on a small
+    // chip. Keeping it static keeps the function reentrancy-free, which is
+    // OK because the session is single-threaded by PinPort.
+    static uint8_t pkt[PKT_SZ + 64];
+    uint32_t got = 0;
+    while (got < size) {
+        int n = slipRead(pkt, sizeof(pkt), 5000);
+        if (n <= 0) return FLASH_ERR_READ_FAILED;
+        uint32_t want = size - got;
+        uint32_t copy = ((uint32_t)n > want) ? want : (uint32_t)n;
+        memcpy(out + got, pkt, copy);
+        got += copy;
+        sendAck(got);
+    }
+    // MD5 trailer (16 bytes raw or 32 hex chars — consume but don't ack).
+    // esptool's read_flash does NOT send a finish-ack after MD5; an extra
+    // ack confuses stub's command loop and breaks the NEXT readFlashStream
+    // call (observed: 1st call OK, 2nd returns cmd=0x10 status=0x01).
+    static uint8_t md5[40];
+    int mn = slipRead(md5, sizeof(md5), 5000);
+    if (mn <= 0) return FLASH_ERR_READ_FAILED;
+    return FLASH_OK;
+}
+
+Result readFlashMultiInOpenSession(const ReadRegion *regions, size_t n) {
+    if (!s_session_open || !regions || n == 0) return FLASH_ERR_INVALID_INPUT;
+    s_session_last_use = millis();
+
+    // Stub mode: use streaming CMD_READ_FLASH (0xD2). Fresh stub binaries
+    // from PIO's tool-esptoolpy correctly implement this opcode (older
+    // ELRS-vendored copies did not — the data segment was 8 B vs 216 B).
+    // ROM (no stub) keeps the slow CMD_READ_FLASH_SLOW (0x0E) path below.
+    if (s_session_stub_loaded) {
+        for (size_t ri = 0; ri < n; ri++) {
+            const ReadRegion &r = regions[ri];
+            if (!r.dst || r.size == 0) return FLASH_ERR_INVALID_INPUT;
+            Result rs = readFlashStream(r.offset, r.size, r.dst);
+            if (rs != FLASH_OK) return rs;
+            s_session_last_use = millis();
+        }
+        return FLASH_OK;
+    }
+
+    static const uint32_t CHUNK = 64;
+    static uint8_t resp[128];
+    for (size_t ri = 0; ri < n; ri++) {
+        const ReadRegion &r = regions[ri];
+        if (!r.dst || r.size == 0) return FLASH_ERR_INVALID_INPUT;
+        size_t received = 0;
+        while (received < r.size) {
+            uint32_t take = (r.size - received > CHUNK) ? CHUNK : (r.size - received);
+            uint8_t req[8];
+            *(uint32_t*)(req + 0) = r.offset + (uint32_t)received;
+            *(uint32_t*)(req + 4) = take;
+            uint32_t ck = cksum(req, 8);
+            slipStart();
+            slipWriteByte(0x00);
+            slipWriteByte(CMD_READ_FLASH_SLOW);
+            slipWriteByte(8 & 0xFF);
+            slipWriteByte((8 >> 8) & 0xFF);
+            slipWriteByte(ck & 0xFF);
+            slipWriteByte((ck >> 8) & 0xFF);
+            slipWriteByte((ck >> 16) & 0xFF);
+            slipWriteByte((ck >> 24) & 0xFF);
+            slipWrite(req, 8);
+            slipEnd();
+            s_uart->flush();
+            int nr = slipRead(resp, sizeof(resp), 2000);
+            if (nr < 8 || resp[0] != 0x01 || resp[1] != CMD_READ_FLASH_SLOW)
+                return FLASH_ERR_READ_FAILED;
+            uint16_t resp_size = resp[2] | (resp[3] << 8);
+            int data_len = (int)resp_size - 2;
+            if (data_len <= 0 || 8 + data_len > nr) return FLASH_ERR_READ_FAILED;
+            if ((uint32_t)data_len > take) data_len = (int)take;
+            memcpy(r.dst + received, resp + 8, data_len);
+            received += data_len;
+            // Refresh idle marker every chunk — long reads (192 KB SPIFFS
+            // ≈ 16 s wall-clock) would otherwise let the 60 s idle watchdog
+            // fire mid-call.
+            s_session_last_use = millis();
+        }
+    }
+    return FLASH_OK;
+}
+
+Result eraseRegionMultiInOpenSession(const EraseRegion *regions, size_t n) {
+    if (!s_session_open || !regions || n == 0) return FLASH_ERR_INVALID_INPUT;
+    s_session_last_use = millis();
+    for (size_t i = 0; i < n; i++) {
+        if (regions[i].size == 0) continue;
+        if (!flashBegin(regions[i].size, regions[i].offset))
+            return FLASH_ERR_BEGIN_FAILED;
+        (void)flashEnd(false);
+        s_session_last_use = millis();
+    }
+    return FLASH_OK;
+}
+
+Result spiFlashMd5InOpenSession(uint32_t offset, uint32_t size, uint8_t out[16]) {
+    if (!s_session_open || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
+    s_session_last_use = millis();
+    // Same precaution as chipInfoInOpenSession — re-sync before issuing a
+    // different command type after a previous READ_FLASH_SLOW chain.
+    if (!sync()) return FLASH_ERR_NO_SYNC;
+
+    uint8_t data[16];
+    *(uint32_t*)(data + 0)  = offset;
+    *(uint32_t*)(data + 4)  = size;
+    *(uint32_t*)(data + 8)  = 0;
+    *(uint32_t*)(data + 12) = 0;
+    uint32_t ck = cksum(data, 16);
+    slipStart();
+    slipWriteByte(0x00);
+    slipWriteByte(CMD_SPI_FLASH_MD5);
+    slipWriteByte(16); slipWriteByte(0);
+    slipWriteByte(ck & 0xFF);
+    slipWriteByte((ck >> 8) & 0xFF);
+    slipWriteByte((ck >> 16) & 0xFF);
+    slipWriteByte((ck >> 24) & 0xFF);
+    slipWrite(data, 16);
+    slipEnd();
+    s_uart->flush();
+
+    static uint8_t buf[128];
+    int n = slipRead(buf, sizeof(buf), 10000);
+    if (n < 8 || buf[0] != 0x01 || buf[1] != CMD_SPI_FLASH_MD5)
+        return FLASH_ERR_READ_FAILED;
+    uint16_t resp_size = buf[2] | (buf[3] << 8);
+    if (n < 8 + resp_size) return FLASH_ERR_READ_FAILED;
+    uint8_t status = buf[8 + resp_size - 2];
+    if (status != 0x00) return FLASH_ERR_READ_FAILED;
+    uint8_t *md5_area = &buf[8];
+    uint16_t md5_len = resp_size - 2;
+    if (md5_len == 16) {
+        memcpy(out, md5_area, 16);
+    } else if (md5_len == 32) {
+        auto h2i = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return 0;
+        };
+        for (int i = 0; i < 16; i++)
+            out[i] = (uint8_t)((h2i(md5_area[i*2]) << 4) | h2i(md5_area[i*2 + 1]));
+    } else {
+        return FLASH_ERR_READ_FAILED;
+    }
+    s_session_last_use = millis();
+    return FLASH_OK;
+}
+
+Result chipInfoInOpenSession(ChipInfo *out) {
+    if (!s_session_open || !out) return FLASH_ERR_INVALID_INPUT;
+    s_session_last_use = millis();
+    memset(out, 0, sizeof(*out));
+    out->chip_name = "unknown";
+
+    // Re-sync before READ_REG. After a long READ_FLASH_SLOW chain
+    // (identity/fast = 5 regions × ~64 chunks each), ESP32-C3 ROM observed
+    // to reject CMD_READ_REG with no reply. SYNC inside the SAME Serial1
+    // session is cheap (~50 ms) and reproducibly restores ROM responsiveness
+    // — the autobauder-latch issue (BUG-ID1) only happens across Serial1
+    // end/begin, not within an open session.
+    if (!sync()) return FLASH_ERR_NO_SYNC;
+
+    auto readReg = [](uint32_t addr, uint32_t *val) -> bool {
+        uint8_t req[4];
+        *(uint32_t*)req = addr;
+        return sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, val);
+    };
+
+    uint32_t magic = 0;
+    if (!readReg(0x40001000, &magic)) return FLASH_ERR_READ_FAILED;
+    out->magic_value = magic;
+    switch (magic) {
+        case 0xfff0c101: out->chip_name = "ESP8266"; break;
+        case 0x00f01d83: out->chip_name = "ESP32"; break;
+        case 0x000007c6: out->chip_name = "ESP32-S2"; break;
+        case 0x00000009:
+        case 0xeb004136: out->chip_name = "ESP32-S3"; break;
+        case 0x6921506f:
+        case 0x1b31506f: out->chip_name = "ESP32-C3"; break;
+        case 0x0da1806f: out->chip_name = "ESP32-C6"; break;
+        case 0xd7b73e80: out->chip_name = "ESP32-H2"; break;
+        default:         out->chip_name = "unknown"; break;
+    }
+    out->ok = true;
+
+    if (magic == 0x6921506f || magic == 0x1b31506f) {
+        uint32_t m0 = 0, m1 = 0;
+        if (readReg(0x60008844, &m0) && readReg(0x60008848, &m1)) {
+            out->mac[0] = (uint8_t)(m1 >> 8);
+            out->mac[1] = (uint8_t)(m1 >> 0);
+            out->mac[2] = (uint8_t)(m0 >> 24);
+            out->mac[3] = (uint8_t)(m0 >> 16);
+            out->mac[4] = (uint8_t)(m0 >> 8);
+            out->mac[5] = (uint8_t)(m0 >> 0);
+        }
+    }
+    s_session_last_use = millis();
+    return FLASH_OK;
+}
 
 // Main flash entry point.
 // Single FLASH_BEGIN for the entire image, then N × FLASH_DATA blocks.
@@ -451,51 +914,17 @@ Result eraseRegion(const Config &cfg, uint32_t offset, size_t size) {
 // issue that BUG-ID1 hit on reads.
 Result eraseRegionMulti(const Config &cfg, const EraseRegion *regions, size_t n) {
     if (!cfg.uart || !regions || n == 0) return FLASH_ERR_INVALID_INPUT;
-
-    s_uart = cfg.uart;
-    s_uart->setRxBufferSize(4096);
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
-    delay(100);
-
-    if (cfg.progress) cfg.progress(0, "Connecting");
-    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
-    if (cfg.progress) cfg.progress(3, "Synced");
-
-    spiAttach();
     uint32_t max_end = 0;
-    uint64_t total_bytes = 0;
     for (size_t i = 0; i < n; i++) {
         uint32_t end = regions[i].offset + regions[i].size;
         if (end > max_end) max_end = end;
-        total_bytes += regions[i].size;
     }
-    if (max_end < 0x400000) max_end = 0x400000;
-    spiSetParams(max_end);
-
-    uint64_t done = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (regions[i].size == 0) continue;
-        // Each FLASH_BEGIN opens an erase context for the new region —
-        // ROM resets internal pointer state on each FLASH_BEGIN, so chaining
-        // them inside one Serial1 session is safe (verified empirically).
-        if (!flashBegin(regions[i].size, regions[i].offset)) {
-            s_uart->end();
-            return FLASH_ERR_BEGIN_FAILED;
-        }
-        // FLASH_END(false) finalises the erase without rebooting the RX.
-        // Best-effort — some ROMs ignore the response, but the erase has
-        // already been committed by FLASH_BEGIN's internal sector loop.
-        (void)flashEnd(false);
-        done += regions[i].size;
-        if (cfg.progress) {
-            int pct = 3 + (int)(done * 95 / total_bytes);
-            cfg.progress(pct, "Erasing");
-        }
-    }
-
-    if (cfg.progress) cfg.progress(100, "Done");
-    s_uart->end();
-    return FLASH_OK;
+    bool was_open = sessionOpen();
+    Result r = openSession(cfg, max_end);
+    if (r != FLASH_OK) return r;
+    r = eraseRegionMultiInOpenSession(regions, n);
+    if (!was_open) closeSession();
+    return r;
 }
 
 // Read `size` bytes at `offset` into `out`.
@@ -584,86 +1013,18 @@ Result readFlash(const Config &cfg, uint32_t offset, size_t size, uint8_t *out) 
 // session without running into the ESP32-C3 ROM autobauder quirk.
 Result readFlashMulti(const Config &cfg, const ReadRegion *regions, size_t n) {
     if (!cfg.uart || !regions || n == 0) return FLASH_ERR_INVALID_INPUT;
-
-    s_uart = cfg.uart;
-    s_uart->setRxBufferSize(8192);
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
-    delay(100);
-
-    if (cfg.progress) cfg.progress(0, "Connecting");
-    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
-    if (cfg.progress) cfg.progress(3, "Synced");
-
-    spiAttach();
-    // Compute max offset for spiSetParams call.
     uint32_t max_end = 0;
-    uint32_t total_bytes = 0;
     for (size_t i = 0; i < n; i++) {
-        if (!regions[i].dst || regions[i].size == 0) {
-            s_uart->end(); return FLASH_ERR_INVALID_INPUT;
-        }
+        if (!regions[i].dst || regions[i].size == 0) return FLASH_ERR_INVALID_INPUT;
         uint32_t end = regions[i].offset + regions[i].size;
         if (end > max_end) max_end = end;
-        total_bytes += regions[i].size;
     }
-    if (max_end < 0x400000) max_end = 0x400000;
-    spiSetParams(max_end);
-
-    static const uint32_t CHUNK = 64;
-    static uint8_t resp[128];
-    uint32_t bytes_done = 0;
-
-    for (size_t ri = 0; ri < n; ri++) {
-        const ReadRegion &r = regions[ri];
-        size_t received = 0;
-        while (received < r.size) {
-            uint32_t take = (r.size - received > CHUNK) ? CHUNK : (r.size - received);
-
-            uint8_t req[8];
-            *(uint32_t*)(req + 0) = r.offset + (uint32_t)received;
-            *(uint32_t*)(req + 4) = take;
-            uint32_t ck = cksum(req, 8);
-
-            slipStart();
-            slipWriteByte(0x00);
-            slipWriteByte(CMD_READ_FLASH_SLOW);
-            slipWriteByte(8 & 0xFF);
-            slipWriteByte((8 >> 8) & 0xFF);
-            slipWriteByte(ck & 0xFF);
-            slipWriteByte((ck >> 8) & 0xFF);
-            slipWriteByte((ck >> 16) & 0xFF);
-            slipWriteByte((ck >> 24) & 0xFF);
-            slipWrite(req, 8);
-            slipEnd();
-            s_uart->flush();
-
-            int nr = slipRead(resp, sizeof(resp), 2000);
-            if (nr < 8 || resp[0] != 0x01 || resp[1] != CMD_READ_FLASH_SLOW) {
-                s_uart->end();
-                return FLASH_ERR_READ_FAILED;
-            }
-            uint16_t resp_size = resp[2] | (resp[3] << 8);
-            int data_off = 8;
-            int data_len = (int)resp_size - 2;
-            if (data_len <= 0 || data_off + data_len > nr) {
-                s_uart->end();
-                return FLASH_ERR_READ_FAILED;
-            }
-            if ((uint32_t)data_len > take) data_len = (int)take;
-            memcpy(r.dst + received, resp + data_off, data_len);
-            received += data_len;
-            bytes_done += data_len;
-
-            if (cfg.progress) {
-                int pct = 3 + (int)((int64_t)bytes_done * 92 / total_bytes);
-                cfg.progress(pct, "Reading");
-            }
-        }
-    }
-
-    if (cfg.progress) cfg.progress(100, "Done");
-    s_uart->end();
-    return FLASH_OK;
+    bool was_open = sessionOpen();
+    Result r = openSession(cfg, max_end);
+    if (r != FLASH_OK) return r;
+    r = readFlashMultiInOpenSession(regions, n);
+    if (!was_open) closeSession();
+    return r;
 }
 
 // Ask ROM/stub to compute MD5 over a flash region. Request layout:
@@ -673,83 +1034,14 @@ Result readFlashMulti(const Config &cfg, const ReadRegion *regions, size_t n) {
 // We read them all by parsing the full SLIP frame.
 Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t out[16]) {
     if (!cfg.uart || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
-    s_uart = cfg.uart;
-    s_uart->setRxBufferSize(1024);
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
-    delay(50);
-    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
-
-    // ESP32-C3 ROM's SPI_FLASH_MD5 needs the SPI peripheral attached and
-    // geometry declared — same prerequisites as READ_FLASH. Without them the
-    // ROM rejects the command with status=1 (symptom: "READ_FLASH rejected").
-    spiAttach();
     uint32_t fs = offset + size;
     if (fs < 0x400000) fs = 0x400000;
-    spiSetParams(fs);
-
-    uint8_t data[16];
-    *(uint32_t*)(data + 0)  = offset;
-    *(uint32_t*)(data + 4)  = size;
-    *(uint32_t*)(data + 8)  = 0;
-    *(uint32_t*)(data + 12) = 0;
-    uint32_t ck = cksum(data, 16);
-
-    slipStart();
-    slipWriteByte(0x00);
-    slipWriteByte(CMD_SPI_FLASH_MD5);
-    slipWriteByte(16); slipWriteByte(0);
-    slipWriteByte(ck & 0xFF);
-    slipWriteByte((ck >> 8) & 0xFF);
-    slipWriteByte((ck >> 16) & 0xFF);
-    slipWriteByte((ck >> 24) & 0xFF);
-    slipWrite(data, 16);
-    slipEnd();
-    s_uart->flush();
-
-    // Response: dir=0x01, cmd=0x13, size=... varies per ROM variant:
-    //   * ROM reply: [dir=1, cmd=0x13, size=2+16+2, value=0, payload=<32 ASCII hex chars>+status_word]
-    //     — ROM sends the MD5 as 32 hex chars!
-    //   * Stub reply: [dir=1, cmd=0x13, size=2+16, value=0, payload=<16 raw bytes>+status_word]
-    // We accept both and convert ASCII-hex to raw if needed.
-    static uint8_t buf[128];
-    int n = slipRead(buf, sizeof(buf), 10000);  // MD5 over 1 MB ~200 ms but give margin
-    if (n < 8 || buf[0] != 0x01 || buf[1] != CMD_SPI_FLASH_MD5) {
-        s_uart->end();
-        return FLASH_ERR_READ_FAILED;
-    }
-    uint16_t resp_size = buf[2] | (buf[3] << 8);
-    if (n < 8 + resp_size) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
-
-    // Status is last 2 bytes of the data area.
-    uint8_t status = buf[8 + resp_size - 2];
-    if (status != 0x00) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
-
-    // The 16 MD5 bytes (raw or ASCII-hex) sit at buf[8 .. 8 + resp_size - 2].
-    uint8_t *md5_area = &buf[8];
-    uint16_t md5_len = resp_size - 2;
-
-    if (md5_len == 16) {
-        memcpy(out, md5_area, 16);
-    } else if (md5_len == 32) {
-        // ASCII hex from ROM — convert
-        for (int i = 0; i < 16; i++) {
-            char hi = md5_area[i * 2];
-            char lo = md5_area[i * 2 + 1];
-            auto h2i = [](char c) -> int {
-                if (c >= '0' && c <= '9') return c - '0';
-                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-                return 0;
-            };
-            out[i] = (uint8_t)((h2i(hi) << 4) | h2i(lo));
-        }
-    } else {
-        s_uart->end();
-        return FLASH_ERR_READ_FAILED;
-    }
-
-    s_uart->end();
-    return FLASH_OK;
+    bool was_open = sessionOpen();
+    Result r = openSession(cfg, fs);
+    if (r != FLASH_OK) return r;
+    r = spiFlashMd5InOpenSession(offset, size, out);
+    if (!was_open) closeSession();
+    return r;
 }
 
 // Chip detection via READ_REG of CHIP_DETECT_MAGIC_VALUE (0x40001000) + EFUSE
@@ -757,59 +1049,12 @@ Result spiFlashMd5(const Config &cfg, uint32_t offset, uint32_t size, uint8_t ou
 // writes a distinct ROM-boot sentinel into that register.
 Result chipInfo(const Config &cfg, ChipInfo *out) {
     if (!cfg.uart || !out) return FLASH_ERR_INVALID_INPUT;
-    memset(out, 0, sizeof(*out));
-    out->chip_name = "unknown";
-
-    s_uart = cfg.uart;
-    s_uart->setRxBufferSize(4096);
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
-    delay(50);
-
-    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
-
-    // CHIP_DETECT_MAGIC_VALUE_ADDR = 0x40001000 on every chip that implements
-    // the ROM bootloader we care about. Value is a per-family sentinel.
-    auto readReg = [](uint32_t addr, uint32_t *val) -> bool {
-        uint8_t req[4];
-        *(uint32_t*)req = addr;
-        return sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, val);
-    };
-
-    uint32_t magic = 0;
-    if (!readReg(0x40001000, &magic)) { s_uart->end(); return FLASH_ERR_READ_FAILED; }
-    out->magic_value = magic;
-    switch (magic) {
-        case 0xfff0c101: out->chip_name = "ESP8266"; break;
-        case 0x00f01d83: out->chip_name = "ESP32"; break;
-        case 0x000007c6: out->chip_name = "ESP32-S2"; break;
-        case 0x00000009:
-        case 0xeb004136: out->chip_name = "ESP32-S3"; break;
-        case 0x6921506f:
-        case 0x1b31506f: out->chip_name = "ESP32-C3"; break;
-        case 0x0da1806f: out->chip_name = "ESP32-C6"; break;
-        case 0xd7b73e80: out->chip_name = "ESP32-H2"; break;
-        default:         out->chip_name = "unknown"; break;
-    }
-    out->ok = true;
-
-    // MAC read via EFUSE block — only wired up for ESP32-C3 (the only chip
-    // we've shipped real hardware against). Address layout differs across
-    // SoCs; when we encounter a new one we extend this switch.
-    if (magic == 0x6921506f || magic == 0x1b31506f) {
-        uint32_t m0 = 0, m1 = 0;
-        if (readReg(0x60008844, &m0) && readReg(0x60008848, &m1)) {
-            // esptool packs as >II(mac1, mac0)[2:8] → high word high bytes
-            out->mac[0] = (uint8_t)(m1 >> 8);
-            out->mac[1] = (uint8_t)(m1 >> 0);
-            out->mac[2] = (uint8_t)(m0 >> 24);
-            out->mac[3] = (uint8_t)(m0 >> 16);
-            out->mac[4] = (uint8_t)(m0 >> 8);
-            out->mac[5] = (uint8_t)(m0 >> 0);
-        }
-    }
-
-    s_uart->end();
-    return FLASH_OK;
+    bool was_open = sessionOpen();
+    Result r = openSession(cfg);
+    if (r != FLASH_OK) return r;
+    r = chipInfoInOpenSession(out);
+    if (!was_open) closeSession();
+    return r;
 }
 
 // Parse ELRS build-info rodata: looks for the 4-byte `be ef ca fe` sentinel

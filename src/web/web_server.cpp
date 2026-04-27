@@ -1455,6 +1455,9 @@ void WebServer::loop() {
         }, "elrs_flash", 8192, nullptr, 1, nullptr);
     }
 
+    // Sticky DFU session idle-timeout watchdog. Cheap (single millis() compare).
+    RoutesFlash::tick();
+
     // Execute pending battery service actions from web thread
     if (WebState::battSvc.pending != WebState::BS_NONE) {
         bool ok = false;
