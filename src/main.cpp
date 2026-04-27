@@ -1,6 +1,7 @@
 // ESP32-S3 FPV MultiTool
 // Main entry: menu + app switching
 #include <Arduino.h>
+#include <WiFi.h>
 #include <esp_task_wdt.h>
 #include "pin_config.h"
 #include "ui/display.h"
@@ -33,6 +34,11 @@ static AppId currentApp = APP_NONE;
 
 // Try STA from saved creds, otherwise start AP
 static void autoStartWifi() {
+    // Don't write creds to ESP-IDF WiFi NVS namespace on every begin() —
+    // we keep them in our own Preferences "wifi" store. Without this, each
+    // boot rewrites WiFi NVS and slows reconnect; without persistent=false
+    // there's also a benign warning about "saving WiFi config" every boot.
+    WiFi.persistent(false);
     String ssid, pass;
     bool connected = false;
     if (WifiManager::loadCredentials(ssid, pass) && ssid.length() > 0) {

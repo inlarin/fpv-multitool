@@ -239,7 +239,15 @@ void registerRoutesOta(AsyncWebServer *s_server) {
 
             s_otaPull.message = "OK — rebooting";
             s_otaPull.progress = 100;
-            vTaskDelay(pdMS_TO_TICKS(500));
+            // Clean STA disassoc — sends 802.11 deauth so the AP drops the
+            // old association immediately. Without this, AP keeps the stale
+            // session for ~ap_max_inactivity (240 s on most consumer routers),
+            // and the just-rebooted plate then tries to re-associate while
+            // the AP still considers it connected → reassoc NACKed, plate
+            // sits silently in AP fallback for 4 minutes. Verified empirically
+            // on v0.28.4 OTA pulls.
+            WiFi.disconnect(true, false);  // disassoc, keep saved creds
+            vTaskDelay(pdMS_TO_TICKS(1500));
             ESP.restart();
             vTaskDelete(nullptr);
         }, "otaPull", 8192, nullptr, 1, nullptr);
@@ -267,9 +275,12 @@ void registerRoutesOta(AsyncWebServer *s_server) {
             resp->addHeader("Connection", "close");
             req->send(resp);
             if (ok) {
-                Serial.println("[OTA] Success — rebooting in 500 ms");
+                Serial.println("[OTA] Success — rebooting in 1500 ms (after deauth)");
                 xTaskCreate([](void*) {
-                    vTaskDelay(pdMS_TO_TICKS(500));
+                    // Same deauth-then-restart dance as the pull path —
+                    // see /api/ota/pull comment for why 1.5 s + WiFi.disconnect.
+                    WiFi.disconnect(true, false);
+                    vTaskDelay(pdMS_TO_TICKS(1500));
                     ESP.restart();
                 }, "otaReboot", 2048, nullptr, 1, nullptr);
             }
