@@ -32,13 +32,12 @@ static void ensureRunning() {
         Serial.println("[CRSF] Port B busy — switch to UART in System → Port B Mode");
         return;
     }
-    bool inv = false;
-    { WebState::Lock lock; inv = WebState::crsf.inverted; }
+    bool inv = WebState::crsf.isInverted();
     CRSFService::begin(&Serial1,
                        PinPort::rx_pin(PinPort::PORT_B),
                        PinPort::tx_pin(PinPort::PORT_B),
                        420000, inv);
-    { WebState::Lock lock; WebState::crsf.enabled = true; }
+    WebState::crsf.markStarted(inv);
     s_startedHere = true;
 }
 
@@ -273,8 +272,7 @@ void runCRSFTester() {
             if (s_startedHere) {
                 CRSFService::end();
                 PinPort::release(PinPort::PORT_B);
-                WebState::Lock lock;
-                WebState::crsf.enabled = false;
+                WebState::crsf.markStopped();
             }
             return;
         }

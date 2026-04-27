@@ -20,13 +20,14 @@ void registerRoutesCrsf(AsyncWebServer *s_server) {
             return;
         }
         bool inv = req->hasParam("inverted") ? req->getParam("inverted")->value() == "1" : false;
-        WebState::crsf.inverted = inv;
         CRSFService::begin(&Serial1,
                            PinPort::rx_pin(PinPort::PORT_B),
                            PinPort::tx_pin(PinPort::PORT_B),
                            420000, inv);
         CRSFConfig::init();
-        WebState::crsf.enabled = true;
+        // Atomic — sets enabled+inverted in one lock so WS broadcast
+        // can't observe partially-updated state.
+        WebState::crsf.markStarted(inv);
         req->send(200, "text/plain", inv ? "CRSF started (inverted)" : "CRSF started");
     });
 
@@ -65,7 +66,7 @@ void registerRoutesCrsf(AsyncWebServer *s_server) {
         // the just-stopped RX would otherwise survive a subsequent /start
         // against a different RX and leak into the new session's UI.
         CRSFConfig::reset();
-        WebState::crsf.enabled = false;
+        WebState::crsf.markStopped();
         PinPort::release(PinPort::PORT_B);
         req->send(200, "text/plain", "CRSF stopped");
     });

@@ -52,7 +52,7 @@ static void flashProgress(int pct, const char* stage) {
 // device_info, params, chip_info, recv_info, otadata_status) DO resume so
 // the user's live monitor session survives an incidental probe.
 //
-// Baud (420000) and inversion (WebState::crsf.inverted) match what
+// Baud (420000) and inversion (WebState::crsf.isInverted()) match what
 // /api/crsf/start would do, so resume is bit-for-bit equivalent.
 // =====================================================================
 static bool crsfPauseForPortB() {
@@ -60,7 +60,7 @@ static bool crsfPauseForPortB() {
     Serial.println("[ELRS] CRSF service running — pausing for Port B");
     CRSFService::end();
     CRSFConfig::reset();
-    WebState::crsf.enabled = false;
+    WebState::crsf.markStopped();
     PinPort::release(PinPort::PORT_B);
     delay(50);  // settle
     return true;
@@ -75,12 +75,13 @@ static void crsfResumeAfterPortB(bool was_running) {
         Serial.println("[ELRS] CRSF resume: Port B busy — leaving stopped");
         return;
     }
+    bool inv = WebState::crsf.isInverted();
     CRSFService::begin(&Serial1,
                        PinPort::rx_pin(PinPort::PORT_B),
                        PinPort::tx_pin(PinPort::PORT_B),
-                       420000, WebState::crsf.inverted);
+                       420000, inv);
     CRSFConfig::init();
-    WebState::crsf.enabled = true;
+    WebState::crsf.markStarted(inv);
     Serial.println("[ELRS] CRSF service resumed after Port B op");
 }
 

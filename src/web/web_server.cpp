@@ -299,7 +299,7 @@ static void broadcastTelemetry() {
     s_ws->textAll(msg);
 
     // CRSF telemetry (if enabled)
-    if (WebState::crsf.enabled && CRSFService::isRunning()) {
+    if (WebState::crsf.isEnabled() && CRSFService::isRunning()) {
         const auto &st = CRSFService::state();
         doc.clear();
         doc["type"] = "crsf";
@@ -773,16 +773,19 @@ void WebServer::loop() {
     // Sticky DFU session idle-timeout watchdog. Cheap (single millis() compare).
     RoutesFlash::tick();
 
-    // Execute pending battery service actions from web thread
-    if (WebState::battSvc.pending != WebState::BS_NONE) {
+    // Execute pending battery service actions from web thread.
+    // takePending atomically pops + clears, so the action handler sees a
+    // consistent snapshot and HTTP polls don't observe a stale "pending"
+    // after the action returned.
+    WebState::BattServiceAction pending = WebState::battSvc.takePending();
+    if (pending != WebState::BS_NONE) {
         bool ok = false;
-        switch (WebState::battSvc.pending) {
+        switch (pending) {
             case WebState::BS_UNSEAL:  ok = DJIBattery::unseal(); break;
             case WebState::BS_CLEARPF: ok = DJIBattery::clearPFProper(); break;
             case WebState::BS_SEAL:    ok = DJIBattery::seal(); break;
             default: break;
         }
-        WebState::battSvc.lastResult = ok ? "OK" : "FAILED";
-        WebState::battSvc.pending = WebState::BS_NONE;
+        WebState::battSvc.markResult(ok ? "OK" : "FAILED");
     }
 }
