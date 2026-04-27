@@ -443,6 +443,61 @@ Result eraseRegion(const Config &cfg, uint32_t offset, size_t size) {
     return FLASH_OK;
 }
 
+// Multi-region variant of eraseRegion. Syncs ONCE, runs N erase
+// commands, ends ONCE. Same shape as readFlashMulti — see header for
+// rationale. Use case today: routes_flash.cpp:erase_partition does a
+// loop of eraseRegion() calls in 64 KB chunks; with this helper the
+// loop becomes a single ROM session immune to the autobauder-latch
+// issue that BUG-ID1 hit on reads.
+Result eraseRegionMulti(const Config &cfg, const EraseRegion *regions, size_t n) {
+    if (!cfg.uart || !regions || n == 0) return FLASH_ERR_INVALID_INPUT;
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(4096);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    delay(100);
+
+    if (cfg.progress) cfg.progress(0, "Connecting");
+    if (!sync()) { s_uart->end(); return FLASH_ERR_NO_SYNC; }
+    if (cfg.progress) cfg.progress(3, "Synced");
+
+    spiAttach();
+    uint32_t max_end = 0;
+    uint64_t total_bytes = 0;
+    for (size_t i = 0; i < n; i++) {
+        uint32_t end = regions[i].offset + regions[i].size;
+        if (end > max_end) max_end = end;
+        total_bytes += regions[i].size;
+    }
+    if (max_end < 0x400000) max_end = 0x400000;
+    spiSetParams(max_end);
+
+    uint64_t done = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (regions[i].size == 0) continue;
+        // Each FLASH_BEGIN opens an erase context for the new region —
+        // ROM resets internal pointer state on each FLASH_BEGIN, so chaining
+        // them inside one Serial1 session is safe (verified empirically).
+        if (!flashBegin(regions[i].size, regions[i].offset)) {
+            s_uart->end();
+            return FLASH_ERR_BEGIN_FAILED;
+        }
+        // FLASH_END(false) finalises the erase without rebooting the RX.
+        // Best-effort — some ROMs ignore the response, but the erase has
+        // already been committed by FLASH_BEGIN's internal sector loop.
+        (void)flashEnd(false);
+        done += regions[i].size;
+        if (cfg.progress) {
+            int pct = 3 + (int)(done * 95 / total_bytes);
+            cfg.progress(pct, "Erasing");
+        }
+    }
+
+    if (cfg.progress) cfg.progress(100, "Done");
+    s_uart->end();
+    return FLASH_OK;
+}
+
 // Read `size` bytes at `offset` into `out`.
 // Uses CMD_READ_FLASH_SLOW (0x0E) — ROM-native, chunked. Each request reads
 // up to 64 bytes and the data comes back inside the standard response's

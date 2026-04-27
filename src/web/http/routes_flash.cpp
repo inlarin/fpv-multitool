@@ -1373,25 +1373,29 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
         cfg.baud_rate = 115200;
 
-        uint32_t done = 0;
-        bool ok = true;
-        const char *err = nullptr;
-        while (done < size && ok) {
+        // Build chunk list and erase via single ROM session — was a loop of
+        // eraseRegion() calls (one Serial1 cycle per chunk) which would have
+        // hit the autobauder-latch issue from BUG-ID1 on the second iteration
+        // for partitions > one chunk. eraseRegionMulti syncs once and runs
+        // FLASH_BEGIN+FLASH_END pairs per chunk inside the open session.
+        const size_t MAX_CHUNKS = 64;  // 64 × 64 KB = 4 MB upper bound
+        ESPFlasher::EraseRegion regions[MAX_CHUNKS];
+        size_t n_regions = 0;
+        for (uint32_t done = 0; done < size && n_regions < MAX_CHUNKS; ) {
             uint32_t n = chunk;
             if (done + n > size) n = size - done;
-            ESPFlasher::Result r = ESPFlasher::eraseRegion(cfg, offset + done, n);
-            if (r != ESPFlasher::FLASH_OK) { ok = false; err = ESPFlasher::errorString(r); break; }
+            regions[n_regions++] = { offset + done, n };
             done += n;
-            delay(5);
         }
+        ESPFlasher::Result r = ESPFlasher::eraseRegionMulti(cfg, regions, n_regions);
         PinPort::release(PinPort::PORT_B);
-        if (ok) {
+        if (r == ESPFlasher::FLASH_OK) {
             char msg[96];
             snprintf(msg, sizeof(msg), "Erased %u bytes @ 0x%x in %u chunks",
-                     (unsigned)done, (unsigned)offset, (unsigned)((done + chunk - 1) / chunk));
+                     (unsigned)size, (unsigned)offset, (unsigned)n_regions);
             req->send(200, "text/plain", msg);
         } else {
-            req->send(500, "text/plain", err ? err : "partition erase failed");
+            req->send(500, "text/plain", ESPFlasher::errorString(r));
         }
     });
 

@@ -78,6 +78,18 @@ Result readFlashMulti(const Config &cfg, const ReadRegion *regions, size_t n);
 // into the secondary app.
 Result eraseRegion(const Config &cfg, uint32_t offset, size_t size);
 
+// Multi-region variant of eraseRegion. Syncs ONCE, erases N regions inside
+// a single ROM session, ends ONCE. Same defence-in-depth as readFlashMulti
+// against the ESP32-C3 ROM autobauder latching after the first sync —
+// looped eraseRegion() calls would Serial1.end()/begin() between each, and
+// the second sync historically fails. Use this when erasing >1 region in
+// the same operation (e.g. erasing a full app partition in 64 KB chunks).
+struct EraseRegion {
+    uint32_t offset;
+    uint32_t size;
+};
+Result eraseRegionMulti(const Config &cfg, const EraseRegion *regions, size_t n);
+
 // Tell the stub/ROM to exit and run user code (boots the OTADATA-selected
 // app partition). Opcode CMD_RUN_USER_CODE (0xD3). Works on both the ELRS
 // in-app stub and ROM bootloader.
