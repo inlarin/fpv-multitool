@@ -598,9 +598,15 @@ Result eraseRegionMultiInOpenSession(const EraseRegion *regions, size_t n) {
 Result spiFlashMd5InOpenSession(uint32_t offset, uint32_t size, uint8_t out[16]) {
     if (!s_session_open || !out || size == 0) return FLASH_ERR_INVALID_INPUT;
     s_session_last_use = millis();
-    // Same precaution as chipInfoInOpenSession — re-sync before issuing a
-    // different command type after a previous READ_FLASH_SLOW chain.
+    // Re-sync + re-init SPI peripheral. After a long FLASH_DATA chain, ROM
+    // leaves SPI in "flash-data mode" — SPI_FLASH_MD5 silently fails
+    // ("READ_FLASH rejected") until SPI_ATTACH + SPI_SET_PARAMS re-arm it.
+    // sync() also recovers from any autobauder hiccup the chain produced.
     if (!sync()) return FLASH_ERR_NO_SYNC;
+    spiAttach();
+    uint32_t fs = offset + size;
+    if (fs < 0x400000) fs = 0x400000;
+    spiSetParams(fs);
 
     uint8_t data[16];
     *(uint32_t*)(data + 0)  = offset;
@@ -646,6 +652,12 @@ Result spiFlashMd5InOpenSession(uint32_t offset, uint32_t size, uint8_t out[16])
     }
     s_session_last_use = millis();
     return FLASH_OK;
+}
+
+void flashEndInOpenSession(bool reboot) {
+    if (!s_session_open) return;
+    (void)flashEnd(reboot);
+    s_session_last_use = millis();
 }
 
 Result chipInfoInOpenSession(ChipInfo *out) {
@@ -752,30 +764,46 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
              Sample *samples, size_t n_samples) {
     if (!cfg.uart || !data || size == 0) return FLASH_ERR_INVALID_INPUT;
 
-    s_uart = cfg.uart;
-    // setRxBufferSize MUST be called before begin() — Arduino-ESP32
-    // allocates the UART ring during begin() and ignores later resizes
-    // until the next end()/begin() cycle. A stuck-at-256 ring overflows
-    // mid-frame at 115200 baud and desyncs the SLIP parser.
-    s_uart->setRxBufferSize(4096);
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
-    delay(100);
+    // Honour an externally-opened sticky session — flash() then becomes
+    // re-entrant within /dfu/begin/end and the caller can chain a post-
+    // flash spiFlashMd5InOpenSession() in the SAME Serial1 cycle (BUG-ID1
+    // fix on the write path: previously the second sync after Serial1.end
+    // failed with "No sync" and full-image MD5 verify silently degraded).
+    bool external_session = sessionOpen();
 
-    if (cfg.progress) cfg.progress(0, "Connecting");
+    if (!external_session) {
+        s_uart = cfg.uart;
+        // setRxBufferSize MUST be called before begin() — Arduino-ESP32
+        // allocates the UART ring during begin() and ignores later resizes
+        // until the next end()/begin() cycle. A stuck-at-256 ring overflows
+        // mid-frame at 115200 baud and desyncs the SLIP parser.
+        s_uart->setRxBufferSize(4096);
+        s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+        delay(100);
 
-    if (!sync()) {
-        s_uart->end();
-        return FLASH_ERR_NO_SYNC;
+        if (cfg.progress) cfg.progress(0, "Connecting");
+
+        if (!sync()) {
+            s_uart->end();
+            return FLASH_ERR_NO_SYNC;
+        }
+        if (cfg.progress) cfg.progress(5, "Synced");
+
+        spiAttach();
+        uint32_t fs = cfg.flash_offset + (uint32_t)size;
+        if (fs < 0x400000) fs = 0x400000;
+        spiSetParams(fs);
+    } else {
+        if (cfg.progress) cfg.progress(5, "Reusing session");
+        // sessionOpen()-true implies sync + spiAttach + spiSetParams already
+        // ran. We assume cfg matches what openSession() was called with.
+        s_session_last_use = millis();
     }
-    if (cfg.progress) cfg.progress(5, "Synced");
 
-    spiAttach();
-    uint32_t fs = cfg.flash_offset + (uint32_t)size;
-    if (fs < 0x400000) fs = 0x400000;
-    spiSetParams(fs);
+    auto _maybe_end = [&]() { if (!external_session) s_uart->end(); };
 
     if (!flashBegin(size, cfg.flash_offset)) {
-        s_uart->end();
+        _maybe_end();
         return FLASH_ERR_BEGIN_FAILED;
     }
     if (cfg.progress) cfg.progress(10, "Erasing");
@@ -787,7 +815,7 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
             ? (size - chunk_off)
             : FLASH_WRITE_BLOCK_SIZE;
         if (!flashData(data + chunk_off, block_size, i)) {
-            s_uart->end();
+            _maybe_end();
             return FLASH_ERR_WRITE_FAILED;
         }
         // Throttle between blocks. ESP32-C3 ROM's FLASH_DATA handler acks on
@@ -801,6 +829,7 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
             int pct = 10 + (int)((chunk_off + block_size) * 85 / size);
             cfg.progress(pct, "Writing");
         }
+        if (external_session) s_session_last_use = millis();
     }
 
     // In-session sample readback BEFORE FLASH_END/Serial1.end(). The RX
@@ -818,17 +847,21 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
         }
     }
 
-    // FLASH_END — only send when we actually want to reboot. Some ESP32-C3
-    // ROM variants auto-reset on ANY FLASH_END regardless of the payload
-    // flag, so for chained operations we just don't send it at all.
-    if (!cfg.stay_in_loader) {
+    // FLASH_END policy:
+    //  - Standalone + !stay_in_loader → FLASH_END(true) (reboot, close UART).
+    //  - External session → SKIP FLASH_END entirely. ESP32-C3 ROM observed
+    //    to auto-reset on ANY FLASH_END regardless of payload (out-of-DFU);
+    //    sticking around in DFU requires the caller to send SPI_ATTACH +
+    //    SPI_SET_PARAMS itself before SPI_FLASH_MD5 to re-init the SPI
+    //    peripheral after the FLASH_DATA chain.
+    if (!external_session && !cfg.stay_in_loader) {
         if (!flashEnd(true)) {
             // Non-fatal: some bootloaders don't respond to FLASH_END.
         }
     }
 
     if (cfg.progress) cfg.progress(100, "Done");
-    s_uart->end();
+    _maybe_end();
     return FLASH_OK;
 }
 

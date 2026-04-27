@@ -280,6 +280,11 @@ void executeFlash() {
         }
     }
 
+    // The 5/5 sample verify happens INSIDE flash() before FLASH_END, so it
+    // works on bare ROM regardless of post-write quirks. Post-write MD5 is a
+    // bonus check that ESP32-C3 ROM doesn't reliably support (FLASH_END
+    // auto-resets, SPI re-init doesn't recover, stub-on-flash rejects
+    // FLASH_BEGIN). Soft-warn on MD5 read failure; rely on the sample check.
     ESPFlasher::Result r = ESPFlasher::flash(cfg, fw_ptr, fw_size, samples, N_SAMPLES);
 
     // Compare samples against local image on success.

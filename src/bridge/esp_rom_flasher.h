@@ -159,6 +159,11 @@ struct ChipInfo {
 Result chipInfo(const Config &cfg, ChipInfo *out);
 Result chipInfoInOpenSession(ChipInfo *out);
 
+// Send FLASH_END(reboot=true) inside an open session — used to make RX
+// boot into the freshly-flashed image without closing the session in
+// flash() itself. Idempotent failure (some ROMs don't ack FLASH_END).
+void flashEndInOpenSession(bool reboot);
+
 // Send the CRSF "reboot to bootloader" command frame (EC 04 32 62 6C 0A) at
 // the given baud. On ESP32-C3 + ELRS 3.x this switches the RX from the app
 // into its in-app esptool stub flasher on the SAME UART at the SAME baud —
