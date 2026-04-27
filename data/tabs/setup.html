@@ -1,59 +1,125 @@
 <div id="tab-setup" class="tab-content" style="display:none">
-  <div class="card">
-    <h2>Setup</h2>
-    <p style="color:#888;font-size:12px;margin:2px 0 10px">
-      Один вопрос за раз: <b>что подключаешь</b> к Port B (GP10/GP11) и
-      <b>кто с ним работает</b>. Всё остальное (USB дескриптор, Port B mode)
-      настраивается под капотом.
-    </p>
 
-    <div class="row"><span class="label">1. Что подключено к Port B:</span></div>
-    <div id="setupDevice" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;margin:6px 0 12px">
-      <button data-device="battery"  onclick="setupPickDevice('battery')">🔋 Battery<br><small style="color:#888">DJI / SBS SMBus</small></button>
-      <button data-device="receiver" onclick="setupPickDevice('receiver')">📡 Receiver<br><small style="color:#888">ELRS / CRSF UART</small></button>
-      <button data-device="motor"    onclick="setupPickDevice('motor')">⚡ Motor/Servo<br><small style="color:#888">ESC DShot / PWM</small></button>
-      <button data-device="advanced" onclick="setupPickDevice('advanced')">🔌 Advanced<br><small style="color:#888">PPM / raw / sniffer</small></button>
-      <button data-device="idle"     onclick="setupPickDevice('idle')">💤 Idle<br><small style="color:#888">ничего не используется</small></button>
-    </div>
+  <div class="banner banner-info col-span-full">
+    Один вопрос за раз: <b>что подключаешь</b> к Port B, <b>кто работает</b>.
+    Остальное (USB descriptor, Port B electrical mode) автоматически.
+  </div>
 
-    <div class="row"><span class="label">2. Кто с ним работает:</span></div>
-    <div id="setupRole" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 12px">
-      <button data-role="host"   onclick="setupPickRole('host')">🖥️ HOST<br><small style="color:#888">плата сама, Web UI показывает данные</small></button>
-      <button data-role="bridge" onclick="setupPickRole('bridge')">💻 BRIDGE to PC<br><small style="color:#888">прокидываю на комп (bqStudio/esptool/BK)</small></button>
+  <!-- Step 1: Device -->
+  <div class="page-section col-span-full">
+    <div class="page-section-header">
+      <span class="page-section-title">1 · What's connected to Port B?</span>
     </div>
-
-    <div id="setupBridgeHint" style="display:none;color:#f80;font-size:11px;margin:-6px 0 10px"></div>
-
-    <div style="margin-top:4px">
-      <button class="success" onclick="setupApply()" id="setupApplyBtn" disabled>Apply</button>
-      <span id="setupApplyMsg" style="margin-left:10px;color:#0f0"></span>
-    </div>
-
-    <hr style="margin:14px 0;border:none;border-top:1px solid var(--border)">
-    <div class="row"><span class="label">Auto-detect wiring:</span></div>
-    <p style="color:#888;font-size:11px;margin:2px 0 8px">
-      Убедись что <b>GND</b> и <b>питание</b> подключены верно, а <b>RX/TX</b> или
-      <b>SDA/SCL</b> могут быть перепутаны — плата сама попробует обе раскладки
-      и запомнит ту, которая сработала.
-    </p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:4px">
-      <button onclick="autodetectWiring('crsf')">📡 CRSF @ 420k</button>
-      <button onclick="autodetectWiring('sbus')">📡 SBUS</button>
-      <button onclick="autodetectWiring('ibus')">📡 iBus</button>
-      <button onclick="autodetectWiring('i2c')">🔋 I2C scan</button>
-      <button onclick="autodetectWiring('elrs_rom')">🔧 ELRS ROM</button>
-    </div>
-    <div id="autodetectMsg" style="margin-top:8px;font-size:12px;font-family:monospace;color:var(--text-dim)"></div>
-    <hr style="margin:14px 0;border:none;border-top:1px solid var(--border)">
-    <div class="row"><span class="label">Активно сейчас:</span>
-      <span class="value" id="setupActive">-</span>
-    </div>
-    <div class="row"><span class="label">В NVS (на след. boot):</span>
-      <span><span class="value" id="setupPreferred">-</span>
-      <span id="setupPendingBadge" class="status off" style="display:none;margin-left:8px">REBOOT PENDING</span></span>
-    </div>
-    <div class="row"><span class="label">Детали:</span>
-      <span class="value" id="setupDetails" style="font-family:monospace;font-size:11px"></span>
+    <div class="action-picker" id="setupDevice">
+      <div class="action-card" data-device="battery" onclick="setupPickDevice('battery')">
+        <span class="action-card-icon">🔋</span>
+        <span class="action-card-title">Battery</span>
+        <span class="action-card-desc">DJI / SBS battery pack on SMBus.</span>
+      </div>
+      <div class="action-card" data-device="receiver" onclick="setupPickDevice('receiver')">
+        <span class="action-card-icon">📡</span>
+        <span class="action-card-title">Receiver</span>
+        <span class="action-card-desc">ELRS / CRSF receiver on UART.</span>
+      </div>
+      <div class="action-card" data-device="motor" onclick="setupPickDevice('motor')">
+        <span class="action-card-icon">⚡</span>
+        <span class="action-card-title">Motor / Servo</span>
+        <span class="action-card-desc">ESC DShot / Servo PWM on signal pin.</span>
+      </div>
+      <div class="action-card" data-device="advanced" onclick="setupPickDevice('advanced')">
+        <span class="action-card-icon">🔌</span>
+        <span class="action-card-title">Advanced</span>
+        <span class="action-card-desc">PPM / raw GPIO sniffer / custom protocol.</span>
+      </div>
+      <div class="action-card" data-device="idle" onclick="setupPickDevice('idle')">
+        <span class="action-card-icon">💤</span>
+        <span class="action-card-title">Idle</span>
+        <span class="action-card-desc">Nothing connected, pins floating.</span>
+      </div>
     </div>
   </div>
+
+  <!-- Step 2: Role -->
+  <div class="page-section col-span-full">
+    <div class="page-section-header">
+      <span class="page-section-title">2 · Who interacts with it?</span>
+    </div>
+    <div class="action-picker" id="setupRole">
+      <div class="action-card" data-role="host" onclick="setupPickRole('host')">
+        <span class="action-card-icon">🖥</span>
+        <span class="action-card-title">HOST — plate itself</span>
+        <span class="action-card-desc">Web UI читает данные, плата сама общается с устройством. CDC USB.</span>
+      </div>
+      <div class="action-card" data-role="bridge" onclick="setupPickRole('bridge')">
+        <span class="action-card-icon">💻</span>
+        <span class="action-card-title">BRIDGE — PC via plate</span>
+        <span class="action-card-desc">Прокидываю на PC: bqStudio / esptool / Battery Killer / любая SMBus tool.</span>
+      </div>
+    </div>
+    <div id="setupBridgeHint" class="banner banner-warn" style="display:none"></div>
+  </div>
+
+  <!-- Apply -->
+  <div class="card col-span-full">
+    <div class="cluster">
+      <button class="success btn-lg" id="setupApplyBtn" disabled onclick="setupApply()">Apply</button>
+      <span class="kv-label" id="setupApplyMsg"></span>
+    </div>
+    <p class="field-help">
+      Port B меняется на лету (без reboot). USB descriptor требует reboot — applied автоматически если нужно.
+      Сохраняется в NVS.
+    </p>
+  </div>
+
+  <!-- Auto-detect helper -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Auto-detect wiring</span>
+      <span class="badge badge-neutral">helper</span>
+    </div>
+    <p class="field-help">
+      Если RX/TX или SDA/SCL могут быть перепутаны — плата сама попробует обе раскладки и
+      запомнит ту, которая сработала. <b>GND и питание</b> должны быть подключены верно.
+    </p>
+    <div class="cluster">
+      <button class="secondary" onclick="autodetectWiring('crsf')">📡 CRSF @ 420k</button>
+      <button class="secondary" onclick="autodetectWiring('sbus')">📡 SBUS</button>
+      <button class="secondary" onclick="autodetectWiring('ibus')">📡 iBus</button>
+      <button class="secondary" onclick="autodetectWiring('i2c')">🔋 I2C scan</button>
+      <button class="secondary" onclick="autodetectWiring('elrs_rom')">🔧 ELRS ROM DFU</button>
+    </div>
+    <pre id="autodetectMsg" class="code-output"></pre>
+  </div>
+
+  <!-- Status panel -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Current status</span>
+    </div>
+    <div class="kv">
+      <span class="kv-label">Active now</span>
+      <span class="kv-value" id="setupActive">—</span>
+    </div>
+    <div class="kv">
+      <span class="kv-label">In NVS (next boot)</span>
+      <span class="kv-value cluster">
+        <span id="setupPreferred">—</span>
+        <span id="setupPendingBadge" class="badge badge-warn" style="display:none">REBOOT PENDING</span>
+      </span>
+    </div>
+    <div class="kv">
+      <span class="kv-label">Details</span>
+      <span class="kv-value mono" id="setupDetails">—</span>
+    </div>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail col-span-full">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value" id="setupRailMode">—</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action" id="setupRailDetails">—</span>
+  </div>
+
 </div>

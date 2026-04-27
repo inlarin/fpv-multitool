@@ -2920,8 +2920,8 @@ let _setupRole = null;
 
 function setupPickDevice(d) {
   _setupDevice = d;
-  document.querySelectorAll('#setupDevice button').forEach(b => {
-    b.classList.toggle('success', b.dataset.device === d);
+  document.querySelectorAll('#setupDevice .action-card').forEach(b => {
+    b.classList.toggle('active', b.dataset.device === d);
   });
   // motor has no bridge mode — hint user if they have bridge pre-selected.
   const hint = document.getElementById('setupBridgeHint');
@@ -2929,7 +2929,7 @@ function setupPickDevice(d) {
     hint.style.display = '';
     hint.textContent = '⚠ Motor/Servo не поддерживает BRIDGE (нет PC-тулов). Выбери HOST.';
     _setupRole = null;
-    document.querySelectorAll('#setupRole button').forEach(b => b.classList.remove('success'));
+    document.querySelectorAll('#setupRole .action-card').forEach(b => b.classList.remove('active'));
   } else {
     hint.style.display = 'none';
   }
@@ -2942,8 +2942,8 @@ function setupPickRole(r) {
     return;
   }
   _setupRole = r;
-  document.querySelectorAll('#setupRole button').forEach(b => {
-    b.classList.toggle('success', b.dataset.role === r);
+  document.querySelectorAll('#setupRole .action-card').forEach(b => {
+    b.classList.toggle('active', b.dataset.role === r);
   });
   setupUpdateApplyBtn();
 }
@@ -3020,15 +3020,20 @@ function setupRefresh() {
       j.reboot_pending ? 'inline-block' : 'none';
     document.getElementById('setupDetails').textContent =
       'USB=' + a.usb + ' · Port B=' + a.port + (a.owner ? ' (owner: ' + a.owner + ')' : '');
-    // Pre-select buttons from preferred mode
+    // Pre-select cards from preferred mode
     _setupDevice = p.device; _setupRole = p.role;
-    document.querySelectorAll('#setupDevice button').forEach(b => {
-      b.classList.toggle('success', b.dataset.device === p.device);
+    document.querySelectorAll('#setupDevice .action-card').forEach(b => {
+      b.classList.toggle('active', b.dataset.device === p.device);
     });
-    document.querySelectorAll('#setupRole button').forEach(b => {
-      b.classList.toggle('success', b.dataset.role === p.role);
+    document.querySelectorAll('#setupRole .action-card').forEach(b => {
+      b.classList.toggle('active', b.dataset.role === p.role);
     });
     setupUpdateApplyBtn();
+    // Connection rail update
+    const rail = document.getElementById('setupRailMode');
+    if (rail) rail.textContent = a.port + (a.port === 'IDLE' ? '' : ' @ GP10/11');
+    const railD = document.getElementById('setupRailDetails');
+    if (railD) railD.textContent = 'USB: ' + a.usb + (a.owner ? ' · owner: ' + a.owner : '');
   }).catch(e => { document.getElementById('setupApplyMsg').textContent = 'Ошибка: ' + e; });
 }
 
