@@ -3038,29 +3038,42 @@ function setupRefresh() {
 }
 
 // ===== USB mode =====
+// Mode metadata — icon + 1-line description, shown on each action card.
+// Keys are `mode.id` from /api/usb/mode (0=CDC, 1=USB2TTL, 2=USB2I2C).
+const _USB_MODE_META = {
+  0: {icon: '⌨', desc: 'Standard USB Serial. PlatformIO upload, debug. Default.'},
+  1: {icon: '🔌', desc: 'CDC + transparent UART bridge to Port B. esptool, RX flasher.'},
+  2: {icon: '🔋', desc: 'CP2112 HID emulator. DJI Battery Killer, bqStudio, ioctl I2C.'},
+};
 function usbRefresh() {
   fetch('/api/usb/mode').then(r=>r.json()).then(j=>{
     document.getElementById('usbActive').textContent = j.active_name + ' (#' + j.active + ')';
     document.getElementById('usbPreferred').textContent = j.preferred_name + ' (#' + j.preferred + ')';
-    const badge = document.getElementById('usbPendingBadge');
-    badge.style.display = j.reboot_pending ? 'inline-block' : 'none';
+    document.getElementById('usbPendingBadge').style.display = j.reboot_pending ? '' : 'none';
+    const rail = document.getElementById('usbRailMode');
+    if (rail) rail.textContent = j.active_name;
     const c = document.getElementById('usbModes');
     c.innerHTML = '';
     j.modes.forEach(m => {
-      const lab = document.createElement('label');
-      lab.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer';
-      const r = document.createElement('input');
-      r.type = 'radio'; r.name = 'usbmode'; r.value = m.id;
-      if (m.id === j.preferred) r.checked = true;
-      lab.appendChild(r);
-      lab.appendChild(document.createTextNode(m.name));
-      c.appendChild(lab);
+      const meta = _USB_MODE_META[m.id] || {icon: '?', desc: ''};
+      const card = document.createElement('div');
+      card.className = 'action-card' + (m.id === j.preferred ? ' active' : '');
+      card.dataset.usbMode = m.id;
+      card.onclick = () => {
+        document.querySelectorAll('#usbModes .action-card').forEach(e => e.classList.remove('active'));
+        card.classList.add('active');
+      };
+      card.innerHTML =
+        '<span class="action-card-icon">' + meta.icon + '</span>' +
+        '<span class="action-card-title">' + m.name + '</span>' +
+        '<span class="action-card-desc">' + meta.desc + '</span>';
+      c.appendChild(card);
     });
   }).catch(e => { document.getElementById('usbMsg').textContent = 'Ошибка: ' + e; });
 }
 function _usbSelectedMode() {
-  const r = document.querySelector('input[name=usbmode]:checked');
-  return r ? r.value : null;
+  const c = document.querySelector('#usbModes .action-card.active');
+  return c ? c.dataset.usbMode : null;
 }
 async function usbApplyReboot() {
   const mode = _usbSelectedMode();
