@@ -1912,7 +1912,8 @@ function fwPathUpdate() {
     const app1Off = profile?.app1?.offset;
     const isSlotTarget = (target === app0Off || target === app1Off ||
                           target === 0x10000 || target === 0x1f0000);
-    bootLabel.closest('.row').style.display = isSlotTarget ? '' : 'none';
+    const bootRow = bootLabel.closest('.kv') || bootLabel.closest('.row');
+    if (bootRow) bootRow.style.display = isSlotTarget ? '' : 'none';
   }
 
   let pathText = '', pathOk = false;

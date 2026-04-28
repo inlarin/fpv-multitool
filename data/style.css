@@ -26,7 +26,12 @@
   --text-dim:         #71717a; /* alias of --text-muted */
   --accent:           #2563eb; /* alias of --primary */
   --accent-dim:       #1d4ed8; /* alias of --primary-hover */
+  --accent2:          #0284c7; /* alias of --info — used as receiver "what do you want" emphasis */
   --status-on:        #16a34a; /* alias of --success */
+  --card-bg:          #f4f4f5; /* alias of --bg-subtle, used as inset card bg */
+  --card-bg2:         #fafafa; /* alias of --bg, used as deeper inset bg */
+  --border-soft:      #ececef; /* alias of --border-subtle */
+  --warning-text:     #b91c1c; /* alias of --danger-hover, used in error inline strings */
 
   /* Brand & semantic */
   --primary:          #2563eb;
@@ -118,7 +123,12 @@
   --text-dim:         #a1a1aa;
   --accent:           #3b82f6;
   --accent-dim:       #2563eb;
+  --accent2:          #38bdf8;
   --status-on:        #22c55e;
+  --card-bg:          #18181b;
+  --card-bg2:         #0f0f12;
+  --border-soft:      #1f1f23;
+  --warning-text:     #f87171;
 
   --primary:          #3b82f6;
   --primary-hover:    #60a5fa;
@@ -946,6 +956,74 @@ label {
   transition: background var(--t-fast);
 }
 .file-label:hover { background: var(--primary-hover); }
+
+/* ---------- Receiver tab helpers ---------- */
+/* Hidden via class — JS toggles `.rcv-hidden` instead of style.display. */
+.rcv-hidden { display: none; }
+/* Compact banners inside Receiver tab — slimmer than default .banner. */
+.rcv-banner-warn { background: var(--warn-soft); color: var(--warn-soft-fg); border: 1px solid var(--warn); padding: var(--s-2); border-radius: var(--r); font-size: var(--text-sm); margin-bottom: var(--s-2); }
+.rcv-banner-info { background: var(--info-soft); color: var(--info-soft-fg); border: 1px solid var(--info); padding: var(--s-2); border-radius: var(--r); font-size: var(--text-sm); margin-bottom: var(--s-2); }
+/* RX mode badge (DFU / APP / STUB / UNKNOWN). Color set by JS via class. */
+.rcv-mode-badge { padding: 2px 8px; border-radius: var(--r-sm); font-weight: var(--weight-semi); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--text-xs); background: var(--bg-subtle); color: var(--text-muted); }
+/* Quick-actions grid (Probe / Reboot / Bind) — 2:1:1 columns. */
+.rcv-quick-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: var(--s-2); margin-top: var(--s-3); }
+/* Generic 2:1 grid (Identity Read / +SPIFFS). */
+.rcv-grid-2-1 { display: grid; grid-template-columns: 2fr 1fr; gap: var(--s-2); }
+/* Status / placeholder / hint rows — small dimmed monospace text. */
+.rcv-hint { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--text-xs); color: var(--text-muted); white-space: pre-wrap; }
+/* Action-picker emphasised border (the "What do you want to do?" card). */
+.rcv-action-card { border-left: 3px solid var(--info); }
+/* Inset config box (catalog / upload boxes inside Flash card). */
+.rcv-inset-box { margin: var(--s-2) 0; padding: var(--s-2); background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--r); }
+/* Section toggle (▶ Advanced) — a clickable bordered summary. */
+.rcv-advanced-summary { cursor: pointer; padding: var(--s-2) var(--s-3); background: var(--card); border: 1px solid var(--border); border-radius: var(--r); font-weight: var(--weight-semi); list-style: none; }
+.rcv-advanced-summary::-webkit-details-marker { display: none; }
+.rcv-advanced-block { margin-top: var(--s-2); }
+/* Sub-section toggle (▸ Bootloader / ▸ Diagnose / ▸ Raw). */
+.rcv-subsection-summary { cursor: pointer; padding: var(--s-2); background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--r-sm); font-size: var(--text-sm); list-style: none; }
+.rcv-subsection-summary::-webkit-details-marker { display: none; }
+/* Card title at h3 level (used inside Diagnose/Raw sub-cards). */
+.rcv-card-h3 { font-size: var(--text-md); font-weight: var(--weight-semi); margin: 0 0 var(--s-1); color: var(--text); }
+/* Slot radio list (vertical, with bold labels). */
+.rcv-slot-list { display: flex; flex-direction: column; gap: var(--s-1); margin: var(--s-1) 0 var(--s-2); }
+/* Danger zone wrapper inside OTADATA card. */
+.rcv-danger-zone { margin-top: var(--s-2); padding: var(--s-2); background: var(--danger-soft); border: 1px solid var(--danger); border-radius: var(--r); }
+.rcv-danger-zone-title { color: var(--danger); font-weight: var(--weight-semi); }
+/* RX config / dump result panes — reuses .code-output. Single-line status. */
+.rcv-result-line { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--text-xs); white-space: pre-wrap; min-height: 1em; margin-top: var(--s-2); }
+.rcv-result-line.text-success { color: var(--success); }
+.rcv-result-line.text-danger { color: var(--danger); }
+/* Phrase converter inset. */
+.rcv-phrase-inset { margin-top: var(--s-2); padding: var(--s-2); background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--r); }
+/* RX config table — compact rows. */
+.rcv-cfg-table { width: 100%; margin-top: var(--s-2); font-size: var(--text-xs); border-collapse: collapse; }
+.rcv-cfg-table th, .rcv-cfg-table td { padding: var(--s-1); text-align: left; }
+.rcv-cfg-table thead tr { border-bottom: 1px solid var(--border); }
+/* hwJson preview pane. */
+.rcv-hwjson-preview { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px; background: var(--bg-subtle); padding: var(--s-2); overflow: auto; max-height: 180px; border-radius: var(--r-sm); }
+/* RX slot summary chips inside Diagnose Scan. */
+.rcv-slot-chips { display: flex; gap: var(--s-2); margin-top: var(--s-3); flex-wrap: wrap; }
+
+/* Smaller monospace for crowded rows (Serial / HW ID, MAC, sector dumps). */
+.rcv-small-mono { font-size: var(--text-xs); }
+/* Block-display for elements that should occupy their own line. */
+.rcv-block { display: block; margin-top: var(--s-1); }
+/* Full-width block button. */
+.rcv-block-btn { width: 100%; margin-top: var(--s-2); }
+/* Clickable (cursor:pointer) summaries / hover-targets that aren't <button>. */
+.rcv-clickable { cursor: pointer; }
+/* Float-right Stop button inside live-monitor banner. */
+.rcv-banner-action { float: right; }
+/* Sub-line text below banner (smaller, light). */
+.rcv-banner-sub { display: block; margin-top: var(--s-1); font-size: var(--text-xs); }
+/* RX-mode age suffix. */
+.rcv-mode-age { margin-left: var(--s-2); }
+/* Flash button green emphasis (overrides default success). */
+.rcv-flash-btn { margin-top: var(--s-2); }
+/* Numbered instruction list inside hardware.json card. */
+.rcv-instr-list { margin: var(--s-2) 0; padding-left: var(--s-4); font-size: var(--text-sm); line-height: 1.5; }
+/* Variant of bar-fill for dump progress (info color). */
+.bar-fill.bar-fill-info, .bar-fill-info { background: var(--info); }
 
 /* ---------- Layout utilities (small set — don't sprawl) ---------- */
 
