@@ -135,7 +135,8 @@ function showTab(name) {
 // === SERVO ===
 function onServo() {
   const us = +document.getElementById('servoSlider').value;
-  document.getElementById('servoUs').textContent = us + ' μs';
+  // Note: μs unit is rendered as a sibling .big-unit span — set numeric only.
+  document.getElementById('servoUs').textContent = us;
   send({cmd:'servo', us});
 }
 function setServo(us) {
@@ -145,9 +146,17 @@ function setServo(us) {
 function setServoFreq(hz) { send({cmd:'servoFreq', hz}); }
 function servoStop() { send({cmd:'servoStop'}); }
 let sweeping = false;
+function _servoSweepUiSync() {
+  document.getElementById('sweepBtn').textContent = sweeping ? 'Stop' : 'Start';
+  const b = document.getElementById('servoSweepBadge');
+  if (b) {
+    b.textContent = sweeping ? 'running' : 'stopped';
+    b.className = 'badge ' + (sweeping ? 'badge-success' : 'badge-neutral');
+  }
+}
 function toggleSweep() {
   sweeping = !sweeping;
-  document.getElementById('sweepBtn').textContent = sweeping ? 'Stop' : 'Start';
+  _servoSweepUiSync();
   send({cmd:'servoSweep', on: sweeping});
   if (sweeping && !_servoStateTimer) _servoStateTimer = setInterval(servoStatePoll, 500);
 }
@@ -175,7 +184,7 @@ function servoStatePoll() {
     document.getElementById('servoObserved').textContent = obs;
     if (sweeping !== d.sweep) {
       sweeping = d.sweep;
-      document.getElementById('sweepBtn').textContent = sweeping ? 'Stop' : 'Start';
+      _servoSweepUiSync();
     }
   }).catch(()=>{});
 }

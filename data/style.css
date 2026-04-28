@@ -376,6 +376,8 @@ body {
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
+/* Muted unit suffix inside .big — e.g., "1500 μs" with "μs" smaller and dim. */
+.big .big-unit { font-size: var(--text-md); color: var(--text-muted); margin-left: var(--s-1); }
 
 /* ---------- Buttons ---------- */
 button, .btn {
@@ -466,6 +468,11 @@ button.mode-blocked:hover {
 }
 
 /* ---------- Form fields ---------- */
+/* Compact opt-in for inputs inside a .cluster (e.g. servo sweep range / period) —
+   avoids the 100% default width when sitting next to other controls. */
+.cluster input[type="number"].input-compact,
+.cluster input[type="text"].input-compact { width: 110px; }
+
 input[type="number"],
 input[type="text"],
 input[type="password"],

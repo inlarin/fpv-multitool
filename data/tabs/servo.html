@@ -1,11 +1,13 @@
 <div id="tab-servo" class="tab-content" style="display:none">
+
+  <!-- Pulse test -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Servo Tester</span>
-      <span class="badge badge-neutral">GPIO 2</span>
+      <span class="card-title">Pulse test</span>
+      <span class="badge badge-neutral">GP11 · PWM</span>
     </div>
 
-    <div class="big" id="servoUs">1500 μs</div>
+    <div class="big mono"><span id="servoUs">1500</span> <span class="big-unit">μs</span></div>
     <input type="range" id="servoSlider" min="500" max="2500" value="1500" step="10" oninput="onServo()">
 
     <div class="grid">
@@ -16,7 +18,7 @@
     </div>
 
     <div class="kv">
-      <span class="kv-label">Frequency</span>
+      <span class="kv-label">PWM frequency</span>
       <div class="cluster">
         <button class="ghost btn-sm" onclick="setServoFreq(50)">50 Hz</button>
         <button class="ghost btn-sm" onclick="setServoFreq(330)">330 Hz</button>
@@ -24,45 +26,26 @@
     </div>
   </div>
 
+  <!-- Range calibration -->
   <div class="card">
     <div class="card-header">
       <span class="card-title">Range calibration</span>
     </div>
 
     <div class="banner banner-info">
-      Двигай ползунок, нажимай <b>Mark Min/Max</b> где сервомашинка упирается физически.
-      Потом <b>Apply to Sweep</b> — и sweep будет ходить только в этих пределах.
+      Двигай ползунок до крайней позиции (где сервомашинка <b>физически упирается</b>),
+      нажми <b>Mark Min/Max</b>. Потом <b>Apply to Sweep</b> — sweep будет ходить только
+      в реальном диапазоне без зажёвывания шестерёнок.
     </div>
 
     <div class="grid">
-      <button class="secondary" onclick="servoMark('Min')">Mark Min · <span id="servoMarkMinVal">--</span></button>
-      <button class="secondary" onclick="servoMark('Max')">Mark Max · <span id="servoMarkMaxVal">--</span></button>
-      <button onclick="servoApplyMarks()">Apply to Sweep</button>
-      <button class="danger" onclick="servoResetMarks()">Reset</button>
+      <button class="secondary" onclick="servoMark('Min')">📍 Mark Min · <span class="kv-value mono" id="servoMarkMinVal">--</span></button>
+      <button class="secondary" onclick="servoMark('Max')">📍 Mark Max · <span class="kv-value mono" id="servoMarkMaxVal">--</span></button>
     </div>
 
-    <hr>
-
-    <div class="field">
-      <span class="field-label">Sweep range (μs)</span>
-      <div class="cluster">
-        <input id="sweepMinUs" type="number" min="500" max="2500" step="10" value="1000">
-        <span class="kv-label">to</span>
-        <input id="sweepMaxUs" type="number" min="500" max="2500" step="10" value="2000">
-      </div>
-    </div>
-
-    <div class="field">
-      <span class="field-label">Period (ms)</span>
-      <div class="cluster">
-        <input id="sweepPeriodMs" type="number" min="200" max="20000" step="100" value="2000">
-        <button class="secondary" onclick="servoSweepCfgSave()">Apply</button>
-      </div>
-    </div>
-
-    <div class="kv">
-      <span class="kv-label">Sweep</span>
-      <button onclick="toggleSweep()"><span id="sweepBtn">Start</span></button>
+    <div class="cluster">
+      <button onclick="servoApplyMarks()">✓ Apply to sweep</button>
+      <button class="danger ghost" onclick="servoResetMarks()">Reset marks</button>
     </div>
 
     <div class="kv">
@@ -70,4 +53,43 @@
       <span class="kv-value mono" id="servoObserved">--</span>
     </div>
   </div>
+
+  <!-- Sweep mode -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Sweep mode</span>
+      <span class="badge badge-neutral" id="servoSweepBadge">stopped</span>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Sweep range (μs)</span>
+      <div class="cluster">
+        <input id="sweepMinUs" class="input-compact" type="number" min="500" max="2500" step="10" value="1000">
+        <span class="kv-label">to</span>
+        <input id="sweepMaxUs" class="input-compact" type="number" min="500" max="2500" step="10" value="2000">
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="field-label">Period (ms — full min→max→min)</span>
+      <div class="cluster">
+        <input id="sweepPeriodMs" class="input-compact" type="number" min="200" max="20000" step="100" value="2000">
+        <button class="secondary" onclick="servoSweepCfgSave()">Apply</button>
+      </div>
+    </div>
+
+    <div class="cluster">
+      <button onclick="toggleSweep()"><span id="sweepBtn">Start</span> sweep</button>
+    </div>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail col-span-full">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value" id="servoRailMode">PWM @ GP11</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action" id="servoRailDetails">Owner: servo_pwm · LEDC channel 0</span>
+  </div>
+
 </div>
