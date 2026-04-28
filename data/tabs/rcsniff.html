@@ -25,7 +25,16 @@
     </div>
   </div>
 
-  <!-- Stat grid -->
+  <!-- Channels (above stat-grid per mockup IA) -->
+  <div class="card col-span-full">
+    <div class="card-header">
+      <span class="card-title">Channels (μs)</span>
+      <span class="kv-label" id="rcChannelHint">—</span>
+    </div>
+    <div id="rcChannels" class="rc-channel-grid"></div>
+  </div>
+
+  <!-- Stat grid: 6 tiles per mockup (Status / Frame rate / Frames / CRC / FS / Lost) -->
   <div class="stat-grid col-span-full">
     <div class="stat-tile">
       <div class="stat-tile-value mono" id="rcProto">—</div>
@@ -36,21 +45,21 @@
       <div class="stat-tile-label">Frame rate</div>
     </div>
     <div class="stat-tile">
-      <div class="stat-tile-value mono" id="rcFrames">0 / 0</div>
-      <div class="stat-tile-label">Frames / CRC err</div>
+      <div class="stat-tile-value mono" id="rcFrameCount">0</div>
+      <div class="stat-tile-label">Frames</div>
     </div>
     <div class="stat-tile">
-      <div class="stat-tile-value mono" id="rcFS">—</div>
-      <div class="stat-tile-label">Failsafe / Lost</div>
+      <div class="stat-tile-value mono" id="rcCrcErr">0</div>
+      <div class="stat-tile-label">CRC errors</div>
     </div>
-  </div>
-
-  <!-- Channels -->
-  <div class="card col-span-full">
-    <div class="card-header">
-      <span class="card-title">Channels (μs)</span>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="rcFailsafe">no</div>
+      <div class="stat-tile-label">Failsafe</div>
     </div>
-    <div id="rcChannels" class="rc-channel-grid"></div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="rcLost">no</div>
+      <div class="stat-tile-label">Lost frame</div>
+    </div>
   </div>
 
   <!-- Connection rail -->

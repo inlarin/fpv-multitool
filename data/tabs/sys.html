@@ -1,6 +1,6 @@
 <div id="tab-sys" class="tab-content" style="display:none">
 
-  <!-- Stat tiles (top-row dashboard) -->
+  <!-- Stat tiles (top-row dashboard) — 5 tiles per mockup -->
   <div class="stat-grid col-span-full">
     <div class="stat-tile success">
       <div class="stat-tile-value mono" id="sysIP">—</div>
@@ -13,6 +13,10 @@
     <div class="stat-tile">
       <div class="stat-tile-value mono" id="sysHeap">—</div>
       <div class="stat-tile-label">Free heap</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="sysPsram">—</div>
+      <div class="stat-tile-label">Free PSRAM</div>
     </div>
     <div class="stat-tile">
       <div class="stat-tile-value mono" id="sysClients">—</div>
@@ -29,6 +33,20 @@
     <div class="kv"><span class="kv-label">MCU</span><span class="kv-value mono">ESP32-S3R8 · 240 MHz</span></div>
     <div class="kv"><span class="kv-label">Memory</span><span class="kv-value mono">512 KB SRAM · 8 MB PSRAM · 16 MB flash</span></div>
     <div class="kv"><span class="kv-label">SDK</span><span class="kv-value mono">ESP-IDF v5.3.2</span></div>
+    <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value mono" id="sysFwVersion">—</span></div>
+  </div>
+
+  <!-- WiFi card (always-visible per mockup; manual config still in Advanced) -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">WiFi</span>
+      <span class="badge badge-neutral" id="sysWifiBadge">—</span>
+    </div>
+    <div class="kv"><span class="kv-label">Mode</span><span class="kv-value mono" id="sysWifiMode">—</span></div>
+    <div class="kv"><span class="kv-label">SSID</span><span class="kv-value mono" id="sysWifiSsid">—</span></div>
+    <div class="kv"><span class="kv-label">RSSI</span><span class="kv-value mono" id="sysWifiRssi">—</span></div>
+    <div class="kv"><span class="kv-label">IP</span><span class="kv-value mono" id="sysWifiIp">—</span></div>
+    <div class="kv"><span class="kv-label">Gateway</span><span class="kv-value mono" id="sysWifiGw">—</span></div>
   </div>
 
   <!-- Hardware status -->
@@ -38,8 +56,9 @@
     </div>
     <div class="kv"><span class="kv-label">Display</span><span class="kv-value">ST7789 172×320 IPS</span></div>
     <div class="kv"><span class="kv-label">IMU</span><span class="kv-value mono">QMI8658 · 0x6B</span></div>
+    <div class="kv"><span class="kv-label">SD card</span><span class="kv-value mono" id="sysSdCard">SDMMC · 4-bit</span></div>
     <div class="kv"><span class="kv-label">RGB LED</span><span class="kv-value mono">WS2812 · GPIO 38</span></div>
-    <div class="kv"><span class="kv-label">SD card slot</span><span class="kv-value">SDMMC · 4-bit</span></div>
+    <div class="kv"><span class="kv-label">Battery ADC</span><span class="kv-value mono" id="sysBatteryAdc">GPIO 1</span></div>
   </div>
 
   <!-- Advanced (collapsed by default) -->

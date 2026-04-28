@@ -1165,8 +1165,27 @@ function rcPoll() {
     }
     document.getElementById('rcProto').textContent = s.proto;
     document.getElementById('rcRate').textContent = s.frameRateHz + ' Hz';
-    document.getElementById('rcFrames').textContent = s.frameCount + ' / ' + s.crcErrors;
-    document.getElementById('rcFS').textContent = (s.failsafe ? 'FAILSAFE ' : '') + (s.lostFrame ? 'LOST' : s.failsafe ? '' : 'OK');
+    // Stat-grid: separate tiles for frame count / CRC / failsafe / lost frame.
+    const frameCount = document.getElementById('rcFrameCount');
+    if (frameCount) frameCount.textContent = s.frameCount;
+    const crcErr = document.getElementById('rcCrcErr');
+    if (crcErr) {
+      crcErr.textContent = s.crcErrors;
+      crcErr.className = 'stat-tile-value mono' + (s.crcErrors > 0 ? ' text-warn' : '');
+    }
+    const fsTile = document.getElementById('rcFailsafe');
+    if (fsTile) {
+      fsTile.textContent = s.failsafe ? 'YES' : 'no';
+      fsTile.className = 'stat-tile-value mono' + (s.failsafe ? ' text-danger' : '');
+    }
+    const lostTile = document.getElementById('rcLost');
+    if (lostTile) {
+      lostTile.textContent = s.lostFrame ? 'YES' : 'no';
+      lostTile.className = 'stat-tile-value mono' + (s.lostFrame ? ' text-warn' : '');
+    }
+    // Channels card subtitle: "16 ch · 100 Hz · 0 CRC errors" style
+    const ch = document.getElementById('rcChannelHint');
+    if (ch) ch.textContent = (s.channels?.length || 0) + ' ch · ' + s.frameRateHz + ' Hz · ' + s.crcErrors + ' CRC';
     // Render channels into the rc-channel-grid using semantic classes for
     // out-of-range warnings — no inline color, design-system safe.
     const channels = s.channels || [];
@@ -3852,9 +3871,34 @@ function handleMsg(m) {
   }
   else if (m.type === 'sys') {
     document.getElementById('sysIP').textContent = m.ip;
-    document.getElementById('sysUptime').textContent = Math.floor(m.uptime/1000) + ' s';
+    // Pretty uptime: minutes/hours when long.
+    const upMs = m.uptime || 0;
+    const sec = Math.floor(upMs / 1000);
+    const upStr = sec < 60 ? sec + ' s'
+                : sec < 3600 ? Math.floor(sec/60) + 'm ' + (sec%60) + 's'
+                : Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
+    document.getElementById('sysUptime').textContent = upStr;
     document.getElementById('sysHeap').textContent = (m.heap/1024).toFixed(1) + ' KB';
+    const ps = document.getElementById('sysPsram');
+    if (ps) ps.textContent = (m.psram_free != null) ? (m.psram_free/1024/1024).toFixed(1) + ' MB' : '—';
     document.getElementById('sysClients').textContent = m.clients;
+    // WiFi card — fields populated from broadcast.
+    const wifiBadge = document.getElementById('sysWifiBadge');
+    if (wifiBadge) {
+      wifiBadge.textContent = m.wifi_mode || (m.sta_connected ? 'STA connected' : 'AP mode');
+      wifiBadge.className = 'badge ' + (m.sta_connected ? 'badge-success' : 'badge-neutral');
+    }
+    const setText = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val ?? '—'; };
+    setText('sysWifiMode', m.wifi_mode || (m.sta_connected ? 'STA' : 'AP'));
+    setText('sysWifiSsid', m.ssid || '—');
+    setText('sysWifiRssi', m.rssi != null ? m.rssi + ' dBm' : '—');
+    setText('sysWifiIp',   m.ip || '—');
+    setText('sysWifiGw',   m.gw || '—');
+    // Firmware version row in Plate card — pulled from /api/ota/info.
+    const fw = document.getElementById('sysFwVersion');
+    if (fw && fw.textContent === '—') {
+      fetch('/api/ota/info').then(r=>r.json()).then(j=>{ fw.textContent = j.fw_version || '—'; }).catch(()=>{});
+    }
   }
   else if (m.type === 'motor') {
     armed = m.armed;
