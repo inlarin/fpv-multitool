@@ -4,7 +4,8 @@
 Two modes:
   * Pre-build hook (called by platformio.ini) -- fails build on violations
     in data/index.html + data/tabs/*.html. Set LINT_UI_WARN_ONLY=1 in env
-    to demote failures to warnings during legacy-tab migration.
+    to demote failures to warnings (escape hatch — used during legacy-tab
+    migration, generally shouldn't be needed post-16dc8ae).
   * Standalone audit -- `python scripts/lint_ui.py --report` prints a
     full quality summary (totals per file, no exit code).
 
@@ -252,9 +253,9 @@ def hook(strict):
     if len(violations) > 30:
         print(f"  ... and {len(violations) - 30} more (run `python scripts/lint_ui.py --report`)")
     if strict:
-        print("[lint_ui] BUILD FAILED -- fix violations (or unset LINT_UI_STRICT to demote)")
+        print("[lint_ui] BUILD FAILED -- fix violations (or set LINT_UI_WARN_ONLY=1 to demote temporarily)")
         return 1
-    print("[lint_ui] WARN-ONLY -- migration in progress, set LINT_UI_STRICT=1 to fail")
+    print("[lint_ui] WARN-ONLY (LINT_UI_WARN_ONLY=1) -- not failing build")
     return 0
 
 
@@ -263,20 +264,17 @@ def hook(strict):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--report":
         sys.exit(report())
-    # Default: warn-only during the v1->v2 design-system migration. Set
-    # LINT_UI_STRICT=1 once all tabs are migrated (`tools/audit_ui.py` reports
-    # 0 violations across all data/tabs/*.html) to flip to fail-on-violation.
-    strict = os.environ.get("LINT_UI_STRICT", "0") == "1"
+    # Default: STRICT (fail-on-violation). All tabs migrated to v2 as of
+    # commit 16dc8ae -- audit reports 0/0/0/0 across every tab. Set
+    # LINT_UI_WARN_ONLY=1 to temporarily demote during a future migration.
+    strict = os.environ.get("LINT_UI_WARN_ONLY", "0") != "1"
     sys.exit(hook(strict))
 
 
 # PlatformIO pre-build hook entry -- `Import("env")` is injected by SCons.
 try:
     Import("env")  # noqa: F821 -- provided by PlatformIO build env
-    # Default: warn-only during the v1->v2 design-system migration. Set
-    # LINT_UI_STRICT=1 once all tabs are migrated (`tools/audit_ui.py` reports
-    # 0 violations across all data/tabs/*.html) to flip to fail-on-violation.
-    strict = os.environ.get("LINT_UI_STRICT", "0") == "1"
+    strict = os.environ.get("LINT_UI_WARN_ONLY", "0") != "1"
     rc = hook(strict)
     if rc != 0:
         env.Exit(rc)  # noqa: F821
