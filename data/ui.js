@@ -124,7 +124,13 @@ function showTab(name) {
     const ts = document.getElementById('throttleSlider');
     if (tb && ts) tb.style.width = (+ts.value/2000*100) + '%';
   }
-  if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
+  if (name === 'battery') {
+    loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false);
+    // bar-fill default is 100% width — paint to 0% on first open until WS pushes
+    // a real SOC. Mirrors the motor throttleBar fix.
+    const bb = document.getElementById('battBar');
+    if (bb && !bb.style.width) bb.style.width = '0%';
+  }
   if (name === 'receiver') {
     if (!window.ELRS_MODELS)   window.ELRS_MODELS = ELRS_MODELS;
     if (!window.ELRS_RELEASES) window.ELRS_RELEASES = ELRS_RELEASES;
@@ -584,23 +590,23 @@ function tryHmacUnseal() {
   const key = document.getElementById('unsealHmacKey').value.trim().replace(/[^0-9a-fA-F]/g, '');
   if (key.length !== 64) { alert('Need 64 hex chars (32 bytes), got ' + key.length); return; }
   const el = document.getElementById('hmacResult');
-  el.style.display = 'block';
+  el.classList.remove('batt-hidden');
   el.textContent = 'Sending HMAC unseal...';
   const fd = new FormData(); fd.append('key', key);
   fetch('/api/batt/unseal_hmac', {method:'POST', body:fd}).then(r=>r.json()).then(j=>{
     el.textContent = 'Result: ' + j.result + '\nChallenge: ' + (j.challenge || '(none)');
-    el.style.color = j.ok ? 'var(--status-on)' : 'var(--warning-text)';
-  }).catch(e=>{ el.textContent = 'Error: ' + e; el.style.color = 'var(--warning-text)'; });
+    el.className = 'code-output ' + (j.ok ? 'text-success' : 'text-warn');
+  }).catch(e=>{ el.textContent = 'Error: ' + e; el.className = 'code-output text-warn'; });
 }
 
 function tryGetChallenge() {
   // Read 20 bytes from MAC 0x0000 via /api/batt/diag?mac=0x0000 — no key needed
   const el = document.getElementById('hmacResult');
-  el.style.display = 'block';
+  el.classList.remove('batt-hidden');
   el.textContent = 'Reading MAC 0x0000 challenge...';
   fetch('/api/batt/diag?mac=0x0000').then(r=>r.json()).then(j=>{
     el.textContent = 'Challenge (len=' + j.len + '):\n' + j.hex + '\nASCII: ' + j.ascii;
-    el.style.color = 'var(--accent)';
+    el.className = 'code-output text-info';
   });
 }
 
@@ -665,7 +671,7 @@ function dfLoadMap() {
     try {
       _dfMap = JSON.parse(custom);
       document.getElementById('dfReadAllBtn').disabled = false;
-      document.getElementById('dfFilter').style.display = '';
+      document.getElementById('dfFilter').classList.remove('batt-hidden');
       document.getElementById('dfStatus').textContent = _dfMap.length + ' entries (custom Killer.ini)';
       dfRenderTree();
       return;
@@ -739,8 +745,8 @@ function dfImportKillerIni(evt) {
       _dfMap = parsed;
       _dfValues = {};
       document.getElementById('dfReadAllBtn').disabled = false;
-      document.getElementById('dfFilter').style.display = '';
-      document.getElementById('dfStatus').innerHTML = parsed.length + ' entries <b style="color:var(--accent)">(from ' + file.name + ')</b> <a href="#" onclick="dfClearCustomMap(); return false;" style="color:var(--warning-text)">[reset to built-in]</a>';
+      document.getElementById('dfFilter').classList.remove('batt-hidden');
+      document.getElementById('dfStatus').innerHTML = parsed.length + ' entries <b class="text-info">(from ' + file.name + ')</b> <a href="#" onclick="dfClearCustomMap(); return false;" class="text-warn">[reset to built-in]</a>';
       dfRenderTree();
     } catch (err) {
       alert('Parse failed: ' + err);
@@ -1011,7 +1017,7 @@ async function dfRestoreOne(btn) {
 
 function i2cPreflight() {
   const el = document.getElementById('preflightResult');
-  el.style.display = 'block';
+  el.classList.remove('batt-hidden');
   el.textContent = 'Running preflight...';
   fetch('/api/i2c/preflight').then(r=>r.json()).then(j=>{
     let s = 'SDA: ' + (j.sdaOk ? 'OK' : 'STUCK LOW!') + '\n';
@@ -1020,12 +1026,13 @@ function i2cPreflight() {
     s += 'Devices found: ' + j.devCount;
     if (j.devices && j.devices.length) s += ' [' + j.devices.join(', ') + ']';
     el.textContent = s;
-    el.style.color = (j.sdaOk && j.sclOk && j.batteryAck) ? '#0f0' : '#f44';
+    const ok = j.sdaOk && j.sclOk && j.batteryAck;
+    el.className = 'code-output ' + (ok ? 'text-success' : 'text-danger');
   });
 }
 function i2cScan() {
   const el = document.getElementById('i2cScanResult');
-  el.style.display = 'block';
+  el.classList.remove('batt-hidden');
   el.textContent = 'Scanning...';
   fetch('/api/i2c/scan').then(r=>r.text()).then(t=>{ el.textContent = t; });
 }
@@ -3670,15 +3677,15 @@ function handleMsg(m) {
   if (m.type === 'batt') {
     const c = m.connected;
     const bc = document.getElementById('battConn');
-    bc.className = 'status ' + (c ? 'on' : 'off');
-    bc.textContent = c ? 'YES' : 'NO';
+    bc.className = 'badge ' + (c ? 'badge-success' : 'badge-neutral');
+    bc.textContent = c ? 'YES' : 'NO LINK';
     if (!c) return;
 
     // Device type badge
     const dtEl = document.getElementById('battDevType');
-    if (m.devType === 1) { dtEl.style.display='inline-block'; dtEl.textContent='DJI'; dtEl.className='status on'; }
-    else if (m.devType === 2) { dtEl.style.display='inline-block'; dtEl.textContent='SBS'; dtEl.className='status on'; }
-    else dtEl.style.display='none';
+    if (m.devType === 1) { dtEl.classList.remove('batt-hidden'); dtEl.textContent='DJI'; dtEl.className='badge badge-success'; }
+    else if (m.devType === 2) { dtEl.classList.remove('batt-hidden'); dtEl.textContent='SBS'; dtEl.className='badge badge-success'; }
+    else dtEl.classList.add('batt-hidden');
 
     document.getElementById('battSOC').textContent = m.soc + ' %';
     document.getElementById('battBar').style.width = m.soc + '%';
@@ -3709,10 +3716,15 @@ function handleMsg(m) {
     document.getElementById('battChem').textContent = m.chem || '-';
     document.getElementById('battConfig').textContent = m.cellCount + 'S / ' + m.design + 'mAh / ' + (m.designV ? (m.designV/1000).toFixed(1)+'V' : '-');
 
-    // DJI serial
+    // DJI serial — wrapper row #battDjiSNRow toggled via .batt-hidden class.
     const djiSnEl = document.getElementById('battDjiSN');
-    if (m.djiSN) { djiSnEl.textContent = m.djiSN; djiSnEl.style.display = ''; djiSnEl.parentElement.style.display = ''; }
-    else { djiSnEl.parentElement.style.display = 'none'; }
+    const djiSnRow = document.getElementById('battDjiSNRow');
+    if (m.djiSN) {
+      djiSnEl.textContent = m.djiSN;
+      if (djiSnRow) djiSnRow.classList.remove('batt-hidden');
+    } else {
+      if (djiSnRow) djiSnRow.classList.add('batt-hidden');
+    }
 
     // Decode manufacture date (SBS format: bits 15:9=year+1980, 8:5=month, 4:0=day)
     if (m.mfgDate) {
@@ -3732,21 +3744,21 @@ function handleMsg(m) {
     document.getElementById('battChip').textContent = chipName;
     document.getElementById('battFwHw').textContent = m.fwVer ? ('FW ' + m.fwVer + ' / HW ' + m.hwVer) : 'Not available';
 
-    // Seal state
+    // Seal state — uses .badge primitives; visible when battery is connected.
     const sealEl = document.getElementById('battSealStatus');
+    sealEl.classList.remove('batt-hidden');
     if (m.sealed) {
-      sealEl.style.display = 'inline-block';
       sealEl.textContent = 'SEALED';
-      sealEl.className = 'status warn';
+      sealEl.className = 'badge badge-warn';
     } else {
-      sealEl.style.display = 'inline-block';
       sealEl.textContent = 'UNSEALED';
-      sealEl.className = 'status on';
+      sealEl.className = 'badge badge-success';
     }
 
     // Key warning — suppress for clones (they use standard TI keys)
     const isClone = (m.mfr === 'PTL' || m.chipType === 0);
-    document.getElementById('keyWarning').style.display = (m.needsKey && !isClone) ? 'block' : 'none';
+    const kw = document.getElementById('keyWarning');
+    kw.classList.toggle('batt-hidden', !(m.needsKey && !isClone));
 
     // Extended status — show decoded first, hex as secondary
     const hex8 = v => '0x' + v.toString(16).toUpperCase().padStart(8, '0');
@@ -3757,7 +3769,8 @@ function handleMsg(m) {
     const pfEl = document.getElementById('pfDecoded');
     document.getElementById('pfStatus').textContent = m.pfDecoded || 'OK';
     pfEl.textContent = hex8(m.pfStatus);
-    pfEl.style.color = m.hasPF ? '#f44' : '#6f6';
+    pfEl.classList.toggle('text-danger', !!m.hasPF);
+    pfEl.classList.toggle('text-success', !m.hasPF);
     document.getElementById('mfgStatus').textContent = m.mfgDecoded || 'N/A';
     document.getElementById('mfgDecoded').textContent = hex8(m.manufacturingStatus);
 

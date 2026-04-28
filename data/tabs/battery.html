@@ -1,107 +1,119 @@
 <div id="tab-battery" class="tab-content">
-  <div class="subtabs" id="battSubtabs">
+
+  <!-- Subtab selector — DJI / Clone / Generic SBS variants of this tab -->
+  <div class="subtabs col-span-full" id="battSubtabs">
     <div class="subtab active" data-sub="dji" onclick="showBattSub('dji')">DJI Battery</div>
     <div class="subtab" data-sub="clone" onclick="showBattSub('clone')">DJI Clone</div>
     <div class="subtab" data-sub="generic" onclick="showBattSub('generic')">Generic SBS</div>
-    <span style="margin-left:auto;align-self:center;font-size:11px;color:var(--text-dim)" id="battSubHint">auto-detect based on connected battery</span>
+    <span class="kv-label batt-subtab-hint" id="battSubHint">auto-detect based on connected battery</span>
   </div>
+
+  <!-- Smart Battery summary -->
   <div class="card">
-    <h2>Smart Battery</h2>
-    <div class="row">
-      <span class="label">Connected:</span>
-      <span>
-        <span id="battConn" class="status off">NO</span>
-        <span id="battDevType" class="status off" style="display:none">-</span>
-        <span id="battSealStatus" class="status warn" style="display:none">SEALED</span>
+    <div class="card-header">
+      <span class="card-title">Smart Battery</span>
+      <span class="cluster">
+        <span id="battConn" class="badge badge-neutral">NO LINK</span>
+        <span id="battDevType" class="badge badge-neutral batt-hidden">-</span>
+        <span id="battSealStatus" class="badge badge-warn batt-hidden">SEALED</span>
       </span>
     </div>
-    <div class="big" id="battSOC">-- %</div>
-    <div class="bar"><div class="bar-fill" id="battBar" style="width:0%"></div></div>
+
+    <div class="big mono" id="battSOC">-- %</div>
+    <div class="bar"><div class="bar-fill" id="battBar"></div></div>
+
     <div class="grid">
-      <div class="row"><span class="label">Voltage:</span><span class="value" id="battVolt">-</span></div>
-      <div class="row"><span class="label">Current:</span><span class="value" id="battCurr">-</span></div>
-      <div class="row"><span class="label">Avg Current:</span><span class="value" id="battAvgCurr">-</span></div>
-      <div class="row"><span class="label">Temp:</span><span class="value" id="battTemp">-</span></div>
-      <div class="row"><span class="label">SOH:</span><span class="value" id="battSOH">-</span></div>
-      <div class="row"><span class="label">Cycles:</span><span class="value" id="battCycle">-</span></div>
-      <div class="row"><span class="label">Capacity:</span><span class="value" id="battCap">-</span></div>
-      <div class="row"><span class="label">Design:</span><span class="value" id="battDesign">-</span></div>
+      <div class="kv"><span class="kv-label">Voltage</span><span class="kv-value mono" id="battVolt">-</span></div>
+      <div class="kv"><span class="kv-label">Current</span><span class="kv-value mono" id="battCurr">-</span></div>
+      <div class="kv"><span class="kv-label">Avg Current</span><span class="kv-value mono" id="battAvgCurr">-</span></div>
+      <div class="kv"><span class="kv-label">Temp</span><span class="kv-value mono" id="battTemp">-</span></div>
+      <div class="kv"><span class="kv-label">SOH</span><span class="kv-value mono" id="battSOH">-</span></div>
+      <div class="kv"><span class="kv-label">Cycles</span><span class="kv-value mono" id="battCycle">-</span></div>
+      <div class="kv"><span class="kv-label">Capacity</span><span class="kv-value mono" id="battCap">-</span></div>
+      <div class="kv"><span class="kv-label">Design</span><span class="kv-value mono" id="battDesign">-</span></div>
     </div>
-    <div class="grid" style="margin-top:8px">
-      <div class="row"><span class="label">Time to empty:</span><span class="value" id="battTTE">-</span></div>
-      <div class="row"><span class="label">Time to full:</span><span class="value" id="battTTF">-</span></div>
-      <div class="row"><span class="label">Chg I/V:</span><span class="value" id="battChg">-</span></div>
-      <div class="row"><span class="label">Status:</span><span class="value" id="battStatusBits">-</span></div>
+    <div class="grid batt-secondary-row">
+      <div class="kv"><span class="kv-label">Time to empty</span><span class="kv-value mono" id="battTTE">-</span></div>
+      <div class="kv"><span class="kv-label">Time to full</span><span class="kv-value mono" id="battTTF">-</span></div>
+      <div class="kv"><span class="kv-label">Chg I/V</span><span class="kv-value mono" id="battChg">-</span></div>
+      <div class="kv"><span class="kv-label">Status</span><span class="kv-value mono" id="battStatusBits">-</span></div>
     </div>
   </div>
 
+  <!-- Live Chart -->
   <div class="card">
-    <h2>Live Chart (last ~3 min)</h2>
-    <svg id="liveChart" viewBox="0 0 400 160" width="100%" height="160" style="background:var(--input-bg);border-radius:4px">
+    <div class="card-header">
+      <span class="card-title">Live Chart (last ~3 min)</span>
+      <button class="ghost btn-sm" onclick="chartClear()">Clear</button>
+    </div>
+    <svg id="liveChart" class="batt-live-chart" viewBox="0 0 400 160" width="100%" height="160">
       <g id="chartGrid"></g>
-      <polyline id="chartV" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-      <polyline id="chartI" fill="none" stroke="#fa0" stroke-width="1.5"/>
-      <text id="chartLabelV" x="5" y="15" fill="var(--accent)" font-size="10" font-family="monospace">V: --</text>
-      <text id="chartLabelI" x="5" y="28" fill="#fa0" font-size="10" font-family="monospace">I: --</text>
+      <polyline id="chartV" fill="none" stroke="var(--primary)" stroke-width="1.5"/>
+      <polyline id="chartI" fill="none" stroke="var(--warn)" stroke-width="1.5"/>
+      <text id="chartLabelV" x="5" y="15" fill="var(--primary)" font-size="10" font-family="monospace">V: --</text>
+      <text id="chartLabelI" x="5" y="28" fill="var(--warn)" font-size="10" font-family="monospace">I: --</text>
     </svg>
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-dim);margin-top:4px">
-      <span><span style="color:var(--accent)">━</span> voltage (V)</span>
-      <span><span style="color:#fa0">━</span> current (mA)</span>
-      <button onclick="chartClear()" style="padding:2px 8px;font-size:10px">Clear</button>
+    <div class="kv batt-chart-legend">
+      <span><span class="text-info">━</span> voltage (V)</span>
+      <span><span class="text-warn">━</span> current (mA)</span>
     </div>
   </div>
 
+  <!-- Cells -->
   <div class="card">
-    <h2>Cells (<span id="cellsSync">async</span>)</h2>
+    <div class="card-header">
+      <span class="card-title">Cells (<span id="cellsSync">async</span>)</span>
+    </div>
     <div id="cellsGrid"></div>
-    <div class="row"><span class="label">Delta:</span><span class="value" id="cellDelta">-</span></div>
-    <div class="row"><span class="label">Pack V (sync):</span><span class="value" id="packV">-</span></div>
+    <div class="kv"><span class="kv-label">Delta</span><span class="kv-value mono" id="cellDelta">-</span></div>
+    <div class="kv"><span class="kv-label">Pack V (sync)</span><span class="kv-value mono" id="packV">-</span></div>
   </div>
 
+  <!-- DJI Status registers (Operation / Safety / PF / Mfg) -->
   <div class="card batt-dji-only">
-    <h2>Status</h2>
-    <div class="row">
-      <span class="label">Operation:</span>
-      <span class="value" id="opStatus">-</span>
+    <div class="card-header">
+      <span class="card-title">Status registers</span>
     </div>
-    <div class="row" style="color:#555;font-size:10px;font-family:monospace"><span id="opDecoded">-</span></div>
-    <div class="row">
-      <span class="label">Safety:</span>
-      <span class="value" id="safetyStatus" style="color:#6f6">-</span>
-    </div>
-    <div class="row" style="color:#555;font-size:10px;font-family:monospace"><span id="safetyDecoded">-</span></div>
-    <div class="row">
-      <span class="label">PF (Permanent Failure):</span>
-      <span class="value" id="pfStatus">-</span>
-    </div>
-    <div class="row" style="font-size:10px;font-family:monospace"><span id="pfDecoded">-</span></div>
-    <div class="row">
-      <span class="label">Manufacturing:</span>
-      <span class="value" id="mfgStatus">-</span>
-    </div>
-    <div class="row" style="color:#555;font-size:10px;font-family:monospace"><span id="mfgDecoded">-</span></div>
+    <div class="kv"><span class="kv-label">Operation</span><span class="kv-value mono" id="opStatus">-</span></div>
+    <div class="code-output batt-decoded" id="opDecoded">-</div>
+
+    <div class="kv"><span class="kv-label">Safety</span><span class="kv-value mono text-success" id="safetyStatus">-</span></div>
+    <div class="code-output batt-decoded" id="safetyDecoded">-</div>
+
+    <div class="kv"><span class="kv-label">PF (Permanent Failure)</span><span class="kv-value mono" id="pfStatus">-</span></div>
+    <div class="code-output batt-decoded" id="pfDecoded">-</div>
+
+    <div class="kv"><span class="kv-label">Manufacturing</span><span class="kv-value mono" id="mfgStatus">-</span></div>
+    <div class="code-output batt-decoded" id="mfgDecoded">-</div>
   </div>
 
+  <!-- Battery Info -->
   <div class="card">
-    <h2>Battery Info</h2>
-    <div class="row"><span class="label">Model:</span><span class="value" id="battModel" style="color:#f0f">-</span></div>
-    <div class="row"><span class="label">Config:</span><span class="value" id="battConfig">-</span></div>
-    <div class="row"><span class="label">Manufacturer:</span><span class="value" id="battMfr">-</span></div>
-    <div class="row"><span class="label">Device:</span><span class="value" id="battDev">-</span></div>
-    <div class="row"><span class="label">Chemistry:</span><span class="value" id="battChem">-</span></div>
-    <div class="row"><span class="label">S/N / Date:</span><span class="value" id="battSN">-</span></div>
-    <div class="row"><span class="label">DJI S/N:</span><span class="value" id="battDjiSN" style="display:none">-</span></div>
-    <div class="row"><span class="label">Chip:</span><span class="value" id="battChip">-</span></div>
-    <div class="row"><span class="label">FW / HW:</span><span class="value" id="battFwHw">-</span></div>
-    <div id="keyWarning" class="warning" style="display:none">
-      ⚠ Эта модель требует DJI per-pack ключ.<br>
-      Публичные ключи отсутствуют. Unseal/Clear PF работать не будут.
+    <div class="card-header">
+      <span class="card-title">Battery Info</span>
+    </div>
+    <div class="kv"><span class="kv-label">Model</span><span class="kv-value mono text-info" id="battModel">-</span></div>
+    <div class="kv"><span class="kv-label">Config</span><span class="kv-value mono" id="battConfig">-</span></div>
+    <div class="kv"><span class="kv-label">Manufacturer</span><span class="kv-value mono" id="battMfr">-</span></div>
+    <div class="kv"><span class="kv-label">Device</span><span class="kv-value mono" id="battDev">-</span></div>
+    <div class="kv"><span class="kv-label">Chemistry</span><span class="kv-value mono" id="battChem">-</span></div>
+    <div class="kv"><span class="kv-label">S/N / Date</span><span class="kv-value mono" id="battSN">-</span></div>
+    <div class="kv batt-hidden" id="battDjiSNRow"><span class="kv-label">DJI S/N</span><span class="kv-value mono" id="battDjiSN">-</span></div>
+    <div class="kv"><span class="kv-label">Chip</span><span class="kv-value mono" id="battChip">-</span></div>
+    <div class="kv"><span class="kv-label">FW / HW</span><span class="kv-value mono" id="battFwHw">-</span></div>
+    <div id="keyWarning" class="banner banner-warn batt-hidden">
+      ⚠ Эта модель требует DJI per-pack ключ. Публичные ключи отсутствуют. Unseal/Clear PF работать не будут.
     </div>
   </div>
 
+  <!-- DJI Service -->
   <div class="card batt-dji-only">
-    <h2>Service (advanced)</h2>
-    <div class="warning">⚠ Требует unseal. Для Mavic 2+/Mavic 3/Mavic 4 ключи DJI не опубликованы.</div>
+    <div class="card-header">
+      <span class="card-title">Service (advanced)</span>
+    </div>
+    <div class="banner banner-warn">
+      ⚠ Требует unseal. Для Mavic 2+/Mavic 3/Mavic 4 ключи DJI не опубликованы.
+    </div>
     <div class="grid">
       <button onclick="battAction('unseal')">Unseal</button>
       <button onclick="battAction('clearpf')">Clear PF</button>
@@ -110,193 +122,224 @@
       <button onclick="battAction('seal')">Seal</button>
       <button onclick="battAction('reset')">Soft Reset</button>
     </div>
-    <button class="danger" onclick="battAction('fullservice')" style="width:100%;margin-top:4px;">Full Service (unseal + clear + seal)</button>
-    <div id="battActionResult" style="margin-top:10px;color:#ff0"></div>
+    <button class="danger batt-full-service-btn" onclick="battAction('fullservice')">Full Service (unseal + clear + seal)</button>
+    <div id="battActionResult" class="field-help text-warn batt-action-result"></div>
   </div>
 
+  <!-- DJI Unseal Wizard -->
   <div class="card batt-dji-only">
-    <h2>Unseal Wizard</h2>
-    <div class="row"><span class="label">Profile:</span>
-      <select id="unsealProfile" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px" onchange="loadProfile()"></select>
+    <div class="card-header">
+      <span class="card-title">Unseal Wizard</span>
     </div>
-    <div id="unsealKeyList" style="margin:8px 0;font-size:11px;color:#aaa"></div>
+    <div class="kv">
+      <span class="kv-label">Profile</span>
+      <select id="unsealProfile" class="batt-flex1" onchange="loadProfile()"></select>
+    </div>
+    <div id="unsealKeyList" class="field-help batt-key-list"></div>
     <div class="grid">
       <button onclick="tryAllKeys()">Try All Keys</button>
       <button onclick="tryFasKeys()">Try FAS Keys</button>
     </div>
-    <div style="margin-top:8px;font-size:12px">Manual key pair:</div>
-    <div style="display:flex;gap:4px;margin-top:4px">
-      <input id="unsealW1" placeholder="0x7EE0" style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:4px;font-family:monospace">
-      <input id="unsealW2" placeholder="0xCCDF" style="flex:1;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:4px;font-family:monospace">
+    <div class="field-label batt-section-label">Manual key pair:</div>
+    <div class="cluster">
+      <input id="unsealW1" class="mono input-compact" placeholder="0x7EE0">
+      <input id="unsealW2" class="mono input-compact" placeholder="0xCCDF">
       <button onclick="tryManualKey()">Send</button>
     </div>
 
-    <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
-    <div style="font-size:12px;margin-bottom:4px">HMAC-SHA1 challenge-response (bq40z30x+):</div>
-    <input id="unsealHmacKey" placeholder="32-byte key as 64 hex chars" maxlength="64" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);padding:4px;font-family:monospace;font-size:11px;margin:4px 0">
+    <hr>
+
+    <div class="field-label batt-section-label">HMAC-SHA1 challenge-response (bq40z30x+):</div>
+    <input id="unsealHmacKey" class="mono" placeholder="32-byte key as 64 hex chars" maxlength="64">
     <div class="grid">
       <button onclick="tryHmacUnseal()">HMAC Unseal</button>
       <button onclick="tryGetChallenge()">Get Challenge Only</button>
     </div>
-    <pre id="hmacResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:4px;margin:4px 0;font-family:monospace;display:none;white-space:pre-wrap;word-break:break-all"></pre>
+    <pre id="hmacResult" class="code-output batt-hidden"></pre>
 
-    <div id="unsealResult" style="margin-top:8px;color:var(--status-on);font-size:12px"></div>
+    <div id="unsealResult" class="field-help text-success batt-result"></div>
   </div>
 
+  <!-- DJI MAC Command Runner -->
   <div class="card batt-dji-only">
-    <h2>MAC Command Runner</h2>
-    <div style="display:flex;gap:4px">
-      <select id="macSelect" style="flex:1;background:#222;color:#fff;border:1px solid #555;padding:4px;font-size:11px"></select>
+    <div class="card-header">
+      <span class="card-title">MAC Command Runner</span>
+    </div>
+    <div class="cluster">
+      <select id="macSelect" class="batt-flex1"></select>
       <button onclick="runMacCmd()">Execute</button>
     </div>
-    <div id="macDesc" style="margin:4px 0;font-size:11px;color:#888"></div>
-    <pre id="macResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:120px;overflow:auto">(idle)</pre>
+    <div id="macDesc" class="field-help"></div>
+    <pre id="macResult" class="code-output">(idle)</pre>
   </div>
 
-  <div class="card" style="grid-column:1/-1;max-width:100%">
-    <h2>Battery Fleet Compare</h2>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+  <!-- Battery Fleet Compare -->
+  <div class="card col-span-full">
+    <div class="card-header">
+      <span class="card-title">Battery Fleet Compare</span>
+    </div>
+    <p class="field-help">
       Upload multiple JSON snapshots (from "Snapshot JSON" button) to compare batteries side-by-side.
       Highlights outliers: cycles, SOH, capacity loss, cell imbalance.
     </p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <label style="cursor:pointer;padding:10px 16px;background:var(--accent-dim);color:#fff;border-radius:6px;font-size:14px">
-        Add Snapshot <input type="file" accept=".json" multiple onchange="fleetAdd(event)" style="display:none">
+    <div class="cluster">
+      <label class="file-label">
+        Add Snapshot <input type="file" accept=".json" multiple onchange="fleetAdd(event)" class="batt-hidden">
       </label>
       <button onclick="fleetAddCurrent()">Add Current Battery</button>
       <button onclick="fleetClear()">Clear All</button>
-      <span id="fleetStatus" style="color:var(--text-dim);font-size:12px"></span>
+      <span id="fleetStatus" class="field-help"></span>
     </div>
-    <div id="fleetTable" style="margin-top:8px;overflow:auto"></div>
+    <div id="fleetTable" class="batt-fleet-table"></div>
   </div>
 
-  <div class="card batt-clone-only" style="grid-column:1/-1;max-width:100%">
-    <h2>Challenge Harvester & Block Writer</h2>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+  <!-- Clone Challenge Harvester -->
+  <div class="card batt-clone-only col-span-full">
+    <div class="card-header">
+      <span class="card-title">Challenge Harvester &amp; Block Writer</span>
+    </div>
+    <p class="field-help">
       Harvest pseudo-random challenges from reg 0xEE (or any reg) — the clone
       returns different bytes after every write. Collect samples for offline
       cryptanalysis (LFSR period, HMAC structure). Also supports raw byte writes
       for testing alternative block formats the clone might accept.
     </p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
-      <label style="font-size:11px">reg <input id="chReg" value="0xEE" style="width:60px;font-family:monospace"></label>
-      <label style="font-size:11px">writeVal <input id="chVal" value="0x0000" style="width:70px;font-family:monospace"></label>
-      <label style="font-size:11px">count <input id="chCount" type="number" value="100" min="1" max="2000" style="width:70px"></label>
-      <label style="font-size:11px">readLen <input id="chRLen" type="number" value="16" min="1" max="32" style="width:50px"></label>
-      <label style="font-size:11px"><input type="checkbox" id="chInc"> increment write</label>
+    <div class="cluster">
+      <label class="kv-label">reg <input id="chReg" class="mono input-compact" value="0xEE"></label>
+      <label class="kv-label">writeVal <input id="chVal" class="mono input-compact" value="0x0000"></label>
+      <label class="kv-label">count <input id="chCount" class="input-compact" type="number" value="100" min="1" max="2000"></label>
+      <label class="kv-label">readLen <input id="chRLen" class="input-compact" type="number" value="16" min="1" max="32"></label>
+      <label class="kv-label"><input type="checkbox" id="chInc"> increment write</label>
       <button onclick="chHarvest()">Harvest</button>
       <button onclick="chExport()" id="chExportBtn" disabled>Export CSV</button>
-      <span id="chStatus" style="color:var(--text-dim);font-size:11px"></span>
+      <span id="chStatus" class="field-help"></span>
     </div>
-    <div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
-      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">Raw byte write (reg + N bytes, no length prefix):</div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-        <label style="font-size:11px">reg <input id="wbReg" value="0xEE" style="width:60px;font-family:monospace"></label>
-        <input id="wbData" placeholder="hex payload e.g. 5AA5DEAD..." style="flex:1;min-width:160px;font-family:monospace;font-size:11px">
-        <label style="font-size:11px"><input type="checkbox" id="wbRaw"> raw (no len prefix)</label>
-        <button onclick="chWBlock()">Send</button>
-      </div>
-      <div id="wbResult" style="font-family:monospace;font-size:10px;margin-top:4px;color:var(--text-dim)"></div>
+    <hr>
+    <div class="field-label batt-section-label">Raw byte write (reg + N bytes, no length prefix):</div>
+    <div class="cluster">
+      <label class="kv-label">reg <input id="wbReg" class="mono input-compact" value="0xEE"></label>
+      <input id="wbData" class="mono batt-flex1" placeholder="hex payload e.g. 5AA5DEAD...">
+      <label class="kv-label"><input type="checkbox" id="wbRaw"> raw (no len prefix)</label>
+      <button onclick="chWBlock()">Send</button>
     </div>
-    <pre id="chResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:6px;margin:6px 0;max-height:300px;overflow:auto;font-family:monospace"></pre>
-    <div id="chAnalysis" style="font-size:11px;color:var(--text-dim);margin-top:4px"></div>
+    <div id="wbResult" class="code-output batt-result"></div>
+    <pre id="chResult" class="code-output batt-tall"></pre>
+    <div id="chAnalysis" class="field-help"></div>
   </div>
 
+  <!-- Clone Vendor Register Viewer -->
   <div class="card batt-clone-only">
-    <h2>Vendor Register Viewer (0xD0-0xFF)</h2>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+    <div class="card-header">
+      <span class="card-title">Vendor Register Viewer (0xD0–0xFF)</span>
+    </div>
+    <p class="field-help">
       Live view of vendor-specific SBS registers. Changes highlighted.
       Clone chips often expose backdoor/factory commands in this range.
     </p>
-    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+    <div class="cluster">
       <button onclick="vrvRefresh()">Refresh now</button>
-      <label style="font-size:11px"><input type="checkbox" id="vrvAuto" onchange="vrvAutoToggle()"> Auto 2s</label>
-      <span id="vrvStatus" style="color:var(--text-dim);font-size:11px"></span>
+      <label class="kv-label"><input type="checkbox" id="vrvAuto" onchange="vrvAutoToggle()"> Auto 2s</label>
+      <span id="vrvStatus" class="field-help"></span>
     </div>
-    <div id="vrvGrid" style="font-family:monospace;font-size:10px;max-height:260px;overflow:auto"></div>
+    <div id="vrvGrid" class="code-output batt-vrv"></div>
   </div>
 
-  <div class="card batt-clone-only" style="grid-column:1/-1;max-width:100%">
-    <h2>Clone Explorer — discover hidden registers & bypass attempts</h2>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:6px">
+  <!-- Clone Explorer -->
+  <div class="card batt-clone-only col-span-full">
+    <div class="card-header">
+      <span class="card-title">Clone Explorer — discover hidden registers &amp; bypass attempts</span>
+    </div>
+    <p class="field-help">
       Clone batteries (non-TI chips) sometimes ignore seal protection or expose vendor-specific commands.
       Scan SBS and MAC space to find what responds — then try writes to see if seal is cosmetic.
     </p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div class="cluster">
       <button onclick="ceSbsScan()">Scan SBS 0x00-0xFF</button>
       <button onclick="ceMacScan(0x0000, 0x00FF)">Scan MAC 0x0000-0x00FF</button>
       <button onclick="ceMacScan(0x4000, 0x40FF)">Scan MAC 0x4000-0x40FF (DF-ish)</button>
       <button onclick="ceBypassTest()">Seal Bypass Test (safe)</button>
-      <span id="ceStatus" style="color:var(--text-dim);font-size:12px;align-self:center"></span>
+      <span id="ceStatus" class="field-help"></span>
     </div>
-    <pre id="ceResult" style="background:var(--input-bg);color:var(--accent);font-size:10px;padding:6px;margin:6px 0;max-height:400px;overflow:auto;font-family:monospace;white-space:pre-wrap"></pre>
+    <pre id="ceResult" class="code-output batt-tall"></pre>
   </div>
 
-  <div class="card batt-dji-only" style="grid-column:1/-1;max-width:100%">
-    <h2>Data Flash Editor (BQ9003/BQ40z307)</h2>
-    <div class="warning">
-      ⚠ Для чтения/записи Data Flash батарея должна быть <b>unsealed</b>.<br>
+  <!-- DJI Data Flash Editor -->
+  <div class="card batt-dji-only col-span-full">
+    <div class="card-header">
+      <span class="card-title">Data Flash Editor (BQ9003 / BQ40z307)</span>
+    </div>
+    <div class="banner banner-warn">
+      ⚠ Для чтения/записи Data Flash батарея должна быть <b>unsealed</b>.
       Запись неправильных значений может вывести батарею из строя!
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+    <div class="cluster">
       <button onclick="dfLoadMap()">Load Map</button>
       <button onclick="dfReadAll()" id="dfReadAllBtn" disabled>Read All Values</button>
       <button onclick="dfExport()" id="dfExportBtn" disabled>Export JSON</button>
-      <label style="cursor:pointer;padding:10px 16px;background:var(--accent-dim);color:#fff;border-radius:6px;font-size:14px">
-        Import Killer.ini <input type="file" accept=".ini" onchange="dfImportKillerIni(event)" style="display:none">
+      <label class="file-label">
+        Import Killer.ini <input type="file" accept=".ini" onchange="dfImportKillerIni(event)" class="batt-hidden">
       </label>
-      <span id="dfStatus" style="color:var(--text-dim);font-size:12px;align-self:center"></span>
+      <span id="dfStatus" class="field-help"></span>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0;padding:6px;background:#12122a;border-radius:4px;align-items:center">
-      <span style="color:#888;font-size:11px">Compare:</span>
-      <label style="font-size:11px;cursor:pointer;color:#0af">
-        Import A <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'A')" style="display:none">
+    <div class="cluster batt-compare-row">
+      <span class="kv-label">Compare:</span>
+      <label class="kv-label batt-import-a">
+        Import A <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'A')" class="batt-hidden">
       </label>
-      <label style="font-size:11px;cursor:pointer;color:#f0a">
-        Import B <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'B')" style="display:none">
+      <label class="kv-label batt-import-b">
+        Import B <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'B')" class="batt-hidden">
       </label>
-      <label style="font-size:11px"><input type="checkbox" id="dfCompareMode" onchange="dfFilterApply()"> Compare mode</label>
-      <button onclick="dfUseCurrentAs('A')" style="font-size:11px;padding:3px 8px">A = current</button>
-      <button onclick="dfUseCurrentAs('B')" style="font-size:11px;padding:3px 8px">B = current</button>
-      <button onclick="dfClearSnapshots()" style="font-size:11px;padding:3px 8px">Clear</button>
-      <span id="dfSnapshotStatus" style="color:#888;font-size:11px"></span>
+      <label class="kv-label"><input type="checkbox" id="dfCompareMode" onchange="dfFilterApply()"> Compare mode</label>
+      <button class="btn-sm" onclick="dfUseCurrentAs('A')">A = current</button>
+      <button class="btn-sm" onclick="dfUseCurrentAs('B')">B = current</button>
+      <button class="btn-sm" onclick="dfClearSnapshots()">Clear</button>
+      <span id="dfSnapshotStatus" class="field-help"></span>
     </div>
-    <div id="dfFilter" style="display:none;margin:6px 0">
-      <input id="dfSearch" type="text" placeholder="Filter by name..." oninput="dfFilterApply()" style="width:200px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-size:12px">
-      <label style="font-size:12px;margin-left:8px"><input type="checkbox" id="dfDiffOnly" onchange="dfFilterApply()"> Only changed</label>
+    <div id="dfFilter" class="cluster batt-hidden">
+      <input id="dfSearch" type="text" placeholder="Filter by name..." oninput="dfFilterApply()" class="batt-df-search">
+      <label class="kv-label"><input type="checkbox" id="dfDiffOnly" onchange="dfFilterApply()"> Only changed</label>
     </div>
-    <div id="dfTree" style="font-size:12px;max-height:500px;overflow:auto"></div>
+    <div id="dfTree" class="batt-df-tree"></div>
   </div>
 
+  <!-- I2C Diagnostics -->
   <div class="card">
-    <h2>I2C Diagnostics</h2>
+    <div class="card-header">
+      <span class="card-title">I2C Diagnostics</span>
+    </div>
     <div class="grid">
       <button onclick="i2cPreflight()">Preflight Check</button>
       <button onclick="i2cScan()">Full Bus Scan</button>
     </div>
-    <pre id="preflightResult" style="background:#000;color:#0af;font-size:11px;padding:6px;margin:4px 0;display:none"></pre>
-    <pre id="i2cScanResult" style="background:#000;color:#0af;font-size:11px;padding:6px;margin:4px 0;display:none"></pre>
+    <pre id="preflightResult" class="code-output batt-hidden"></pre>
+    <pre id="i2cScanResult" class="code-output batt-hidden"></pre>
   </div>
 
+  <!-- SMBus Transaction Log -->
   <div class="card">
-    <h2>SMBus Transaction Log</h2>
-    <p style="color:#888;font-size:11px;margin:0 0 6px">
+    <div class="card-header">
+      <span class="card-title">SMBus Transaction Log</span>
+    </div>
+    <p class="field-help">
       Все I2C транзакции на шине батареи. Включи логирование, чтобы записывать.
     </p>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div class="cluster">
       <button onclick="smbLogToggle()" id="smbLogToggleBtn">Enable Logging</button>
       <button onclick="smbLogRefresh()">Refresh</button>
       <button onclick="smbLogExport()">Export .txt</button>
-      <label><input type="checkbox" id="smbLogAuto" onchange="smbLogAutoToggle()"> Auto 1s</label>
+      <label class="kv-label"><input type="checkbox" id="smbLogAuto" onchange="smbLogAutoToggle()"> Auto 1s</label>
     </div>
-    <pre id="smbLog" style="background:#000;color:#0f0;font-size:11px;padding:8px;margin:6px 0;max-height:300px;overflow:auto;white-space:pre-wrap">(logging off)</pre>
+    <pre id="smbLog" class="code-output batt-tall">(logging off)</pre>
   </div>
 
+  <!-- SMBus Console -->
   <div class="card">
-    <h2>SMBus Console</h2>
-    <div style="display:flex;gap:4px;flex-wrap:wrap">
-      <input id="smbAddr" value="0x0B" placeholder="addr" style="width:50px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
-      <select id="smbOp" style="background:#222;color:#fff;border:1px solid #555;padding:4px">
+    <div class="card-header">
+      <span class="card-title">SMBus Console</span>
+    </div>
+    <div class="cluster">
+      <input id="smbAddr" class="mono input-compact" value="0x0B" placeholder="addr">
+      <select id="smbOp">
         <option value="readWord">Read Word</option>
         <option value="readBlock">Read Block</option>
         <option value="writeWord">Write Word</option>
@@ -304,13 +347,23 @@
         <option value="macBlockRead">MAC Block Read</option>
         <option value="macCmd">MAC Command</option>
       </select>
-      <input id="smbReg" placeholder="reg 0x00" style="width:60px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
-      <input id="smbData" placeholder="data (hex)" style="flex:1;min-width:80px;background:#222;color:#fff;border:1px solid #555;padding:4px;font-family:monospace">
+      <input id="smbReg" class="mono input-compact" placeholder="reg 0x00">
+      <input id="smbData" class="mono batt-flex1" placeholder="data (hex)">
       <button onclick="smbExec()">Send</button>
     </div>
-    <pre id="smbResult" style="background:#000;color:#0f0;font-size:11px;padding:6px;margin:4px 0;max-height:200px;overflow:auto">(idle)</pre>
-    <div style="display:flex;gap:4px;margin-top:4px">
+    <pre id="smbResult" class="code-output">(idle)</pre>
+    <div class="cluster">
       <button onclick="battSnapshot()">Snapshot JSON</button>
     </div>
   </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail col-span-full">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value">I2C @ GP10/GP11 (SMBus)</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">Battery @ 0x0B · 100 kHz</span>
+  </div>
+
 </div>

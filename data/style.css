@@ -22,6 +22,11 @@
   --text-muted:       #71717a;
   --text-subtle:      #a1a1aa;
   --text-on-primary:  #ffffff;
+  /* Legacy aliases — keep until all tabs migrate to canonical names. */
+  --text-dim:         #71717a; /* alias of --text-muted */
+  --accent:           #2563eb; /* alias of --primary */
+  --accent-dim:       #1d4ed8; /* alias of --primary-hover */
+  --status-on:        #16a34a; /* alias of --success */
 
   /* Brand & semantic */
   --primary:          #2563eb;
@@ -110,6 +115,10 @@
   --text:             #fafafa;
   --text-muted:       #a1a1aa;
   --text-subtle:      #52525b;
+  --text-dim:         #a1a1aa;
+  --accent:           #3b82f6;
+  --accent-dim:       #2563eb;
+  --status-on:        #22c55e;
 
   --primary:          #3b82f6;
   --primary-hover:    #60a5fa;
@@ -883,6 +892,60 @@ label {
 .sys-min-line { min-height: 1em; }
 /* Mode reference block — preformatted code-output but smaller */
 .sys-mode-reference { white-space: pre; line-height: 1.6; margin-top: var(--s-2); }
+
+/* ---------- Battery tab helpers ---------- */
+/* Hidden state — JS toggles `.batt-hidden` instead of inline `style.display`. */
+.batt-hidden { display: none; }
+/* Subtab right-side hint label (auto-detect note). */
+.batt-subtab-hint { margin-left: auto; align-self: center; font-size: var(--text-xs); }
+/* Spacing for second row of summary KVs in the Smart Battery card. */
+.batt-secondary-row { margin-top: var(--s-2); }
+/* Live-chart SVG background — matches input wells. */
+.batt-live-chart { background: var(--input-bg); border-radius: var(--r); }
+/* Chart legend KV row — small, even spacing. */
+.batt-chart-legend { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--s-1); justify-content: space-between; }
+/* Small monospace decoded text under each Status register. */
+.batt-decoded { font-size: var(--text-xs); padding: var(--s-1) var(--s-2); margin-top: 0; max-height: none; }
+/* Service tab full-width red action. */
+.batt-full-service-btn { width: 100%; margin-top: var(--s-2); }
+/* Yellow result line under service action buttons. */
+.batt-action-result { margin-top: var(--s-2); min-height: 1em; }
+/* Section sub-label inside a card (used for "Manual key pair:" etc.). */
+.batt-section-label { margin-top: var(--s-2); margin-bottom: var(--s-1); }
+/* Key list under unseal profile select. */
+.batt-key-list { margin: var(--s-2) 0; }
+/* Single-line success result under unseal wizard. */
+.batt-result { margin-top: var(--s-2); min-height: 1em; }
+/* Flex-grow inside a cluster — wide select / wide hex input. */
+.batt-flex1 { flex: 1; min-width: 120px; }
+/* Tall scrollable result panes. */
+.batt-tall { max-height: 300px; overflow: auto; }
+/* Vendor register viewer panel. */
+.batt-vrv { font-size: var(--text-xs); max-height: 260px; overflow: auto; }
+/* DF tree container. */
+.batt-df-tree { font-size: var(--text-sm); max-height: 500px; overflow: auto; margin-top: var(--s-2); }
+/* DF compare action row — a bit dimmer + inset. */
+.batt-compare-row { background: var(--bg-subtle); padding: var(--s-2); border-radius: var(--r); }
+.batt-compare-row .batt-import-a { color: var(--info); cursor: pointer; }
+.batt-compare-row .batt-import-b { color: var(--danger); cursor: pointer; }
+/* DF search input — same width regardless of cluster width. */
+.batt-df-search { max-width: 220px; }
+/* Fleet table container. */
+.batt-fleet-table { margin-top: var(--s-2); overflow: auto; }
+
+/* file-label — replaces inline-styled <label> wrappers around <input type=file>. */
+.file-label {
+  display: inline-flex; align-items: center; gap: var(--s-2);
+  cursor: pointer;
+  padding: var(--s-2) var(--s-3);
+  background: var(--primary);
+  color: var(--text-on-primary);
+  border-radius: var(--r);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: background var(--t-fast);
+}
+.file-label:hover { background: var(--primary-hover); }
 
 /* ---------- Layout utilities (small set — don't sprawl) ---------- */
 
