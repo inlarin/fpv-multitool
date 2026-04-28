@@ -1736,7 +1736,11 @@ function rcvPickAction(name) {
   });
   // Post-open init hooks
   if (name === 'flash') fwPathUpdate();
-  if (name === 'recovery') { try { otadataRefresh(); } catch (_) {} }
+  // otadata refresh only when RX is in DFU/stub — otherwise the API 500s and
+  // pollutes the console with no useful info for the user.
+  if (name === 'recovery' && (_rxMode === 'dfu' || _rxMode === 'stub')) {
+    try { otadataRefresh(); } catch (_) {}
+  }
 }
 // Backwards-compat shim — older code paths called rcvOpen('flash'/'config'/'live').
 function rcvOpen(section) {

@@ -272,7 +272,20 @@ static void broadcastTelemetry() {
     doc["ip"] = WifiManager::getIP();
     doc["uptime"] = millis();
     doc["heap"] = ESP.getFreeHeap();
+    doc["psram_free"] = ESP.getFreePsram();
     doc["clients"] = s_ws->count();
+    // WiFi mode/SSID/RSSI/gateway for the System tab WiFi card.
+    {
+      wifi_mode_t mode = WiFi.getMode();
+      bool sta = (mode & WIFI_MODE_STA) && WiFi.status() == WL_CONNECTED;
+      doc["wifi_mode"] = sta ? "STA" : "AP";
+      doc["sta_connected"] = sta;
+      if (sta) {
+        doc["ssid"] = WiFi.SSID();
+        doc["rssi"] = WiFi.RSSI();
+        doc["gw"] = WiFi.gatewayIP().toString();
+      }
+    }
     msg = "";
     serializeJson(doc, msg);
     s_ws->textAll(msg);
