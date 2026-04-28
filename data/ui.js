@@ -116,6 +116,14 @@ function showTab(name) {
   if (name === 'setup') setupRefresh();
   if (name === 'sys') portBRefresh();
   if (name === 'usb') { usbRefresh(); cpLogRefresh(); cpLogAutoToggle(); }
+  if (name === 'motor') {
+    motorPickAction(_curMotorAction || 'throttle');
+    // bar-fill default width comes from CSS, but throttleBar is data-driven —
+    // sync to slider on tab open so it paints 0% (or current armed value).
+    const tb = document.getElementById('throttleBar');
+    const ts = document.getElementById('throttleSlider');
+    if (tb && ts) tb.style.width = (+ts.value/2000*100) + '%';
+  }
   if (name === 'battery') { loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false); }
   if (name === 'receiver') {
     if (!window.ELRS_MODELS)   window.ELRS_MODELS = ELRS_MODELS;
@@ -191,6 +199,20 @@ function servoStatePoll() {
 
 // === MOTOR ===
 let armed = false;
+// Tracks which Motor sub-action (throttle / control / beep / telem) is open.
+let _curMotorAction = 'throttle';
+function motorPickAction(name) {
+  _curMotorAction = name;
+  document.querySelectorAll('#tab-motor .action-picker .action-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.action === name);
+  });
+  ['throttle','control','beep','telem'].forEach(a => {
+    const el = document.getElementById('motor-action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+  // ESC telemetry polls only while its panel is visible.
+  if (name === 'telem') escTelemPoll();
+}
 function motorArm() {
   send({cmd:'motorArm'});
 }
@@ -202,6 +224,8 @@ function motorDisarm() {
 function onThrottle() {
   const t = +document.getElementById('throttleSlider').value;
   document.getElementById('throttleVal').textContent = t;
+  // Dynamic bar-fill width — only place where inline style is acceptable
+  // (varies per slider tick; can't be a static class).
   document.getElementById('throttleBar').style.width = (t/2000*100) + '%';
   send({cmd:'throttle', value: t});
 }
@@ -242,9 +266,14 @@ function escTelemStop() {
 function escTelemPoll() {
   fetch('/api/esc/telem/state').then(r=>r.json()).then(d=>{
     const conn = document.getElementById('escTelemConn');
-    if (!d.running) { conn.textContent='OFF'; conn.className='status off'; }
-    else if (d.connected) { conn.textContent='CONNECTED'; conn.className='status on'; }
-    else { conn.textContent='NO DATA'; conn.className='status off'; }
+    if (conn) {
+      let label, cls;
+      if (!d.running) { label = 'OFF'; cls = 'badge-neutral'; }
+      else if (d.connected) { label = 'CONNECTED'; cls = 'badge-success'; }
+      else { label = 'NO DATA'; cls = 'badge-warn'; }
+      conn.className = 'badge ' + cls;
+      conn.innerHTML = '<span class="dot' + (d.running && d.connected ? ' on' : '') + '"></span>' + label;
+    }
     document.getElementById('escTelemRate').textContent =
       d.frameRateHz + ' Hz (pp=' + d.polePairs + ')';
     if (d.frameCount > 0) {
@@ -3762,11 +3791,17 @@ function handleMsg(m) {
   }
   else if (m.type === 'motor') {
     armed = m.armed;
-    const s = document.getElementById('motorStatus');
-    s.className = 'status ' + (armed ? 'on' : 'off');
-    s.textContent = armed ? 'ARMED' : 'DISARMED';
-    document.getElementById('throttleSlider').disabled = !armed;
-    document.getElementById('armBtn').textContent = armed ? 'Re-arm' : 'ARM';
+    const s = document.getElementById('armBadge');
+    if (s) {
+      s.className = 'badge ' + (armed ? 'badge-success' : 'badge-neutral');
+      s.innerHTML = '<span class="dot' + (armed ? ' on' : '') + '"></span>' + (armed ? 'ARMED' : 'DISARMED');
+    }
+    const sl = document.getElementById('throttleSlider');
+    if (sl) sl.disabled = !armed;
+    const ab = document.getElementById('armBtn');
+    if (ab) ab.textContent = armed ? 'Re-arm' : '⚡ Arm motor';
+    // Quick-step throttle preset buttons follow armed state.
+    document.querySelectorAll('#tab-motor [data-throttle-preset]').forEach(b => { b.disabled = !armed; });
   }
   else if (m.type === 'crsf') {
     // Drive cross-tab Port B contention banner: if CRSF is running and user
