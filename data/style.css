@@ -839,6 +839,29 @@ label {
 .bar-fill.success { background: var(--success); }
 .bar-fill.danger  { background: var(--danger); }
 
+/* ---------- RC sniffer channel grid ---------- */
+/* Channel display — label + value + bar in a single row, repeated. */
+.rc-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s-2) var(--s-4);
+}
+.rc-channel {
+  display: grid;
+  grid-template-columns: 50px 70px 1fr;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--text-sm);
+}
+.rc-channel-label { color: var(--text-muted); }
+.rc-channel-value { font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right; font-variant-numeric: tabular-nums; }
+.rc-channel .bar { margin: 0; height: 8px; }
+/* Color modifiers driven by rcPoll based on channel range. */
+.rc-channel.warn .rc-channel-value { color: var(--warn); }
+.rc-channel.warn .bar-fill { background: var(--warn); }
+.rc-channel.danger .rc-channel-value { color: var(--danger); }
+.rc-channel.danger .bar-fill { background: var(--danger); }
+
 /* ---------- Sys-tab specific helpers ---------- */
 /* Native <details> arrow looks ugly inside .card. Hide and rely on the
    summary text being its own affordance. Used in tab-sys advanced

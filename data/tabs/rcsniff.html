@@ -1,34 +1,65 @@
 <div id="tab-rcsniff" class="tab-content" style="display:none">
-  <div class="card">
-    <h2>RC Protocol Sniffer</h2>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px">
-      Подключи сигнал с приёмника на GPIO 10 (ESP RX), GND, 5V. Плата автоматически
-      определит протокол (SBUS / iBus / PPM) или выбери вручную.<br>
-      ⚠ Убедись что <b>Port B</b> (вкладка System → Port B Mode) в режиме <code>UART</code> или <code>GPIO</code>.
-    </p>
-    <div class="row"><span class="label">Status:</span>
-      <span>
-        <span id="rcStatus" class="status off">STOPPED</span>
-        <span id="rcConn" class="status off">NO LINK</span>
-      </span>
-    </div>
-    <div class="row"><span class="label">Proto:</span><span class="value" id="rcProto">-</span></div>
-    <div class="row"><span class="label">Rate:</span><span class="value" id="rcRate">- Hz</span></div>
-    <div class="row"><span class="label">Frames / CRC errors:</span><span class="value" id="rcFrames">0 / 0</span></div>
-    <div class="row"><span class="label">Failsafe:</span><span class="value" id="rcFS">-</span></div>
-    <div class="grid">
-      <button class="success" onclick="rcStart('auto')">Auto-detect</button>
-      <button onclick="rcStart('sbus')">SBUS</button>
-    </div>
-    <div class="grid">
-      <button onclick="rcStart('ibus')">iBus</button>
-      <button onclick="rcStart('ppm')">PPM</button>
-    </div>
-    <button class="danger" onclick="rcStop()" style="width:100%">Stop</button>
+
+  <div class="banner banner-info col-span-full">
+    Подключи сигнал с приёмника на <code>GPIO 10</code> (ESP RX), GND, 5V. Плата автоматически
+    определит протокол: <b>SBUS · iBus · PPM</b>. Убедись что <b>Port B</b>
+    (System → Port B Mode) в режиме <code>UART</code> или <code>GPIO</code>.
   </div>
 
-  <div class="card">
-    <h2>Channels (μs)</h2>
-    <div id="rcChannels" style="font-family:monospace;font-size:12px"></div>
+  <!-- Detection card -->
+  <div class="card col-span-full">
+    <div class="card-header">
+      <span class="card-title">Protocol detection</span>
+      <span class="badge badge-neutral" id="rcStatusBadge"><span class="dot"></span>STOPPED</span>
+      <span class="badge badge-neutral" id="rcConnBadge">NO LINK</span>
+    </div>
+
+    <div class="cluster">
+      <button onclick="rcStart('auto')">🔍 Auto-detect</button>
+      <span class="kv-label">or force:</span>
+      <button class="secondary" onclick="rcStart('sbus')">SBUS</button>
+      <button class="secondary" onclick="rcStart('ibus')">iBus</button>
+      <button class="secondary" onclick="rcStart('ppm')">PPM</button>
+      <span class="toolbar-spacer"></span>
+      <button class="danger ghost" onclick="rcStop()">Stop</button>
+    </div>
   </div>
+
+  <!-- Stat grid -->
+  <div class="stat-grid col-span-full">
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="rcProto">—</div>
+      <div class="stat-tile-label">Proto</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="rcRate">— Hz</div>
+      <div class="stat-tile-label">Frame rate</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="rcFrames">0 / 0</div>
+      <div class="stat-tile-label">Frames / CRC err</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-value mono" id="rcFS">—</div>
+      <div class="stat-tile-label">Failsafe / Lost</div>
+    </div>
+  </div>
+
+  <!-- Channels -->
+  <div class="card col-span-full">
+    <div class="card-header">
+      <span class="card-title">Channels (μs)</span>
+    </div>
+    <div id="rcChannels" class="rc-channel-grid"></div>
+  </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail col-span-full">
+    <span class="dot on"></span>
+    <span class="kv-label">Port B</span>
+    <span class="kv-value" id="rcRailMode">—</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action">RC sniffer · auto-baud / auto-format</span>
+  </div>
+
 </div>

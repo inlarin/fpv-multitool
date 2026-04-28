@@ -1042,32 +1042,46 @@ function rcStart(proto) {
 function rcStop() {
   fetch('/api/rc/stop', {method:'POST'}).then(()=>{
     if (_rcPollTimer) { clearInterval(_rcPollTimer); _rcPollTimer = null; }
-    document.getElementById('rcStatus').className='status off';
-    document.getElementById('rcStatus').textContent='STOPPED';
-    document.getElementById('rcConn').className='status off';
-    document.getElementById('rcConn').textContent='NO LINK';
+    const st = document.getElementById('rcStatusBadge');
+    if (st) { st.className = 'badge badge-neutral'; st.innerHTML = '<span class="dot"></span>STOPPED'; }
+    const co = document.getElementById('rcConnBadge');
+    if (co) { co.className = 'badge badge-neutral'; co.textContent = 'NO LINK'; }
   });
 }
 function rcPoll() {
   fetch('/api/rc/state').then(r=>r.json()).then(s=>{
-    const st = document.getElementById('rcStatus');
-    st.className = 'status ' + (s.running ? 'on' : 'off');
-    st.textContent = s.running ? 'RUNNING' : 'STOPPED';
-    const co = document.getElementById('rcConn');
-    co.className = 'status ' + (s.connected ? 'on' : 'off');
-    co.textContent = s.connected ? 'LINK' : 'NO LINK';
+    const st = document.getElementById('rcStatusBadge');
+    if (st) {
+      st.className = 'badge ' + (s.running ? 'badge-success' : 'badge-neutral');
+      st.innerHTML = '<span class="dot' + (s.running ? ' on' : '') + '"></span>' + (s.running ? 'RUNNING' : 'STOPPED');
+    }
+    const co = document.getElementById('rcConnBadge');
+    if (co) {
+      co.className = 'badge ' + (s.connected ? 'badge-success' : 'badge-neutral');
+      co.textContent = s.connected ? 'LINK' : 'NO LINK';
+    }
     document.getElementById('rcProto').textContent = s.proto;
     document.getElementById('rcRate').textContent = s.frameRateHz + ' Hz';
     document.getElementById('rcFrames').textContent = s.frameCount + ' / ' + s.crcErrors;
     document.getElementById('rcFS').textContent = (s.failsafe ? 'FAILSAFE ' : '') + (s.lostFrame ? 'LOST' : s.failsafe ? '' : 'OK');
-    // Render channels as bars
+    // Render channels into the rc-channel-grid using semantic classes for
+    // out-of-range warnings — no inline color, design-system safe.
+    const channels = s.channels || [];
     let html = '';
-    (s.channels || []).forEach((v, i) => {
+    channels.forEach((v, i) => {
       const pct = Math.max(0, Math.min(100, (v - 988) / (2012 - 988) * 100));
-      const col = v < 900 || v > 2100 ? '#f44' : (v < 1000 || v > 2000 ? '#fa0' : '#4f4');
-      html += `<div class="row" style="padding:2px 0"><span class="label" style="width:40px">Ch${i+1}</span><span class="value" style="width:60px;color:${col}">${v}μs</span><div class="bar" style="flex:1;margin-left:8px;height:10px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
+      const cls = (v < 900 || v > 2100) ? 'danger' :
+                  (v < 1000 || v > 2000) ? 'warn' : '';
+      html += '<div class="rc-channel ' + cls + '">' +
+        '<span class="rc-channel-label">Ch' + (i+1) + '</span>' +
+        '<span class="rc-channel-value">' + v + ' μs</span>' +
+        '<div class="bar"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+      '</div>';
     });
-    document.getElementById('rcChannels').innerHTML = html || '<div style="color:var(--text-dim);padding:10px">No channel data yet</div>';
+    const target = document.getElementById('rcChannels');
+    if (target) {
+      target.innerHTML = html || '<div class="empty-state-hint" style="padding: var(--s-3)">No channel data yet</div>';
+    }
   });
 }
 
