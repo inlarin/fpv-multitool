@@ -125,7 +125,11 @@ function showTab(name) {
     if (tb && ts) tb.style.width = (+ts.value/2000*100) + '%';
   }
   if (name === 'battery') {
-    loadProfiles(); loadMacCatalog(); showBattSub(_curBattSub, false);
+    loadProfiles(); loadMacCatalog();
+    // showBattSub() still drives .batt-dji-only / .batt-clone-only visibility
+    // within action panels (DJI status registers, Clone explorer, etc).
+    showBattSub(_curBattSub, false);
+    battPickAction(_curBattAction || 'read');
     // bar-fill default is 100% width — paint to 0% on first open until WS pushes
     // a real SOC. Mirrors the motor throttleBar fix.
     const bb = document.getElementById('battBar');
@@ -300,6 +304,59 @@ function escTelemPoll() {
 }
 
 // === BATTERY ===
+// Tracks which Battery action panel (read / reset / probe / forensics / library)
+// is currently visible. Persists across tab switches via localStorage.
+let _curBattAction = localStorage.getItem('battAction') || 'read';
+function battPickAction(name) {
+  _curBattAction = name;
+  localStorage.setItem('battAction', name);
+  document.querySelectorAll('#battActionPicker .action-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.action === name);
+  });
+  ['read','reset','probe','forensics','library'].forEach(a => {
+    const el = document.getElementById('batt-action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+  // Lazy-render Library reference data when first opened.
+  if (name === 'library') libPopulate();
+  // VRV polling only meaningful while Forensics panel visible.
+  if (name === 'forensics' && document.getElementById('vrvAuto')?.checked) vrvRefresh();
+}
+
+// Library — reference panel showing known profiles + MAC catalog.
+function libPopulate() {
+  const sel = document.getElementById('libProfile');
+  if (sel && sel.options.length === 0 && _profiles.length) {
+    _profiles.forEach((p, i) => {
+      const o = document.createElement('option'); o.value = i; o.textContent = p.name; sel.appendChild(o);
+    });
+    libShowProfile();
+  }
+  const macList = document.getElementById('libMacCatalog');
+  if (macList && !macList.dataset.populated && _macCatalog && _macCatalog.length) {
+    let html = '<table class="rcv-cfg-table"><thead><tr><th>Cmd</th><th>Name</th><th>Description</th></tr></thead><tbody>';
+    _macCatalog.forEach(m => {
+      const cmd = '0x' + (m.cmd ?? m.code ?? 0).toString(16).toUpperCase().padStart(4, '0');
+      html += '<tr><td class="mono">' + cmd + '</td><td>' + (m.name || '-') + '</td><td>' + (m.desc || '') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    macList.innerHTML = html;
+    macList.dataset.populated = '1';
+  }
+}
+function libShowProfile() {
+  const sel = document.getElementById('libProfile'); if (!sel) return;
+  const p = _profiles[+sel.value]; if (!p) return;
+  const det = document.getElementById('libProfileDetails');
+  if (!det) return;
+  det.innerHTML =
+    '<div class="kv"><span class="kv-label">Chip</span><span class="kv-value mono">' + (p.chip || '-') + '</span></div>' +
+    '<div class="kv"><span class="kv-label">Unseal keys</span><span class="kv-value mono">' +
+      p.unsealKeys.map(k => k.w1 + '/' + k.w2 + ' (' + k.desc + ')').join('<br>') + '</span></div>' +
+    '<div class="kv"><span class="kv-label">FAS keys</span><span class="kv-value mono">' +
+      p.fasKeys.map(k => k.w1 + '/' + k.w2 + ' (' + k.desc + ')').join('<br>') + '</span></div>';
+}
+
 async function battAction(action) {
   const confirmMsgs = {
     unseal:      'Unseal battery? Tries TI default key.\nMavic 2+/3/4 will likely fail (no public key).',
@@ -3464,7 +3521,7 @@ function battSubAutoDetect(devType, chipType, mfr) {
   }
   // Update hint
   const hint = document.getElementById('battSubHint');
-  if (hint) hint.innerHTML = 'auto: <b style="color:var(--accent)">' + auto + '</b> <a href="#" onclick="battSubReset(); return false;" style="color:var(--text-dim);font-size:10px">[reset]</a>';
+  if (hint) hint.innerHTML = 'auto: <b class="text-info">' + auto + '</b> <a href="#" onclick="battSubReset(); return false;" class="text-muted">[reset]</a>';
   if (auto !== _curBattSub) showBattSub(auto, false);
 }
 
@@ -3775,7 +3832,11 @@ function handleMsg(m) {
     document.getElementById('mfgStatus').textContent = m.mfgDecoded || 'N/A';
     document.getElementById('mfgDecoded').textContent = hex8(m.manufacturingStatus);
 
-    document.getElementById('cellsSync').textContent = (m.cellsSync ? 'sync' : 'async') + ', ' + (m.cellCount || '?') + 'S';
+    const syncEl = document.getElementById('cellsSync');
+    if (syncEl) {
+      syncEl.textContent = (m.cellsSync ? 'sync' : 'async') + ' · ' + (m.cellCount || '?') + 'S';
+      syncEl.className = 'badge ' + (m.cellsSync ? 'badge-success' : 'badge-neutral');
+    }
     document.getElementById('packV').textContent = m.packV ? (m.packV/1000).toFixed(2) + ' V' : '-';
 
     let cellsHtml = '';
@@ -3786,16 +3847,20 @@ function handleMsg(m) {
         if (v < minV) minV = v;
         if (v > maxV) maxV = v;
         const pct = Math.max(0, Math.min(100, (v-2500)/(4200-2500)*100));
-        const col = v < 3300 ? '#f44' : v < 3600 ? '#fa0' : '#4f4';
-        cellsHtml += `<div class="row"><span class="label">Cell ${i+1}</span><span class="value" style="color:${col}">${(v/1000).toFixed(3)} V</span></div>`;
-        cellsHtml += `<div class="bar"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div>`;
+        // Semantic colour class based on cell voltage range.
+        const cls = v < 3300 ? 'danger' : v < 3600 ? 'warn' : 'success';
+        cellsHtml += '<div class="kv"><span class="kv-label">Cell ' + (i+1) + '</span>' +
+          '<span class="kv-value mono text-' + cls + '">' + (v/1000).toFixed(3) + ' V</span></div>';
+        cellsHtml += '<div class="bar"><div class="bar-fill bar-fill-' + cls + '" style="width:' + pct + '%"></div></div>';
       }
     });
     document.getElementById('cellsGrid').innerHTML = cellsHtml;
     const delta = (maxV > 0 && minV < 9999) ? (maxV - minV) : 0;
     const dEl = document.getElementById('cellDelta');
-    dEl.textContent = delta + ' mV' + (delta > 50 ? ' UNBALANCED' : '');
-    dEl.style.color = delta > 50 ? '#f44' : '#6f6';
+    if (dEl) {
+      dEl.textContent = 'Δ ' + delta + ' mV' + (delta > 50 ? ' UNBALANCED' : '');
+      dEl.className = 'badge ' + (delta > 50 ? 'badge-danger' : (delta > 0 ? 'badge-success' : 'badge-neutral'));
+    }
   }
   else if (m.type === 'sys') {
     document.getElementById('sysIP').textContent = m.ip;

@@ -1022,8 +1022,11 @@ label {
 .rcv-flash-btn { margin-top: var(--s-2); }
 /* Numbered instruction list inside hardware.json card. */
 .rcv-instr-list { margin: var(--s-2) 0; padding-left: var(--s-4); font-size: var(--text-sm); line-height: 1.5; }
-/* Variant of bar-fill for dump progress (info color). */
-.bar-fill.bar-fill-info, .bar-fill-info { background: var(--info); }
+/* Hyphen-variant bar-fill colour modifiers (cell voltage / SoC / dump progress). */
+.bar-fill.bar-fill-info,    .bar-fill-info    { background: var(--info); }
+.bar-fill.bar-fill-success, .bar-fill-success { background: var(--success); }
+.bar-fill.bar-fill-warn,    .bar-fill-warn    { background: var(--warn); }
+.bar-fill.bar-fill-danger,  .bar-fill-danger  { background: var(--danger); }
 
 /* ---------- Layout utilities (small set — don't sprawl) ---------- */
 

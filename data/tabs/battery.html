@@ -1,369 +1,473 @@
 <div id="tab-battery" class="tab-content">
 
-  <!-- Subtab selector — DJI / Clone / Generic SBS variants of this tab -->
-  <div class="subtabs col-span-full" id="battSubtabs">
-    <div class="subtab active" data-sub="dji" onclick="showBattSub('dji')">DJI Battery</div>
-    <div class="subtab" data-sub="clone" onclick="showBattSub('clone')">DJI Clone</div>
-    <div class="subtab" data-sub="generic" onclick="showBattSub('generic')">Generic SBS</div>
-    <span class="kv-label batt-subtab-hint" id="battSubHint">auto-detect based on connected battery</span>
-  </div>
-
-  <!-- Smart Battery summary -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">Smart Battery</span>
-      <span class="cluster">
-        <span id="battConn" class="badge badge-neutral">NO LINK</span>
-        <span id="battDevType" class="badge badge-neutral batt-hidden">-</span>
-        <span id="battSealStatus" class="badge badge-warn batt-hidden">SEALED</span>
-      </span>
+  <!-- Action picker — primary IA per mockup/battery.html -->
+  <div class="action-picker col-span-full" id="battActionPicker">
+    <div class="action-card active" data-action="read" onclick="battPickAction('read')">
+      <span class="action-card-icon">🔋</span>
+      <span class="action-card-title">Read battery</span>
+      <span class="action-card-desc">Cells, voltage, %, temp, cycles, MAC. DJI / Mavic / generic SBS.</span>
     </div>
-
-    <div class="big mono" id="battSOC">-- %</div>
-    <div class="bar"><div class="bar-fill" id="battBar"></div></div>
-
-    <div class="grid">
-      <div class="kv"><span class="kv-label">Voltage</span><span class="kv-value mono" id="battVolt">-</span></div>
-      <div class="kv"><span class="kv-label">Current</span><span class="kv-value mono" id="battCurr">-</span></div>
-      <div class="kv"><span class="kv-label">Avg Current</span><span class="kv-value mono" id="battAvgCurr">-</span></div>
-      <div class="kv"><span class="kv-label">Temp</span><span class="kv-value mono" id="battTemp">-</span></div>
-      <div class="kv"><span class="kv-label">SOH</span><span class="kv-value mono" id="battSOH">-</span></div>
-      <div class="kv"><span class="kv-label">Cycles</span><span class="kv-value mono" id="battCycle">-</span></div>
-      <div class="kv"><span class="kv-label">Capacity</span><span class="kv-value mono" id="battCap">-</span></div>
-      <div class="kv"><span class="kv-label">Design</span><span class="kv-value mono" id="battDesign">-</span></div>
+    <div class="action-card" data-action="reset" onclick="battPickAction('reset')">
+      <span class="action-card-icon">🔄</span>
+      <span class="action-card-title">Reset cycle count</span>
+      <span class="action-card-desc">Гайдед процедура. UNSEAL → write IT → SEAL.</span>
     </div>
-    <div class="grid batt-secondary-row">
-      <div class="kv"><span class="kv-label">Time to empty</span><span class="kv-value mono" id="battTTE">-</span></div>
-      <div class="kv"><span class="kv-label">Time to full</span><span class="kv-value mono" id="battTTF">-</span></div>
-      <div class="kv"><span class="kv-label">Chg I/V</span><span class="kv-value mono" id="battChg">-</span></div>
-      <div class="kv"><span class="kv-label">Status</span><span class="kv-value mono" id="battStatusBits">-</span></div>
+    <div class="action-card" data-action="probe" onclick="battPickAction('probe')">
+      <span class="action-card-icon">🔍</span>
+      <span class="action-card-title">Probe unknown</span>
+      <span class="action-card-desc">I2C scan + SBS register sweep + SMBus console для не-DJI.</span>
+    </div>
+    <div class="action-card" data-action="forensics" onclick="battPickAction('forensics')">
+      <span class="action-card-icon">🔬</span>
+      <span class="action-card-title">Forensics</span>
+      <span class="action-card-desc">DF dump, challenge harvester, vendor regs, MAC runner.</span>
+    </div>
+    <div class="action-card" data-action="library" onclick="battPickAction('library')">
+      <span class="action-card-icon">📚</span>
+      <span class="action-card-title">Library</span>
+      <span class="action-card-desc">Known profiles + MAC catalog (reference, no I2C).</span>
     </div>
   </div>
 
-  <!-- Live Chart -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">Live Chart (last ~3 min)</span>
-      <button class="ghost btn-sm" onclick="chartClear()">Clear</button>
-    </div>
-    <svg id="liveChart" class="batt-live-chart" viewBox="0 0 400 160" width="100%" height="160">
-      <g id="chartGrid"></g>
-      <polyline id="chartV" fill="none" stroke="var(--primary)" stroke-width="1.5"/>
-      <polyline id="chartI" fill="none" stroke="var(--warn)" stroke-width="1.5"/>
-      <text id="chartLabelV" x="5" y="15" fill="var(--primary)" font-size="10" font-family="monospace">V: --</text>
-      <text id="chartLabelI" x="5" y="28" fill="var(--warn)" font-size="10" font-family="monospace">I: --</text>
-    </svg>
-    <div class="kv batt-chart-legend">
-      <span><span class="text-info">━</span> voltage (V)</span>
-      <span><span class="text-warn">━</span> current (mA)</span>
-    </div>
-  </div>
+  <!-- Auto-detect hint (subtle pill below picker) -->
+  <div class="kv-label batt-subtab-hint col-span-full" id="battSubHint">auto-detect based on connected battery</div>
 
-  <!-- Cells -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">Cells (<span id="cellsSync">async</span>)</span>
-    </div>
-    <div id="cellsGrid"></div>
-    <div class="kv"><span class="kv-label">Delta</span><span class="kv-value mono" id="cellDelta">-</span></div>
-    <div class="kv"><span class="kv-label">Pack V (sync)</span><span class="kv-value mono" id="packV">-</span></div>
-  </div>
+  <!-- ============== READ ACTION (default) ============== -->
+  <div id="batt-action-read" class="col-span-full">
 
-  <!-- DJI Status registers (Operation / Safety / PF / Mfg) -->
-  <div class="card batt-dji-only">
-    <div class="card-header">
-      <span class="card-title">Status registers</span>
-    </div>
-    <div class="kv"><span class="kv-label">Operation</span><span class="kv-value mono" id="opStatus">-</span></div>
-    <div class="code-output batt-decoded" id="opDecoded">-</div>
-
-    <div class="kv"><span class="kv-label">Safety</span><span class="kv-value mono text-success" id="safetyStatus">-</span></div>
-    <div class="code-output batt-decoded" id="safetyDecoded">-</div>
-
-    <div class="kv"><span class="kv-label">PF (Permanent Failure)</span><span class="kv-value mono" id="pfStatus">-</span></div>
-    <div class="code-output batt-decoded" id="pfDecoded">-</div>
-
-    <div class="kv"><span class="kv-label">Manufacturing</span><span class="kv-value mono" id="mfgStatus">-</span></div>
-    <div class="code-output batt-decoded" id="mfgDecoded">-</div>
-  </div>
-
-  <!-- Battery Info -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">Battery Info</span>
-    </div>
-    <div class="kv"><span class="kv-label">Model</span><span class="kv-value mono text-info" id="battModel">-</span></div>
-    <div class="kv"><span class="kv-label">Config</span><span class="kv-value mono" id="battConfig">-</span></div>
-    <div class="kv"><span class="kv-label">Manufacturer</span><span class="kv-value mono" id="battMfr">-</span></div>
-    <div class="kv"><span class="kv-label">Device</span><span class="kv-value mono" id="battDev">-</span></div>
-    <div class="kv"><span class="kv-label">Chemistry</span><span class="kv-value mono" id="battChem">-</span></div>
-    <div class="kv"><span class="kv-label">S/N / Date</span><span class="kv-value mono" id="battSN">-</span></div>
-    <div class="kv batt-hidden" id="battDjiSNRow"><span class="kv-label">DJI S/N</span><span class="kv-value mono" id="battDjiSN">-</span></div>
-    <div class="kv"><span class="kv-label">Chip</span><span class="kv-value mono" id="battChip">-</span></div>
-    <div class="kv"><span class="kv-label">FW / HW</span><span class="kv-value mono" id="battFwHw">-</span></div>
-    <div id="keyWarning" class="banner banner-warn batt-hidden">
-      ⚠ Эта модель требует DJI per-pack ключ. Публичные ключи отсутствуют. Unseal/Clear PF работать не будут.
-    </div>
-  </div>
-
-  <!-- DJI Service -->
-  <div class="card batt-dji-only">
-    <div class="card-header">
-      <span class="card-title">Service (advanced)</span>
-    </div>
-    <div class="banner banner-warn">
-      ⚠ Требует unseal. Для Mavic 2+/Mavic 3/Mavic 4 ключи DJI не опубликованы.
-    </div>
-    <div class="grid">
-      <button onclick="battAction('unseal')">Unseal</button>
-      <button onclick="battAction('clearpf')">Clear PF</button>
-    </div>
-    <div class="grid">
-      <button onclick="battAction('seal')">Seal</button>
-      <button onclick="battAction('reset')">Soft Reset</button>
-    </div>
-    <button class="danger batt-full-service-btn" onclick="battAction('fullservice')">Full Service (unseal + clear + seal)</button>
-    <div id="battActionResult" class="field-help text-warn batt-action-result"></div>
-  </div>
-
-  <!-- DJI Unseal Wizard -->
-  <div class="card batt-dji-only">
-    <div class="card-header">
-      <span class="card-title">Unseal Wizard</span>
-    </div>
-    <div class="kv">
-      <span class="kv-label">Profile</span>
-      <select id="unsealProfile" class="batt-flex1" onchange="loadProfile()"></select>
-    </div>
-    <div id="unsealKeyList" class="field-help batt-key-list"></div>
-    <div class="grid">
-      <button onclick="tryAllKeys()">Try All Keys</button>
-      <button onclick="tryFasKeys()">Try FAS Keys</button>
-    </div>
-    <div class="field-label batt-section-label">Manual key pair:</div>
-    <div class="cluster">
-      <input id="unsealW1" class="mono input-compact" placeholder="0x7EE0">
-      <input id="unsealW2" class="mono input-compact" placeholder="0xCCDF">
-      <button onclick="tryManualKey()">Send</button>
-    </div>
-
-    <hr>
-
-    <div class="field-label batt-section-label">HMAC-SHA1 challenge-response (bq40z30x+):</div>
-    <input id="unsealHmacKey" class="mono" placeholder="32-byte key as 64 hex chars" maxlength="64">
-    <div class="grid">
-      <button onclick="tryHmacUnseal()">HMAC Unseal</button>
-      <button onclick="tryGetChallenge()">Get Challenge Only</button>
-    </div>
-    <pre id="hmacResult" class="code-output batt-hidden"></pre>
-
-    <div id="unsealResult" class="field-help text-success batt-result"></div>
-  </div>
-
-  <!-- DJI MAC Command Runner -->
-  <div class="card batt-dji-only">
-    <div class="card-header">
-      <span class="card-title">MAC Command Runner</span>
-    </div>
-    <div class="cluster">
-      <select id="macSelect" class="batt-flex1"></select>
-      <button onclick="runMacCmd()">Execute</button>
-    </div>
-    <div id="macDesc" class="field-help"></div>
-    <pre id="macResult" class="code-output">(idle)</pre>
-  </div>
-
-  <!-- Battery Fleet Compare -->
-  <div class="card col-span-full">
-    <div class="card-header">
-      <span class="card-title">Battery Fleet Compare</span>
-    </div>
-    <p class="field-help">
-      Upload multiple JSON snapshots (from "Snapshot JSON" button) to compare batteries side-by-side.
-      Highlights outliers: cycles, SOH, capacity loss, cell imbalance.
-    </p>
-    <div class="cluster">
-      <label class="file-label">
-        Add Snapshot <input type="file" accept=".json" multiple onchange="fleetAdd(event)" class="batt-hidden">
-      </label>
-      <button onclick="fleetAddCurrent()">Add Current Battery</button>
-      <button onclick="fleetClear()">Clear All</button>
-      <span id="fleetStatus" class="field-help"></span>
-    </div>
-    <div id="fleetTable" class="batt-fleet-table"></div>
-  </div>
-
-  <!-- Clone Challenge Harvester -->
-  <div class="card batt-clone-only col-span-full">
-    <div class="card-header">
-      <span class="card-title">Challenge Harvester &amp; Block Writer</span>
-    </div>
-    <p class="field-help">
-      Harvest pseudo-random challenges from reg 0xEE (or any reg) — the clone
-      returns different bytes after every write. Collect samples for offline
-      cryptanalysis (LFSR period, HMAC structure). Also supports raw byte writes
-      for testing alternative block formats the clone might accept.
-    </p>
-    <div class="cluster">
-      <label class="kv-label">reg <input id="chReg" class="mono input-compact" value="0xEE"></label>
-      <label class="kv-label">writeVal <input id="chVal" class="mono input-compact" value="0x0000"></label>
-      <label class="kv-label">count <input id="chCount" class="input-compact" type="number" value="100" min="1" max="2000"></label>
-      <label class="kv-label">readLen <input id="chRLen" class="input-compact" type="number" value="16" min="1" max="32"></label>
-      <label class="kv-label"><input type="checkbox" id="chInc"> increment write</label>
-      <button onclick="chHarvest()">Harvest</button>
-      <button onclick="chExport()" id="chExportBtn" disabled>Export CSV</button>
-      <span id="chStatus" class="field-help"></span>
-    </div>
-    <hr>
-    <div class="field-label batt-section-label">Raw byte write (reg + N bytes, no length prefix):</div>
-    <div class="cluster">
-      <label class="kv-label">reg <input id="wbReg" class="mono input-compact" value="0xEE"></label>
-      <input id="wbData" class="mono batt-flex1" placeholder="hex payload e.g. 5AA5DEAD...">
-      <label class="kv-label"><input type="checkbox" id="wbRaw"> raw (no len prefix)</label>
-      <button onclick="chWBlock()">Send</button>
-    </div>
-    <div id="wbResult" class="code-output batt-result"></div>
-    <pre id="chResult" class="code-output batt-tall"></pre>
-    <div id="chAnalysis" class="field-help"></div>
-  </div>
-
-  <!-- Clone Vendor Register Viewer -->
-  <div class="card batt-clone-only">
-    <div class="card-header">
-      <span class="card-title">Vendor Register Viewer (0xD0–0xFF)</span>
-    </div>
-    <p class="field-help">
-      Live view of vendor-specific SBS registers. Changes highlighted.
-      Clone chips often expose backdoor/factory commands in this range.
-    </p>
-    <div class="cluster">
-      <button onclick="vrvRefresh()">Refresh now</button>
-      <label class="kv-label"><input type="checkbox" id="vrvAuto" onchange="vrvAutoToggle()"> Auto 2s</label>
-      <span id="vrvStatus" class="field-help"></span>
-    </div>
-    <div id="vrvGrid" class="code-output batt-vrv"></div>
-  </div>
-
-  <!-- Clone Explorer -->
-  <div class="card batt-clone-only col-span-full">
-    <div class="card-header">
-      <span class="card-title">Clone Explorer — discover hidden registers &amp; bypass attempts</span>
-    </div>
-    <p class="field-help">
-      Clone batteries (non-TI chips) sometimes ignore seal protection or expose vendor-specific commands.
-      Scan SBS and MAC space to find what responds — then try writes to see if seal is cosmetic.
-    </p>
-    <div class="cluster">
-      <button onclick="ceSbsScan()">Scan SBS 0x00-0xFF</button>
-      <button onclick="ceMacScan(0x0000, 0x00FF)">Scan MAC 0x0000-0x00FF</button>
-      <button onclick="ceMacScan(0x4000, 0x40FF)">Scan MAC 0x4000-0x40FF (DF-ish)</button>
-      <button onclick="ceBypassTest()">Seal Bypass Test (safe)</button>
-      <span id="ceStatus" class="field-help"></span>
-    </div>
-    <pre id="ceResult" class="code-output batt-tall"></pre>
-  </div>
-
-  <!-- DJI Data Flash Editor -->
-  <div class="card batt-dji-only col-span-full">
-    <div class="card-header">
-      <span class="card-title">Data Flash Editor (BQ9003 / BQ40z307)</span>
-    </div>
-    <div class="banner banner-warn">
-      ⚠ Для чтения/записи Data Flash батарея должна быть <b>unsealed</b>.
-      Запись неправильных значений может вывести батарею из строя!
-    </div>
-    <div class="cluster">
-      <button onclick="dfLoadMap()">Load Map</button>
-      <button onclick="dfReadAll()" id="dfReadAllBtn" disabled>Read All Values</button>
-      <button onclick="dfExport()" id="dfExportBtn" disabled>Export JSON</button>
-      <label class="file-label">
-        Import Killer.ini <input type="file" accept=".ini" onchange="dfImportKillerIni(event)" class="batt-hidden">
-      </label>
-      <span id="dfStatus" class="field-help"></span>
-    </div>
-    <div class="cluster batt-compare-row">
-      <span class="kv-label">Compare:</span>
-      <label class="kv-label batt-import-a">
-        Import A <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'A')" class="batt-hidden">
-      </label>
-      <label class="kv-label batt-import-b">
-        Import B <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'B')" class="batt-hidden">
-      </label>
-      <label class="kv-label"><input type="checkbox" id="dfCompareMode" onchange="dfFilterApply()"> Compare mode</label>
-      <button class="btn-sm" onclick="dfUseCurrentAs('A')">A = current</button>
-      <button class="btn-sm" onclick="dfUseCurrentAs('B')">B = current</button>
-      <button class="btn-sm" onclick="dfClearSnapshots()">Clear</button>
-      <span id="dfSnapshotStatus" class="field-help"></span>
-    </div>
-    <div id="dfFilter" class="cluster batt-hidden">
-      <input id="dfSearch" type="text" placeholder="Filter by name..." oninput="dfFilterApply()" class="batt-df-search">
-      <label class="kv-label"><input type="checkbox" id="dfDiffOnly" onchange="dfFilterApply()"> Only changed</label>
-    </div>
-    <div id="dfTree" class="batt-df-tree"></div>
-  </div>
-
-  <!-- I2C Diagnostics -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">I2C Diagnostics</span>
-    </div>
-    <div class="grid">
-      <button onclick="i2cPreflight()">Preflight Check</button>
-      <button onclick="i2cScan()">Full Bus Scan</button>
-    </div>
-    <pre id="preflightResult" class="code-output batt-hidden"></pre>
-    <pre id="i2cScanResult" class="code-output batt-hidden"></pre>
-  </div>
-
-  <!-- SMBus Transaction Log -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">SMBus Transaction Log</span>
-    </div>
-    <p class="field-help">
-      Все I2C транзакции на шине батареи. Включи логирование, чтобы записывать.
-    </p>
-    <div class="cluster">
-      <button onclick="smbLogToggle()" id="smbLogToggleBtn">Enable Logging</button>
-      <button onclick="smbLogRefresh()">Refresh</button>
-      <button onclick="smbLogExport()">Export .txt</button>
-      <label class="kv-label"><input type="checkbox" id="smbLogAuto" onchange="smbLogAutoToggle()"> Auto 1s</label>
-    </div>
-    <pre id="smbLog" class="code-output batt-tall">(logging off)</pre>
-  </div>
-
-  <!-- SMBus Console -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">SMBus Console</span>
-    </div>
-    <div class="cluster">
-      <input id="smbAddr" class="mono input-compact" value="0x0B" placeholder="addr">
-      <select id="smbOp">
-        <option value="readWord">Read Word</option>
-        <option value="readBlock">Read Block</option>
-        <option value="writeWord">Write Word</option>
-        <option value="writeBlock">Write Block</option>
-        <option value="macBlockRead">MAC Block Read</option>
-        <option value="macCmd">MAC Command</option>
-      </select>
-      <input id="smbReg" class="mono input-compact" placeholder="reg 0x00">
-      <input id="smbData" class="mono batt-flex1" placeholder="data (hex)">
-      <button onclick="smbExec()">Send</button>
-    </div>
-    <pre id="smbResult" class="code-output">(idle)</pre>
-    <div class="cluster">
+    <!-- Toolbar -->
+    <div class="toolbar col-span-full">
       <button onclick="battSnapshot()">Snapshot JSON</button>
+      <button class="secondary" onclick="i2cPreflight()">Preflight I2C</button>
+      <span class="toolbar-spacer"></span>
+      <span id="battConn" class="badge badge-neutral">NO LINK</span>
+      <span id="battDevType" class="badge badge-neutral batt-hidden">-</span>
+      <span id="battSealStatus" class="badge badge-warn batt-hidden">SEALED</span>
     </div>
-  </div>
+
+    <!-- Stat-grid summary -->
+    <div class="stat-grid col-span-full">
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="battVolt">—</div>
+        <div class="stat-tile-label">Voltage</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="battSOC">—</div>
+        <div class="stat-tile-label">State of charge</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="battCurr">—</div>
+        <div class="stat-tile-label">Current</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="battTemp">—</div>
+        <div class="stat-tile-label">Temp</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="battCycle">—</div>
+        <div class="stat-tile-label">Cycles</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="battSOH">—</div>
+        <div class="stat-tile-label">SoH</div>
+      </div>
+    </div>
+
+    <!-- SoC bar (full-width hint of charge level) -->
+    <div class="bar col-span-full"><div class="bar-fill bar-fill-success" id="battBar"></div></div>
+
+    <!-- Identity card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Identity</span>
+        <span class="badge badge-info" id="battModelBadge">—</span>
+      </div>
+      <div class="kv"><span class="kv-label">Model</span><span class="kv-value mono" id="battModel">—</span></div>
+      <div class="kv"><span class="kv-label">Manufacturer</span><span class="kv-value mono" id="battMfr">—</span></div>
+      <div class="kv"><span class="kv-label">Device</span><span class="kv-value mono" id="battDev">—</span></div>
+      <div class="kv"><span class="kv-label">Chemistry</span><span class="kv-value mono" id="battChem">—</span></div>
+      <div class="kv"><span class="kv-label">Config</span><span class="kv-value mono" id="battConfig">—</span></div>
+      <div class="kv"><span class="kv-label">S/N · date</span><span class="kv-value mono" id="battSN">—</span></div>
+      <div class="kv batt-hidden" id="battDjiSNRow"><span class="kv-label">DJI S/N</span><span class="kv-value mono" id="battDjiSN">—</span></div>
+      <div class="kv"><span class="kv-label">Chip</span><span class="kv-value mono" id="battChip">—</span></div>
+      <div class="kv"><span class="kv-label">FW · HW</span><span class="kv-value mono" id="battFwHw">—</span></div>
+      <div id="keyWarning" class="banner banner-warn batt-hidden">
+        ⚠ Эта модель требует DJI per-pack ключ. Публичные ключи отсутствуют. Unseal/Clear PF работать не будут.
+      </div>
+    </div>
+
+    <!-- Cells card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Cells</span>
+        <span class="cluster">
+          <span class="badge badge-neutral" id="cellsSync">async</span>
+          <span class="badge badge-neutral" id="cellDelta">Δ —</span>
+        </span>
+      </div>
+      <div id="cellsGrid"></div>
+      <div class="kv"><span class="kv-label">Pack V (sync)</span><span class="kv-value mono" id="packV">—</span></div>
+    </div>
+
+    <!-- Health card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Health</span>
+      </div>
+      <div class="kv"><span class="kv-label">Capacity (full)</span><span class="kv-value mono" id="battCap">—</span></div>
+      <div class="kv"><span class="kv-label">Capacity (design)</span><span class="kv-value mono" id="battDesign">—</span></div>
+      <div class="kv"><span class="kv-label">Avg current</span><span class="kv-value mono" id="battAvgCurr">—</span></div>
+      <div class="kv"><span class="kv-label">Time to empty</span><span class="kv-value mono" id="battTTE">—</span></div>
+      <div class="kv"><span class="kv-label">Time to full</span><span class="kv-value mono" id="battTTF">—</span></div>
+      <div class="kv"><span class="kv-label">Charge I · V</span><span class="kv-value mono" id="battChg">—</span></div>
+      <div class="kv"><span class="kv-label">Status bits</span><span class="kv-value mono" id="battStatusBits">—</span></div>
+    </div>
+
+    <!-- Status registers card (DJI-only) -->
+    <div class="card batt-dji-only">
+      <div class="card-header">
+        <span class="card-title">Status flags</span>
+      </div>
+      <div class="kv"><span class="kv-label">Operation</span><span class="kv-value mono" id="opStatus">—</span></div>
+      <div class="code-output batt-decoded" id="opDecoded">—</div>
+      <div class="kv"><span class="kv-label">Safety</span><span class="kv-value mono text-success" id="safetyStatus">—</span></div>
+      <div class="code-output batt-decoded" id="safetyDecoded">—</div>
+      <div class="kv"><span class="kv-label">Permanent fail</span><span class="kv-value mono" id="pfStatus">—</span></div>
+      <div class="code-output batt-decoded" id="pfDecoded">—</div>
+      <div class="kv"><span class="kv-label">Manufacturing</span><span class="kv-value mono" id="mfgStatus">—</span></div>
+      <div class="code-output batt-decoded" id="mfgDecoded">—</div>
+    </div>
+
+    <!-- Live Chart -->
+    <div class="card col-span-full">
+      <div class="card-header">
+        <span class="card-title">Live chart (last ~3 min)</span>
+        <button class="ghost btn-sm" onclick="chartClear()">Clear</button>
+      </div>
+      <svg id="liveChart" class="batt-live-chart" viewBox="0 0 400 160" width="100%" height="160">
+        <g id="chartGrid"></g>
+        <polyline id="chartV" fill="none" stroke="var(--primary)" stroke-width="1.5"/>
+        <polyline id="chartI" fill="none" stroke="var(--warn)" stroke-width="1.5"/>
+        <text id="chartLabelV" x="5" y="15" fill="var(--primary)" font-size="10" font-family="monospace">V: --</text>
+        <text id="chartLabelI" x="5" y="28" fill="var(--warn)" font-size="10" font-family="monospace">I: --</text>
+      </svg>
+      <div class="kv batt-chart-legend">
+        <span><span class="text-info">━</span> voltage (V)</span>
+        <span><span class="text-warn">━</span> current (mA)</span>
+      </div>
+    </div>
+
+    <!-- Fleet compare -->
+    <div class="card col-span-full">
+      <div class="card-header">
+        <span class="card-title">Fleet compare</span>
+      </div>
+      <p class="field-help">
+        Upload multiple JSON snapshots (from Snapshot JSON above) to compare batteries side-by-side.
+        Highlights outliers: cycles, SoH, capacity loss, cell imbalance.
+      </p>
+      <div class="cluster">
+        <label class="file-label">
+          Add Snapshot <input type="file" accept=".json" multiple onchange="fleetAdd(event)" class="batt-hidden">
+        </label>
+        <button onclick="fleetAddCurrent()">Add Current</button>
+        <button onclick="fleetClear()">Clear All</button>
+        <span id="fleetStatus" class="field-help"></span>
+      </div>
+      <div id="fleetTable" class="batt-fleet-table"></div>
+    </div>
+
+  </div>  <!-- /batt-action-read -->
+
+  <!-- ============== RESET CYCLE COUNT ============== -->
+  <div id="batt-action-reset" class="col-span-full" style="display:none">
+
+    <div class="banner banner-warn col-span-full">
+      <b>Reset cycle counter</b> у DJI battery. Меняет dataflash IT-блок (3-block update),
+      требует UNSEAL ключ и ре-SEAL после. Поддерживаемые модели: Mavic 3 / Mini 3 Pro / Air 2S
+      (см. Library → Compatibility).
+    </div>
+
+    <!-- Service action buttons -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Service actions</span>
+      </div>
+      <div class="banner banner-warn">
+        ⚠ Требует unseal. Для Mavic 2+/Mavic 3/Mavic 4 ключи DJI не опубликованы.
+      </div>
+      <div class="grid">
+        <button onclick="battAction('unseal')">Unseal</button>
+        <button onclick="battAction('clearpf')">Clear PF</button>
+      </div>
+      <div class="grid">
+        <button onclick="battAction('seal')">Seal</button>
+        <button onclick="battAction('reset')">Soft Reset</button>
+      </div>
+      <button class="danger batt-full-service-btn" onclick="battAction('fullservice')">Full Service (unseal + clear + seal)</button>
+      <div id="battActionResult" class="field-help text-warn batt-action-result"></div>
+    </div>
+
+    <!-- Unseal wizard -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Unseal wizard</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Profile</span>
+        <select id="unsealProfile" class="batt-flex1" onchange="loadProfile()"></select>
+      </div>
+      <div id="unsealKeyList" class="field-help batt-key-list"></div>
+      <div class="grid">
+        <button onclick="tryAllKeys()">Try All Keys</button>
+        <button onclick="tryFasKeys()">Try FAS Keys</button>
+      </div>
+      <div class="field-label batt-section-label">Manual key pair:</div>
+      <div class="cluster">
+        <input id="unsealW1" class="mono input-compact" placeholder="0x7EE0">
+        <input id="unsealW2" class="mono input-compact" placeholder="0xCCDF">
+        <button onclick="tryManualKey()">Send</button>
+      </div>
+      <hr>
+      <div class="field-label batt-section-label">HMAC-SHA1 challenge-response (bq40z30x+):</div>
+      <input id="unsealHmacKey" class="mono" placeholder="32-byte key as 64 hex chars" maxlength="64">
+      <div class="grid">
+        <button onclick="tryHmacUnseal()">HMAC Unseal</button>
+        <button onclick="tryGetChallenge()">Get Challenge Only</button>
+      </div>
+      <pre id="hmacResult" class="code-output batt-hidden"></pre>
+      <div id="unsealResult" class="field-help text-success batt-result"></div>
+    </div>
+
+  </div>  <!-- /batt-action-reset -->
+
+  <!-- ============== PROBE UNKNOWN ============== -->
+  <div id="batt-action-probe" class="col-span-full" style="display:none">
+
+    <!-- I2C Diagnostics -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">I2C Diagnostics</span>
+      </div>
+      <p class="field-help">
+        Preflight: SDA/SCL stuck-low check + battery ACK probe. Bus scan: enumerate all devices on the bus.
+      </p>
+      <div class="grid">
+        <button onclick="i2cPreflight()">Preflight Check</button>
+        <button onclick="i2cScan()">Full Bus Scan</button>
+      </div>
+      <pre id="preflightResult" class="code-output batt-hidden"></pre>
+      <pre id="i2cScanResult" class="code-output batt-hidden"></pre>
+    </div>
+
+    <!-- SMBus transaction log -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">SMBus log</span>
+      </div>
+      <p class="field-help">
+        Все I2C транзакции на шине батареи. Включи логирование, чтобы записывать.
+      </p>
+      <div class="cluster">
+        <button onclick="smbLogToggle()" id="smbLogToggleBtn">Enable Logging</button>
+        <button onclick="smbLogRefresh()">Refresh</button>
+        <button onclick="smbLogExport()">Export .txt</button>
+        <label class="kv-label"><input type="checkbox" id="smbLogAuto" onchange="smbLogAutoToggle()"> Auto 1s</label>
+      </div>
+      <pre id="smbLog" class="code-output batt-tall">(logging off)</pre>
+    </div>
+
+    <!-- SMBus console -->
+    <div class="card col-span-full">
+      <div class="card-header">
+        <span class="card-title">SMBus Console</span>
+      </div>
+      <p class="field-help">
+        Manual register read/write — Read Word / Read Block / Write Word / MAC Block Read / MAC Command.
+      </p>
+      <div class="cluster">
+        <input id="smbAddr" class="mono input-compact" value="0x0B" placeholder="addr">
+        <select id="smbOp">
+          <option value="readWord">Read Word</option>
+          <option value="readBlock">Read Block</option>
+          <option value="writeWord">Write Word</option>
+          <option value="writeBlock">Write Block</option>
+          <option value="macBlockRead">MAC Block Read</option>
+          <option value="macCmd">MAC Command</option>
+        </select>
+        <input id="smbReg" class="mono input-compact" placeholder="reg 0x00">
+        <input id="smbData" class="mono batt-flex1" placeholder="data (hex)">
+        <button onclick="smbExec()">Send</button>
+      </div>
+      <pre id="smbResult" class="code-output">(idle)</pre>
+    </div>
+
+    <!-- Clone explorer (only meaningful for clone batteries) -->
+    <div class="card batt-clone-only col-span-full">
+      <div class="card-header">
+        <span class="card-title">Clone Explorer — discover hidden registers &amp; bypass attempts</span>
+      </div>
+      <p class="field-help">
+        Clone batteries (non-TI chips) sometimes ignore seal protection or expose vendor-specific commands.
+        Scan SBS and MAC space to find what responds.
+      </p>
+      <div class="cluster">
+        <button onclick="ceSbsScan()">Scan SBS 0x00-0xFF</button>
+        <button onclick="ceMacScan(0x0000, 0x00FF)">Scan MAC 0x0000-0x00FF</button>
+        <button onclick="ceMacScan(0x4000, 0x40FF)">Scan MAC 0x4000-0x40FF (DF-ish)</button>
+        <button onclick="ceBypassTest()">Seal Bypass Test (safe)</button>
+        <span id="ceStatus" class="field-help"></span>
+      </div>
+      <pre id="ceResult" class="code-output batt-tall"></pre>
+    </div>
+
+  </div>  <!-- /batt-action-probe -->
+
+  <!-- ============== FORENSICS ============== -->
+  <div id="batt-action-forensics" class="col-span-full" style="display:none">
+
+    <!-- MAC command runner (DJI) -->
+    <div class="card batt-dji-only">
+      <div class="card-header">
+        <span class="card-title">MAC Command Runner</span>
+      </div>
+      <p class="field-help">
+        Execute SMBus MAC commands from the catalog. Handy for poking at undocumented registers.
+      </p>
+      <div class="cluster">
+        <select id="macSelect" class="batt-flex1"></select>
+        <button onclick="runMacCmd()">Execute</button>
+      </div>
+      <div id="macDesc" class="field-help"></div>
+      <pre id="macResult" class="code-output">(idle)</pre>
+    </div>
+
+    <!-- Vendor register viewer (clone) -->
+    <div class="card batt-clone-only">
+      <div class="card-header">
+        <span class="card-title">Vendor Register Viewer (0xD0–0xFF)</span>
+      </div>
+      <p class="field-help">
+        Live view of vendor-specific SBS registers. Changes highlighted.
+      </p>
+      <div class="cluster">
+        <button onclick="vrvRefresh()">Refresh now</button>
+        <label class="kv-label"><input type="checkbox" id="vrvAuto" onchange="vrvAutoToggle()"> Auto 2s</label>
+        <span id="vrvStatus" class="field-help"></span>
+      </div>
+      <div id="vrvGrid" class="code-output batt-vrv"></div>
+    </div>
+
+    <!-- Challenge harvester (clone) -->
+    <div class="card batt-clone-only col-span-full">
+      <div class="card-header">
+        <span class="card-title">Challenge Harvester &amp; Block Writer</span>
+      </div>
+      <p class="field-help">
+        Harvest pseudo-random challenges from reg 0xEE — clone returns different bytes after every write.
+        Collect samples for offline cryptanalysis (LFSR period, HMAC structure).
+      </p>
+      <div class="cluster">
+        <label class="kv-label">reg <input id="chReg" class="mono input-compact" value="0xEE"></label>
+        <label class="kv-label">writeVal <input id="chVal" class="mono input-compact" value="0x0000"></label>
+        <label class="kv-label">count <input id="chCount" class="input-compact" type="number" value="100" min="1" max="2000"></label>
+        <label class="kv-label">readLen <input id="chRLen" class="input-compact" type="number" value="16" min="1" max="32"></label>
+        <label class="kv-label"><input type="checkbox" id="chInc"> increment write</label>
+        <button onclick="chHarvest()">Harvest</button>
+        <button onclick="chExport()" id="chExportBtn" disabled>Export CSV</button>
+        <span id="chStatus" class="field-help"></span>
+      </div>
+      <hr>
+      <div class="field-label batt-section-label">Raw byte write (reg + N bytes, no length prefix):</div>
+      <div class="cluster">
+        <label class="kv-label">reg <input id="wbReg" class="mono input-compact" value="0xEE"></label>
+        <input id="wbData" class="mono batt-flex1" placeholder="hex payload e.g. 5AA5DEAD...">
+        <label class="kv-label"><input type="checkbox" id="wbRaw"> raw (no len prefix)</label>
+        <button onclick="chWBlock()">Send</button>
+      </div>
+      <div id="wbResult" class="code-output batt-result"></div>
+      <pre id="chResult" class="code-output batt-tall"></pre>
+      <div id="chAnalysis" class="field-help"></div>
+    </div>
+
+    <!-- Data flash editor (DJI) -->
+    <div class="card batt-dji-only col-span-full">
+      <div class="card-header">
+        <span class="card-title">Data Flash Editor (BQ9003 / BQ40z307)</span>
+      </div>
+      <div class="banner banner-warn">
+        ⚠ Для чтения/записи Data Flash батарея должна быть <b>unsealed</b>.
+        Запись неправильных значений может вывести батарею из строя!
+      </div>
+      <div class="cluster">
+        <button onclick="dfLoadMap()">Load Map</button>
+        <button onclick="dfReadAll()" id="dfReadAllBtn" disabled>Read All Values</button>
+        <button onclick="dfExport()" id="dfExportBtn" disabled>Export JSON</button>
+        <label class="file-label">
+          Import Killer.ini <input type="file" accept=".ini" onchange="dfImportKillerIni(event)" class="batt-hidden">
+        </label>
+        <span id="dfStatus" class="field-help"></span>
+      </div>
+      <div class="cluster batt-compare-row">
+        <span class="kv-label">Compare:</span>
+        <label class="kv-label batt-import-a">
+          Import A <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'A')" class="batt-hidden">
+        </label>
+        <label class="kv-label batt-import-b">
+          Import B <input type="file" accept=".json" onchange="dfImportSnapshot(event, 'B')" class="batt-hidden">
+        </label>
+        <label class="kv-label"><input type="checkbox" id="dfCompareMode" onchange="dfFilterApply()"> Compare mode</label>
+        <button class="btn-sm" onclick="dfUseCurrentAs('A')">A = current</button>
+        <button class="btn-sm" onclick="dfUseCurrentAs('B')">B = current</button>
+        <button class="btn-sm" onclick="dfClearSnapshots()">Clear</button>
+        <span id="dfSnapshotStatus" class="field-help"></span>
+      </div>
+      <div id="dfFilter" class="cluster batt-hidden">
+        <input id="dfSearch" type="text" placeholder="Filter by name..." oninput="dfFilterApply()" class="batt-df-search">
+        <label class="kv-label"><input type="checkbox" id="dfDiffOnly" onchange="dfFilterApply()"> Only changed</label>
+      </div>
+      <div id="dfTree" class="batt-df-tree"></div>
+    </div>
+
+  </div>  <!-- /batt-action-forensics -->
+
+  <!-- ============== LIBRARY ============== -->
+  <div id="batt-action-library" class="col-span-full" style="display:none">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Compatibility / profiles reference</span>
+      </div>
+      <p class="field-help">
+        Known battery profiles + their UNSEAL/FAS keys + chip type. Reference-only — for live unseal use the Reset
+        action's wizard. Auto-populated from <code>/api/batt/profiles</code>.
+      </p>
+      <div class="kv">
+        <span class="kv-label">Pick profile</span>
+        <select id="libProfile" class="batt-flex1" onchange="libShowProfile()"></select>
+      </div>
+      <div id="libProfileDetails" class="field-help"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">MAC catalog reference</span>
+      </div>
+      <p class="field-help">
+        Known SMBus MAC commands across BQ-family chips with descriptions.
+      </p>
+      <div id="libMacCatalog" class="batt-tall"></div>
+    </div>
+
+  </div>  <!-- /batt-action-library -->
 
   <!-- Connection rail -->
   <div class="connection-rail col-span-full">
     <span class="dot on"></span>
     <span class="kv-label">Port B</span>
-    <span class="kv-value">I2C @ GP10/GP11 (SMBus)</span>
+    <span class="kv-value">I2C @ GP10/11 (SMBus · 100 kHz)</span>
     <span class="connection-rail-spacer"></span>
-    <span class="connection-rail-action">Battery @ 0x0B · 100 kHz</span>
+    <span class="connection-rail-action">Battery @ 0x0B</span>
   </div>
 
 </div>
