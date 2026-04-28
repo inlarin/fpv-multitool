@@ -1022,6 +1022,12 @@ label {
 .rcv-flash-btn { margin-top: var(--s-2); }
 /* Numbered instruction list inside hardware.json card. */
 .rcv-instr-list { margin: var(--s-2) 0; padding-left: var(--s-4); font-size: var(--text-sm); line-height: 1.5; }
+/* Compact horizontal mode banner at top of Receiver tab — shrinks the chunky
+   old "Receiver status" card into a one-line pill bar. */
+.rcv-mode-bar { padding: var(--s-2) var(--s-3); }
+.rcv-mode-bar > .cluster { gap: var(--s-3); }
+.rcv-mode-prefix { font-weight: var(--weight-semi); color: var(--text-muted); font-size: var(--text-sm); }
+
 /* Hyphen-variant bar-fill colour modifiers (cell voltage / SoC / dump progress). */
 .bar-fill.bar-fill-info,    .bar-fill-info    { background: var(--info); }
 .bar-fill.bar-fill-success, .bar-fill-success { background: var(--success); }

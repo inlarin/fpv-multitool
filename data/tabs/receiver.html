@@ -1,127 +1,172 @@
 <div id="tab-receiver" class="tab-content" style="display:none">
 
+  <!-- Live-monitor running banner — auto-shown when CRSF service active. -->
   <div id="elrsCrsfBanner" class="rcv-banner-warn rcv-hidden col-span-full">
     ⚠ <b>Live link monitor is running</b> — Port B locked. Probe / Load settings / Bind will fail with 409 until it's stopped.
     <button class="ghost btn-sm rcv-banner-action" onclick="crsfStop()">Stop monitor</button>
     <span class="rcv-banner-sub">Flash Firmware auto-pauses the monitor; other actions don't.</span>
   </div>
 
-  <!-- ===== 1. Status + Quick actions ===== -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">Receiver status</span>
+  <!-- ===== Compact mode banner (sticky at top of tab) ===== -->
+  <div class="card rcv-mode-bar col-span-full">
+    <div class="cluster">
+      <span class="rcv-mode-prefix">RX</span>
+      <span id="rxModeBadge" class="rcv-mode-badge" role="status" aria-live="polite" aria-label="Receiver mode: unknown">— Unknown</span>
+      <small id="rxModeAge" class="kv-label rcv-mode-age"></small>
+      <span class="kv-label rcv-small-mono" id="rxIds">—</span>
+      <span class="connection-rail-spacer"></span>
+      <button class="ghost btn-sm" id="rxProbeBtn" onclick="rxProbeMode()" title="CRSF DEVICE_PING + DFU sync + stub sync">🔍 Re-probe</button>
+      <button class="ghost btn-sm" data-need-mode="dfustub" onclick="ctrlExitDfu()" title="RUN_USER_CODE → reboot into OTADATA-selected app, needs DFU/stub">↩ Exit DFU</button>
+      <button class="ghost btn-sm" data-need-mode="app" onclick="rcvSoftReboot()" title="Soft reboot via CRSF (RX must be in app)">↻ Reboot</button>
     </div>
-    <div class="kv">
-      <span class="kv-label">Mode</span>
-      <span class="cluster">
-        <span id="rxModeBadge" class="rcv-mode-badge" role="status" aria-live="polite" aria-label="Receiver mode: unknown">— Unknown</span>
-        <small id="rxModeAge" class="kv-label rcv-mode-age"></small>
-      </span>
-    </div>
-    <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value" id="rxName">—</span></div>
-    <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono" id="rxVer">—</span></div>
-    <div class="kv"><span class="kv-label">Serial / HW ID</span><span class="kv-value mono rcv-small-mono" id="rxIds">—</span></div>
-    <div class="kv"><span class="kv-label">LUA param count</span><span class="kv-value" id="rxFields">—</span></div>
-    <small id="rxModeHint" class="rcv-hint rcv-block"></small>
-
-    <div class="rcv-quick-grid">
-      <button onclick="rxProbeMode()" id="rxProbeBtn" title="CRSF DEVICE_PING + DFU sync + stub sync">🔍 Probe RX</button>
-      <button onclick="rcvSoftReboot()" data-need-mode="app" title="Soft reboot via CRSF (RX must be in app)">↻ Reboot</button>
-      <button onclick="ctrlBind()" data-need-mode="app" title="Enter 60 s binding (RX must be in app)">🔗 Bind</button>
-    </div>
+    <div id="rxModeHint" class="rcv-hint rcv-block"></div>
     <div id="ctrlMsg" class="rcv-hint rcv-result-line"></div>
   </div>
 
-  <!-- ===== Device identity ===== -->
-  <div class="card" id="identCard">
-    <div class="card-header">
-      <span class="card-title">Device identity</span>
-      <small class="kv-label">— ROM DFU · ~5-6 s</small>
+  <!-- ===== ACTION PICKER ===== -->
+  <div class="action-picker col-span-full" id="rcvActionPicker">
+    <div class="action-card active" data-action="identify" onclick="rcvPickAction('identify')">
+      <span class="action-card-icon">🔍</span>
+      <span class="action-card-title">Identify</span>
+      <span class="action-card-desc">Chip, MAC, partition layout, firmware in each slot, NVS keys.</span>
     </div>
-    <div class="kv"><span class="kv-label">Current UID</span><span class="kv-value mono" id="identUid">—</span></div>
-    <div class="kv"><span class="kv-label">Bound</span><span class="kv-value" id="identBound">—</span></div>
-    <div class="kv"><span class="kv-label">WiFi SSID</span><span class="kv-value mono" id="identSsid">—</span></div>
-    <div class="kv"><span class="kv-label">WiFi password</span><span class="kv-value mono" id="identPass">—</span></div>
-    <div class="kv"><span class="kv-label">Flash discriminator</span><span class="kv-value mono rcv-small-mono" id="identDisc">—</span></div>
-    <small id="identPlaceholder" class="rcv-hint rcv-block">
-      Положи RX в DFU (зажми BOOT + power-cycle), потом нажми кнопку ниже.
-    </small>
-    <div class="rcv-grid-2-1">
-      <button onclick="identRead(false)" id="identReadBtn" data-need-mode="dfu">⬇ Read identity from device</button>
-      <button onclick="identRead(true)" id="identReadThoroughBtn" data-need-mode="dfu" title="Adds SPIFFS partition read (+~16s) — extracts TX UID + runtime WiFi STA creds from /options.json">+ SPIFFS</button>
+    <div class="action-card" data-action="flash" onclick="rcvPickAction('flash')">
+      <span class="action-card-icon">📥</span>
+      <span class="action-card-title">Flash firmware</span>
+      <span class="action-card-desc">Source → target slot → write. Vanilla ELRS, MILELRS, custom .bin.</span>
     </div>
-    <div id="identStatus" class="rcv-hint rcv-result-line"></div>
-    <div class="kv rcv-hidden" id="identTxUidRow"><span class="kv-label">TX UID (paired)</span><span class="kv-value mono" id="identTxUid">—</span></div>
-    <div class="kv rcv-hidden" id="identStaSsidRow"><span class="kv-label">STA SSID (runtime)</span><span class="kv-value mono" id="identStaSsid">—</span></div>
-    <div class="kv rcv-hidden" id="identStaPassRow"><span class="kv-label">STA password</span><span class="kv-value mono" id="identStaPass">—</span></div>
-
-    <details class="rcv-advanced-block">
-      <summary class="kv-label rcv-clickable">🔧 Phrase ↔ UID converter (client-side MD5)</summary>
-      <div class="rcv-phrase-inset">
-        <div class="kv">
-          <span class="kv-label">Bind phrase</span>
-          <input type="text" id="phraseInput" class="mono" placeholder="e.g. my secret phrase" oninput="identPhraseToUid()">
-        </div>
-        <div class="kv"><span class="kv-label">Computed UID</span><span class="kv-value mono text-info" id="phraseUid">—</span></div>
-        <p class="field-help">
-          UID = <code>md5("-DMY_BINDING_PHRASE=\"&lt;phrase&gt;\"")[0..5]</code>. Совпадает с тем что считает ELRS Configurator. ELRS phrase в прошивке не хранится, сохраняются только 6 hash-байт.
-        </p>
-      </div>
-    </details>
-  </div>
-
-  <!-- ===== ACTION PICKER — primary workflows ===== -->
-  <div class="card rcv-action-card col-span-full">
-    <div class="card-header">
-      <span class="card-title">What do you want to do?</span>
+    <div class="action-card" data-action="watch" data-need-mode="app" onclick="rcvPickAction('watch')">
+      <span class="action-card-icon">📡</span>
+      <span class="action-card-title">Watch link</span>
+      <span class="action-card-desc">RSSI, LQ, SNR, channels real-time. <b>Needs RX in app mode.</b></span>
     </div>
-    <div class="grid">
-      <button onclick="rcvOpen('flash')"  data-rcv="flash"  class="rcv-nav col-span-full">💾 Update firmware</button>
-      <button onclick="rcvOpen('config')" data-rcv="config" class="rcv-nav" data-need-mode="app">⚙ Change settings</button>
-      <button onclick="rcvOpen('live')"   data-rcv="live"   class="rcv-nav">📡 Watch link quality</button>
+    <div class="action-card" data-action="params" data-need-mode="app" onclick="rcvPickAction('params')">
+      <span class="action-card-icon">⚙</span>
+      <span class="action-card-title">Edit parameters</span>
+      <span class="action-card-desc">CRSF LUA — bind phrase, TX power, switch mode, telemetry. <b>App mode.</b></span>
     </div>
-    <p class="field-help">
-      Один раздел открывается за раз. Клик на уже открытый — свернуть. Reboot и Bind — в Status-карточке выше (one-click).
-    </p>
-  </div>
-
-  <!-- ===== rcv-config: RX Configuration ===== -->
-  <div id="rcv-config" class="rcv-section rcv-hidden col-span-full">
-    <div class="card" id="rxConfigCard">
-      <div class="card-header">
-        <span class="card-title">RX Configuration</span>
-      </div>
-      <div class="banner banner-warn">
-        Читает LUA-параметры через CRSF PARAMETER_READ (~2 с на ~40 полей). Требует RX в app. Клик по value редактирует. Hidden-параметры скрыты чекбоксом ниже.
-      </div>
-      <div class="kv">
-        <span class="kv-label">Show hidden</span>
-        <label class="kv-label"><input type="checkbox" id="rxCfgShowHidden" onchange="rxCfgRender()"> debug-only params</label>
-      </div>
-      <button onclick="rxCfgLoad()" id="rxCfgLoadBtn" data-need-mode="app" title="Read all ~40 LUA parameters via CRSF (RX must be in app)" class="rcv-block-btn">🔄 Load parameters</button>
-      <div id="rxCfgStatus" class="rcv-hint rcv-result-line"></div>
-      <small id="rxCfgPlaceholder" class="rcv-hint rcv-block">
-        Нажми Load — таблица заполнится полями LUA. Клик на value → редактируется.
-      </small>
-      <table id="rxCfgTable" class="rcv-cfg-table rcv-hidden">
-        <thead><tr><th>#</th><th>Name</th><th>Type</th><th>Value</th><th>Range</th></tr></thead>
-        <tbody id="rxCfgBody"></tbody>
-      </table>
+    <div class="action-card" data-action="bind" data-need-mode="app" onclick="rcvPickAction('bind')">
+      <span class="action-card-icon">🔄</span>
+      <span class="action-card-title">Bind to TX</span>
+      <span class="action-card-desc">60-second bind mode. <b>App mode.</b></span>
+    </div>
+    <div class="action-card" data-action="recovery" onclick="rcvPickAction('recovery')">
+      <span class="action-card-icon">🩺</span>
+      <span class="action-card-title">Recovery</span>
+      <span class="action-card-desc">Slot switch, erase OTADATA, full flash dump. Bricked RX rescue.</span>
     </div>
   </div>
 
-  <!-- ===== rcv-flash: Flash Firmware ===== -->
-  <div id="rcv-flash" class="rcv-section rcv-hidden col-span-full">
+  <!-- ============== IDENTIFY ACTION ============== -->
+  <div id="rcv-action-identify" class="col-span-full">
+
+    <div class="toolbar col-span-full">
+      <button onclick="rxScan()" id="rxScanBtn" data-need-mode="dfu">🔍 Re-scan now</button>
+      <button class="secondary" onclick="identRead(false)" id="identReadBtn" data-need-mode="dfu">Quick (5 s)</button>
+      <button class="ghost" onclick="identRead(true)" id="identReadThoroughBtn" data-need-mode="dfu" title="Adds SPIFFS partition read (+~16s)">+ SPIFFS scan</button>
+      <span class="toolbar-spacer"></span>
+      <span class="badge badge-neutral" id="rxFieldsBadge">— params</span>
+    </div>
+
+    <!-- Stat-grid summary -->
+    <div class="stat-grid col-span-full">
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="rxChip">—</div>
+        <div class="stat-tile-label">Chip</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono rcv-small-mono" id="rxMac">—</div>
+        <div class="stat-tile-label">MAC</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="rxFlashSize">—</div>
+        <div class="stat-tile-label">Flash</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="rxActive">—</div>
+        <div class="stat-tile-label">Active slot</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="rxMaxSeq">—</div>
+        <div class="stat-tile-label">OTA seq</div>
+      </div>
+    </div>
+
+    <!-- Scan errors / hint -->
+    <div id="rxScanErr" class="rcv-result-line text-danger col-span-full"></div>
+
+    <!-- App-mode firmware summary (Status card from old IA — shown when in app) -->
     <div class="card">
       <div class="card-header">
-        <span class="card-title">Flash Firmware</span>
+        <span class="card-title">Firmware (running)</span>
       </div>
-      <div class="banner banner-warn">
-        <b>Источник</b> → <b>цель</b> → Flash. Путь (ROM DFU / in-app stub) выбирается по режиму RX автоматом. ROM DFU — полная прошивка (bootloader+partitions+app), требует BOOT+power-cycle. Stub-flash — только app0/app1, работает когда RX в app (без кнопок).
-      </div>
+      <div class="kv"><span class="kv-label">Name</span><span class="kv-value" id="rxName">—</span></div>
+      <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono" id="rxVer">—</span></div>
+      <div class="kv"><span class="kv-label">LUA params</span><span class="kv-value" id="rxFields">—</span></div>
+    </div>
 
+    <!-- Slot summary chips placeholder (filled by rxScan() result) -->
+    <div class="card col-span-full" id="rxSlotsCard">
+      <div class="card-header">
+        <span class="card-title">Partition slots</span>
+      </div>
+      <div id="rxSlots" class="rcv-slot-chips"></div>
+      <small class="rcv-hint rcv-block">Run "Re-scan" в DFU чтобы подтянуть детали обоих app-слотов.</small>
+    </div>
+
+    <!-- Device identity (NVS / SPIFFS scan results) -->
+    <div class="card" id="identCard">
+      <div class="card-header">
+        <span class="card-title">NVS / Identity</span>
+        <small class="kv-label">— ROM DFU · ~5-6 s</small>
+      </div>
+      <div class="kv"><span class="kv-label">Current UID</span><span class="kv-value mono" id="identUid">—</span></div>
+      <div class="kv"><span class="kv-label">Bound</span><span class="kv-value" id="identBound">—</span></div>
+      <div class="kv"><span class="kv-label">WiFi SSID</span><span class="kv-value mono" id="identSsid">—</span></div>
+      <div class="kv"><span class="kv-label">WiFi password</span><span class="kv-value mono" id="identPass">—</span></div>
+      <div class="kv"><span class="kv-label">Flash discriminator</span><span class="kv-value mono rcv-small-mono" id="identDisc">—</span></div>
+      <small id="identPlaceholder" class="rcv-hint rcv-block">
+        Положи RX в DFU (зажми BOOT + power-cycle), потом нажми Quick (5 s) сверху.
+      </small>
+      <div id="identStatus" class="rcv-hint rcv-result-line"></div>
+      <div class="kv rcv-hidden" id="identTxUidRow"><span class="kv-label">TX UID (paired)</span><span class="kv-value mono" id="identTxUid">—</span></div>
+      <div class="kv rcv-hidden" id="identStaSsidRow"><span class="kv-label">STA SSID (runtime)</span><span class="kv-value mono" id="identStaSsid">—</span></div>
+      <div class="kv rcv-hidden" id="identStaPassRow"><span class="kv-label">STA password</span><span class="kv-value mono" id="identStaPass">—</span></div>
+    </div>
+
+    <!-- Phrase converter (offline tool, always available) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Phrase ↔ UID converter</span>
+        <span class="kv-label">client-side MD5</span>
+      </div>
       <div class="kv">
-        <span class="kv-label">1. Source</span>
+        <span class="kv-label">Bind phrase</span>
+        <input type="text" id="phraseInput" class="mono" placeholder="e.g. my secret phrase" oninput="identPhraseToUid()">
+      </div>
+      <div class="kv"><span class="kv-label">Computed UID</span><span class="kv-value mono text-info" id="phraseUid">—</span></div>
+      <p class="field-help">
+        UID = <code>md5("-DMY_BINDING_PHRASE=\"&lt;phrase&gt;\"")[0..5]</code>. Совпадает с ELRS Configurator. Phrase в прошивке не хранится, только 6 hash-байт.
+      </p>
+    </div>
+
+  </div>  <!-- /rcv-action-identify -->
+
+  <!-- ============== FLASH ACTION ============== -->
+  <div id="rcv-action-flash" class="col-span-full" style="display:none">
+
+    <div class="banner banner-warn col-span-full">
+      <b>Источник</b> → <b>цель</b> → Flash. Путь (ROM DFU / in-app stub) выбирается по режиму RX автоматом. ROM DFU — полная прошивка (bootloader+partitions+app), требует BOOT+power-cycle. Stub-flash — только app0/app1, работает когда RX в app (без кнопок).
+    </div>
+
+    <!-- Step 1: Source -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">1. Source firmware</span>
+        <span class="kv-value mono" id="fwCached">—</span>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Pick source</span>
         <select id="fwSource" onchange="fwSourceChange()">
           <option value="catalog">Catalog (official ELRS artifactory)</option>
           <option value="upload">Upload from computer</option>
@@ -152,41 +197,87 @@
         <input type="file" id="fwUploadFile" accept=".bin,.gz,.elrs" onchange="fwUploadSelect()">
         <button onclick="fwDoUpload()" id="fwDoUploadBtn" class="rcv-block-btn" disabled>⬆ Upload to PSRAM</button>
       </div>
+    </div>
 
-      <div class="kv"><span class="kv-label">Cached</span><span class="kv-value" id="fwCached">—</span></div>
-
+    <!-- Step 2: Target -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">2. Target slot</span>
+      </div>
       <div class="kv">
-        <span class="kv-label">2. Target</span>
+        <span class="kv-label">Offset</span>
         <select id="fwTarget">
           <option value="0x10000">app0 @0x10000 (primary slot)</option>
           <option value="0x1f0000">app1 @0x1F0000 (backup slot)</option>
           <option value="0x0">full image @0x0 (incl. bootloader — ROM DFU only)</option>
         </select>
       </div>
-
-      <div class="kv"><span class="kv-label">3. Path</span><span class="kv-value mono rcv-small-mono" id="fwPath">—</span></div>
-
+      <div class="kv"><span class="kv-label">Path</span><span class="kv-value mono rcv-small-mono" id="fwPath">—</span></div>
       <div class="kv">
         <span class="kv-label">After flash</span>
         <label class="kv-label"><input type="checkbox" id="fwBootAfter" checked> flip OTADATA to this slot (boot it on reboot)</label>
       </div>
+    </div>
 
+    <!-- Step 3: Flash -->
+    <div class="card col-span-full">
+      <div class="card-header">
+        <span class="card-title">3. Flash</span>
+        <span class="kv-value" id="fwStage">idle</span>
+      </div>
       <button onclick="fwFlash()" id="fwFlashBtn" class="success rcv-block-btn rcv-flash-btn" disabled>🔥 Flash</button>
-
-      <div class="kv"><span class="kv-label">Status</span><span class="kv-value" id="fwStage">idle</span></div>
       <div class="bar"><div class="bar-fill" id="fwBar"></div></div>
       <div id="fwResult" class="rcv-result-line"></div>
     </div>
-  </div>
 
-  <!-- ===== rcv-live: Live link monitor ===== -->
-  <div id="rcv-live" class="rcv-section rcv-hidden col-span-full">
+    <!-- Slot-targeted raw flash (advanced, in card form not nested) -->
+    <details class="col-span-full">
+      <summary class="rcv-subsection-summary"><b>▸ Raw slot flash</b> — by-offset write (advanced, BOOT+power-cycle required)</summary>
+      <div class="card rcv-advanced-block">
+        <div class="banner banner-warn">
+          ⚠ RX должен быть в <b>DFU</b> (зажми BOOT и подай питание).
+          Пишет firmware.bin по произвольному offset, минуя otadata.
+        </div>
+        <div class="kv"><span class="kv-label">Firmware (.bin)</span></div>
+        <input type="file" id="slotFwFile" accept=".bin,.gz,.elrs" onchange="slotOnFwSelect()">
+        <div class="kv"><span class="kv-label">Размер</span><span class="kv-value mono" id="slotFwSize">-</span></div>
+        <div class="kv"><span class="kv-label">Slot</span></div>
+        <div class="rcv-slot-list">
+          <label><input type="radio" name="slotSel" value="app0" checked onchange="slotOnSlotChange()"> <b>app0</b> @ 0x10000 (1.88 MB) — vanilla slot</label>
+          <label><input type="radio" name="slotSel" value="app1" onchange="slotOnSlotChange()"> <b>app1</b> @ 0x1F0000 (1.88 MB) — MILELRS slot</label>
+          <label><input type="radio" name="slotSel" value="custom" onchange="slotOnSlotChange()"> <b>custom</b> offset</label>
+        </div>
+        <div class="kv">
+          <span class="kv-label">Custom offset</span>
+          <input id="slotCustomOffset" class="mono input-compact" type="text" value="0x10000" disabled>
+        </div>
+        <div class="kv">
+          <span class="kv-label">Erase first</span>
+          <label class="kv-label"><input type="checkbox" id="slotEraseFirst" checked> erase 1.88 MB перед записью (~5 s)</label>
+        </div>
+        <div class="kv"><span class="kv-label">Status</span><span class="kv-value mono" id="slotStage">idle</span></div>
+        <div class="bar"><div class="bar-fill" id="slotBar"></div></div>
+        <div class="grid">
+          <button class="success" id="slotUploadBtn" onclick="slotUpload()" disabled>Upload</button>
+          <button id="slotFlashBtn" onclick="slotFlash()" data-need-mode="dfu" disabled>Erase + Flash @ slot</button>
+        </div>
+        <div id="slotResult" class="rcv-result-line text-success"></div>
+      </div>
+    </details>
+
+  </div>  <!-- /rcv-action-flash -->
+
+  <!-- ============== WATCH LINK ============== -->
+  <div id="rcv-action-watch" class="col-span-full" style="display:none">
+
     <div id="rcvFlashBanner" class="rcv-banner-warn rcv-hidden">
-      ⚠ <b>Flash в процессе</b> — Live monitor временно отключён. Кнопка Start заблокирована до окончания прошивки. CRSF будет автоматически возобновлён после flash, если был запущен.
+      ⚠ <b>Flash в процессе</b> — Live monitor временно отключён. Кнопка Start заблокирована до окончания прошивки.
     </div>
     <div id="crsfNoLinkHint" class="rcv-banner-info rcv-hidden">
-      ℹ <b>No TX link detected</b> — Link Stats / Channels / FC Telemetry требуют связанный handset TX, который активно передаёт на этот RX. Plate+RX-only режим покажет только Device Info через другие разделы.
+      ℹ <b>No TX link detected</b> — Link Stats / Channels / FC Telemetry требуют связанный handset TX.
     </div>
+
+    <!-- Monitor control card -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">Live link monitor</span>
@@ -196,7 +287,7 @@
         </span>
       </div>
       <div class="banner banner-warn">
-        Плата подключается к RX как «handset-эмулятор» и слушает CRSF-телеметрию на 420 000 бод непрерывно. Port B занят на всё время работы — Flash и Probe авто-приостановят его.
+        Плата подключается к RX как «handset-эмулятор» и слушает CRSF-телеметрию на 420 000 бод. Port B занят на всё время — Flash и Probe авто-приостановят его.
       </div>
       <div class="kv">
         <span class="kv-label">Inverted CRSF</span>
@@ -206,26 +297,40 @@
       <button class="danger rcv-block-btn" onclick="crsfStop()">■ Stop</button>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">Link Stats</span>
+    <!-- Stat tiles for link metrics -->
+    <div class="stat-grid col-span-full">
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="crsfRssi">— dBm</div>
+        <div class="stat-tile-label">Uplink RSSI</div>
       </div>
-      <div class="kv"><span class="kv-label">Uplink RSSI</span><span class="kv-value mono" id="crsfRssi">- dBm</span></div>
-      <div class="kv"><span class="kv-label">Link Quality</span><span class="kv-value mono" id="crsfLQ">- %</span></div>
-      <div class="bar"><div class="bar-fill" id="crsfLqBar"></div></div>
-      <div class="kv"><span class="kv-label">SNR</span><span class="kv-value mono" id="crsfSnr">- dB</span></div>
-      <div class="kv"><span class="kv-label">RF Mode</span><span class="kv-value mono" id="crsfRf">-</span></div>
-      <div class="kv"><span class="kv-label">TX Power</span><span class="kv-value mono" id="crsfPower">-</span></div>
-      <div class="kv"><span class="kv-label">Downlink</span><span class="kv-value mono" id="crsfDl">-</span></div>
-      <div class="kv"><span class="kv-label">Frames/Errors</span><span class="kv-value mono" id="crsfFrames">0 / 0</span></div>
-      <small id="liveLinkPlaceholder" class="rcv-hint rcv-block">
-        Запусти monitor выше — данные обновятся, если в эфире есть связанный TX-handset.
-      </small>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="crsfLQ">— %</div>
+        <div class="stat-tile-label">Link Quality</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="crsfSnr">— dB</div>
+        <div class="stat-tile-label">SNR</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="crsfRf">—</div>
+        <div class="stat-tile-label">RF mode</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="crsfPower">—</div>
+        <div class="stat-tile-label">TX power</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-tile-value mono" id="crsfFrames">0 / 0</div>
+        <div class="stat-tile-label">Frames / errors</div>
+      </div>
     </div>
 
-    <div class="card">
+    <div class="bar col-span-full"><div class="bar-fill bar-fill-success" id="crsfLqBar"></div></div>
+
+    <div class="card col-span-full">
       <div class="card-header">
         <span class="card-title">Channels</span>
+        <span class="kv-value mono" id="crsfDl">—</span>
       </div>
       <div id="channelsGrid"></div>
       <small id="channelsPlaceholder" class="rcv-hint rcv-block">
@@ -237,192 +342,185 @@
       <div class="card-header">
         <span class="card-title">FC Telemetry</span>
       </div>
-      <div class="kv"><span class="kv-label">Flight Mode</span><span class="kv-value mono" id="crsfMode">-</span></div>
-      <div class="kv"><span class="kv-label">Battery</span><span class="kv-value mono" id="crsfBatt">-</span></div>
-      <div class="kv"><span class="kv-label">Attitude</span><span class="kv-value mono" id="crsfAtt">-</span></div>
-      <div class="kv"><span class="kv-label">GPS</span><span class="kv-value mono" id="crsfGPS">-</span></div>
-      <small class="rcv-hint rcv-block">
+      <div class="kv"><span class="kv-label">Flight Mode</span><span class="kv-value mono" id="crsfMode">—</span></div>
+      <div class="kv"><span class="kv-label">Battery</span><span class="kv-value mono" id="crsfBatt">—</span></div>
+      <div class="kv"><span class="kv-label">Attitude</span><span class="kv-value mono" id="crsfAtt">—</span></div>
+      <div class="kv"><span class="kv-label">GPS</span><span class="kv-value mono" id="crsfGPS">—</span></div>
+      <small id="liveLinkPlaceholder" class="rcv-hint rcv-block">
         Заполняется только если к RX подключён FC, передающий MSP/SBUS-телеметрию.
       </small>
     </div>
-  </div>
 
-  <!-- ===== Advanced / power-tools drawer ===== -->
-  <details class="col-span-full rcv-advanced-block">
-    <summary class="rcv-advanced-summary">▶ Advanced · power tools</summary>
-    <div class="rcv-advanced-block">
+  </div>  <!-- /rcv-action-watch -->
 
-      <details open class="rcv-advanced-block">
-        <summary class="rcv-subsection-summary"><b>▸ Bootloader &amp; mode controls</b> — direct state transitions</summary>
-        <div class="card rcv-advanced-block">
-          <div class="banner banner-warn">
-            Boot app0/app1 = flip OTADATA pointer (нужен DFU). Enter stub = CRSF 'bl' frame (нужен app). Exit DFU = RUN_USER_CODE (нужен DFU/stub).
-          </div>
-          <div class="grid">
-            <button onclick="ctrlBoot(0)" class="success" data-need-mode="dfu" title="Flip OTADATA → app0, needs DFU">🅰 Boot app0</button>
-            <button onclick="ctrlBoot(1)" class="success" data-need-mode="dfu" title="Flip OTADATA → app1, needs DFU">🅱 Boot app1</button>
-          </div>
-          <div class="grid">
-            <button onclick="ctrlStub()"    data-need-mode="app"    title="CRSF 'bl' frame → in-app stub @420000, needs app">⚡ Enter stub flasher</button>
-            <button onclick="ctrlExitDfu()" data-need-mode="dfustub" title="RUN_USER_CODE → reboot into OTADATA-selected app, needs DFU/stub">↩ Exit DFU → app</button>
-          </div>
-          <details class="rcv-advanced-block">
-            <summary class="kv-label rcv-clickable">ⓘ What can't the plate do? (architectural limits)</summary>
-            <p class="field-help">
-              • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP. 3× BOOT-press на RX, 60s-auto-wifi, или через handset.<br>
-              • <b>Exit WiFi via CRSF</b> — нет opcode. HTTP POST на <code>10.0.0.1/reboot</code> с телефона или power-cycle.<br>
-              • <b>Force ROM DFU</b> — только BOOT-провод (GPIO3) без RESET. Физ. BOOT+power-cycle.
-            </p>
-          </details>
-        </div>
-      </details>
+  <!-- ============== EDIT PARAMETERS ============== -->
+  <div id="rcv-action-params" class="col-span-full" style="display:none">
 
-      <details class="rcv-advanced-block">
-        <summary class="rcv-subsection-summary"><b>▸ Diagnose</b> — full DFU scan, dump flash, hardware.json</summary>
-
-        <div class="card rcv-advanced-block">
-          <div class="rcv-card-h3">Full DFU scan (chip + MAC + both app slots)</div>
-          <div class="banner banner-warn">
-            Один запрос в DFU — чип, MAC, OTADATA, идентичность обоих app-слотов (target / version / git). Нужен DFU (BOOT+power-cycle).
-          </div>
-          <button onclick="rxScan()" id="rxScanBtn" data-need-mode="dfu" class="rcv-block-btn">🔍 Scan receiver</button>
-          <div id="rxOv" class="rcv-hidden rcv-advanced-block">
-            <div class="kv"><span class="kv-label">Chip</span><span class="kv-value mono" id="rxChip">-</span></div>
-            <div class="kv"><span class="kv-label">MAC</span><span class="kv-value mono" id="rxMac">-</span></div>
-            <div class="kv"><span class="kv-label">Active slot</span><span class="kv-value mono" id="rxActive">-</span></div>
-            <div class="kv"><span class="kv-label">OTADATA max_seq</span><span class="kv-value mono" id="rxMaxSeq">-</span></div>
-            <div id="rxSlots" class="rcv-slot-chips"></div>
-          </div>
-          <div id="rxScanErr" class="rcv-result-line text-danger"></div>
-        </div>
-
-        <div class="card">
-          <div class="rcv-card-h3">Dump receiver flash</div>
-          <div class="banner banner-warn">
-            Читает flash приёмника через ROM bootloader в PSRAM → скачать как <code>elrs_dump.bin</code>. Запусти в <code>hardware/bayckrc_c3_dual/parse.py</code> — вытащит версию, WiFi credentials и target-токены.
-          </div>
-          <div class="kv">
-            <span class="kv-label">Offset</span>
-            <input id="dumpOffset" class="mono input-compact" type="text" value="0x0">
-          </div>
-          <div class="kv">
-            <span class="kv-label">Size</span>
-            <select id="dumpSize">
-              <option value="0x100000">1 MB</option>
-              <option value="0x200000">2 MB</option>
-              <option value="0x400000" selected>4 MB (обычный ESP32-C3)</option>
-              <option value="0x800000">8 MB</option>
-            </select>
-          </div>
-          <div class="kv">
-            <span class="kv-label">Статус</span>
-            <span class="cluster">
-              <span class="kv-value mono" id="dumpStage">idle</span>
-              <span id="dumpError" class="text-danger"></span>
-            </span>
-          </div>
-          <div class="bar"><div class="bar-fill bar-fill-info" id="dumpBar"></div></div>
-          <div class="grid">
-            <button class="success" onclick="dumpStart()" id="dumpStartBtn" data-need-mode="dfu">Dump firmware</button>
-            <button onclick="dumpDownload()" id="dumpDownloadBtn" disabled>⬇ Download bin</button>
-          </div>
-          <button class="danger rcv-block-btn" onclick="dumpClear()">Clear dump (free PSRAM)</button>
-          <p class="field-help">
-            Нужен DFU. Скорость ~12–25 KB/s, 4 MB ≈ 3–5 минут.
-          </p>
-        </div>
-
-        <div class="card">
-          <div class="rcv-card-h3">Extract hardware.json (client-side)</div>
-          <div class="banner banner-warn">
-            После прошивки vanilla ELRS приёмник грузится в "голом" режиме и ждёт hardware.json с pin map. Загружается через WiFi AP приёмника.
-          </div>
-          <ol class="field-help rcv-instr-list">
-            <li>Скачай <code>hardware.json</code>.</li>
-            <li>Подключи телефон/ПК к WiFi <code>ExpressLRS RX</code> (пароль <code>expresslrs</code>).</li>
-            <li>Открой <code>http://10.0.0.1</code> → "Hardware" → upload.</li>
-            <li>Update → приёмник перезагрузится с правильными pin'ами.</li>
-          </ol>
-          <button class="success rcv-block-btn" onclick="hwJsonDownload()">⬇ Download extracted hardware.json</button>
-          <details class="rcv-advanced-block">
-            <summary class="kv-label rcv-clickable">Preview JSON</summary>
-            <pre id="hwJsonPreview" class="rcv-hwjson-preview"></pre>
-          </details>
-        </div>
-      </details>
-
-      <details class="rcv-advanced-block">
-        <summary class="rcv-subsection-summary"><b>▸ Raw / danger zone</b> — slot-targeted flash + OTADATA sector debug</summary>
-
-        <div class="card rcv-advanced-block">
-          <div class="rcv-card-h3">Slot-targeted flash (raw offset)</div>
-          <div class="banner banner-warn">
-            ⚠ RX должен быть в <b>DFU</b> (зажми BOOT и подай питание).
-            Пишет firmware.bin по произвольному offset, минуя otadata. Используй
-            чтобы залить vanilla ELRS поверх app0 (0x10000) или app1 (0x1F0000).
-          </div>
-          <div class="kv"><span class="kv-label">Firmware (.bin)</span></div>
-          <input type="file" id="slotFwFile" accept=".bin,.gz,.elrs" onchange="slotOnFwSelect()">
-          <div class="kv"><span class="kv-label">Размер</span><span class="kv-value mono" id="slotFwSize">-</span></div>
-
-          <div class="kv"><span class="kv-label">Slot</span></div>
-          <div class="rcv-slot-list">
-            <label><input type="radio" name="slotSel" value="app0" checked onchange="slotOnSlotChange()"> <b>app0</b> @ 0x10000 (1.88 MB) — vanilla slot</label>
-            <label><input type="radio" name="slotSel" value="app1" onchange="slotOnSlotChange()"> <b>app1</b> @ 0x1F0000 (1.88 MB) — MILELRS slot</label>
-            <label><input type="radio" name="slotSel" value="custom" onchange="slotOnSlotChange()"> <b>custom</b> offset</label>
-          </div>
-          <div class="kv">
-            <span class="kv-label">Custom offset</span>
-            <input id="slotCustomOffset" class="mono input-compact" type="text" value="0x10000" disabled>
-          </div>
-          <div class="kv">
-            <span class="kv-label">Erase partition first</span>
-            <label class="kv-label"><input type="checkbox" id="slotEraseFirst" checked> стирает 1.88 MB перед записью (~5 s)</label>
-          </div>
-          <div class="kv"><span class="kv-label">Статус</span><span class="kv-value mono" id="slotStage">idle</span></div>
-          <div class="bar"><div class="bar-fill" id="slotBar"></div></div>
-          <div class="grid">
-            <button class="success" id="slotUploadBtn" onclick="slotUpload()" disabled>Upload</button>
-            <button id="slotFlashBtn" onclick="slotFlash()" data-need-mode="dfu" disabled>Erase + Flash @ slot</button>
-          </div>
-          <div id="slotResult" class="rcv-result-line text-success"></div>
-        </div>
-
-        <div class="card">
-          <div class="rcv-card-h3">OTADATA raw (sector debug)</div>
-          <div class="banner banner-warn">
-            Нормальный путь — Boot app0 / app1 выше. Эта карточка — debug (сырые seq/state/crc из обеих секций) и DANGER erase.
-          </div>
-          <div class="kv"><span class="kv-label">Active slot</span><span class="kv-value mono" id="otaActiveSlot">-</span></div>
-          <div class="kv"><span class="kv-label">Max ota_seq</span><span class="kv-value mono" id="otaMaxSeq">-</span></div>
-          <div class="kv"><span class="kv-label">Sector 0 (@0xe000)</span><span class="kv-value mono rcv-small-mono" id="otaSec0">-</span></div>
-          <div class="kv"><span class="kv-label">Sector 1 (@0xf000)</span><span class="kv-value mono rcv-small-mono" id="otaSec1">-</span></div>
-          <button onclick="otadataRefresh()" data-need-mode="dfu" class="rcv-block-btn">Refresh (RX must be in DFU)</button>
-          <div class="rcv-danger-zone">
-            <span class="rcv-danger-zone-title">DANGER ZONE:</span>
-            <div class="grid rcv-advanced-block">
-              <button class="danger" onclick="otadataEraseRegion()" data-need-mode="dfu">Erase OTADATA</button>
-              <button class="danger" onclick="otadataEraseApp1()"   data-need-mode="dfu">Erase app1 (1.88 MB)</button>
-            </div>
-            <p class="field-help">
-              Erase OTADATA = bootloader fallback на app0. Erase app1 = навсегда убить MILELRS слот.
-            </p>
-          </div>
-          <div id="otadataResult" class="rcv-result-line text-success"></div>
-        </div>
-
-      </details>
-
+    <div class="card" id="rxConfigCard">
+      <div class="card-header">
+        <span class="card-title">RX parameters (CRSF LUA)</span>
+        <span class="kv-value mono" id="rxCfgStatus"></span>
+      </div>
+      <div class="banner banner-warn">
+        Читает LUA-параметры через CRSF PARAMETER_READ (~2 с на ~40 полей). Требует RX в app. Клик по value редактирует. Hidden-параметры скрыты чекбоксом ниже.
+      </div>
+      <div class="kv">
+        <span class="kv-label">Show hidden</span>
+        <label class="kv-label"><input type="checkbox" id="rxCfgShowHidden" onchange="rxCfgRender()"> debug-only params</label>
+      </div>
+      <button onclick="rxCfgLoad()" id="rxCfgLoadBtn" data-need-mode="app" class="rcv-block-btn">🔄 Load parameters</button>
+      <small id="rxCfgPlaceholder" class="rcv-hint rcv-block">
+        Нажми Load — таблица заполнится полями LUA. Клик на value → редактируется.
+      </small>
+      <table id="rxCfgTable" class="rcv-cfg-table rcv-hidden">
+        <thead><tr><th>#</th><th>Name</th><th>Type</th><th>Value</th><th>Range</th></tr></thead>
+        <tbody id="rxCfgBody"></tbody>
+      </table>
     </div>
-  </details>
+
+  </div>  <!-- /rcv-action-params -->
+
+  <!-- ============== BIND TO TX ============== -->
+  <div id="rcv-action-bind" class="col-span-full" style="display:none">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Bind to TX</span>
+      </div>
+      <p class="field-help">
+        Кнопка ниже отправляет CRSF "enter bind mode" — приёмник зажигает LED 60 секунд и слушает любой не-привязанный TX. Нажми Bind на TX в этом окне — UID запишется в NVS.
+      </p>
+      <button class="success rcv-block-btn" onclick="ctrlBind()" data-need-mode="app">🔗 Enter bind mode (60 s)</button>
+      <p class="field-help">Если RX не в app (DFU/stub), сначала сделай Exit DFU в верхней панели или через "Boot app0/app1" в Recovery.</p>
+    </div>
+
+  </div>  <!-- /rcv-action-bind -->
+
+  <!-- ============== RECOVERY ============== -->
+  <div id="rcv-action-recovery" class="col-span-full" style="display:none">
+
+    <div class="banner banner-warn col-span-full">
+      Bricked RX rescue. Все действия требуют RX в DFU (зажми BOOT + power-cycle). Destructive операции спрашивают подтверждение.
+    </div>
+
+    <!-- Switch boot slot (non-destructive) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Switch boot slot</span>
+        <span class="badge badge-info">non-destructive</span>
+      </div>
+      <p class="field-help">
+        Изменить otadata так чтобы при следующем boot грузился другой slot. Полезно если активный slot убит (бесконечный crash loop).
+      </p>
+      <div class="grid">
+        <button onclick="ctrlBoot(0)" class="success" data-need-mode="dfu">🅰 Boot app0</button>
+        <button onclick="ctrlBoot(1)" class="success" data-need-mode="dfu">🅱 Boot app1</button>
+      </div>
+      <button onclick="ctrlStub()" data-need-mode="app" class="rcv-block-btn">⚡ Enter stub flasher (from app)</button>
+    </div>
+
+    <!-- OTADATA debug -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">OTADATA</span>
+        <span class="badge badge-warn">destructive option below</span>
+      </div>
+      <div class="kv"><span class="kv-label">Active slot</span><span class="kv-value mono" id="otaActiveSlot">-</span></div>
+      <div class="kv"><span class="kv-label">Max ota_seq</span><span class="kv-value mono" id="otaMaxSeq">-</span></div>
+      <div class="kv"><span class="kv-label">Sector 0 (@0xe000)</span><span class="kv-value mono rcv-small-mono" id="otaSec0">-</span></div>
+      <div class="kv"><span class="kv-label">Sector 1 (@0xf000)</span><span class="kv-value mono rcv-small-mono" id="otaSec1">-</span></div>
+      <button onclick="otadataRefresh()" data-need-mode="dfu" class="rcv-block-btn">Refresh</button>
+      <div class="rcv-danger-zone">
+        <span class="rcv-danger-zone-title">DANGER:</span>
+        <div class="grid rcv-advanced-block">
+          <button class="danger" onclick="otadataEraseRegion()" data-need-mode="dfu">Erase OTADATA</button>
+          <button class="danger" onclick="otadataEraseApp1()"   data-need-mode="dfu">Erase app1 (1.88 MB)</button>
+        </div>
+        <p class="field-help">
+          Erase OTADATA = bootloader fallback на app0. Erase app1 = навсегда убить MILELRS слот.
+        </p>
+      </div>
+      <div id="otadataResult" class="rcv-result-line text-success"></div>
+    </div>
+
+    <!-- Full flash dump -->
+    <div class="card col-span-full">
+      <div class="card-header">
+        <span class="card-title">Full flash dump</span>
+        <span class="badge badge-info">read-only</span>
+      </div>
+      <p class="field-help">
+        Read SPI flash → save as <code>elrs_dump.bin</code>. ROM read ≈ 12-25 KB/s, 4 MB ≈ 3-5 минут.
+        Запусти в <code>hardware/bayckrc_c3_dual/parse.py</code> — вытащит версию, WiFi credentials, target-токены.
+      </p>
+      <div class="cluster">
+        <label class="kv-label">Offset <input id="dumpOffset" class="mono input-compact" type="text" value="0x0"></label>
+        <label class="kv-label">Size
+          <select id="dumpSize">
+            <option value="0x100000">1 MB</option>
+            <option value="0x200000">2 MB</option>
+            <option value="0x400000" selected>4 MB</option>
+            <option value="0x800000">8 MB</option>
+          </select>
+        </label>
+      </div>
+      <div class="kv">
+        <span class="kv-label">Status</span>
+        <span class="cluster">
+          <span class="kv-value mono" id="dumpStage">idle</span>
+          <span id="dumpError" class="text-danger"></span>
+        </span>
+      </div>
+      <div class="bar"><div class="bar-fill bar-fill-info" id="dumpBar"></div></div>
+      <div class="grid">
+        <button class="success" onclick="dumpStart()" id="dumpStartBtn" data-need-mode="dfu">Start dump</button>
+        <button onclick="dumpDownload()" id="dumpDownloadBtn" disabled>⬇ Download bin</button>
+      </div>
+      <button class="danger rcv-block-btn" onclick="dumpClear()">Clear dump (free PSRAM)</button>
+    </div>
+
+    <!-- Hardware.json extraction -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Extract hardware.json</span>
+        <span class="badge badge-info">read-only</span>
+      </div>
+      <div class="banner banner-warn">
+        После прошивки vanilla ELRS приёмник грузится в "голом" режиме и ждёт hardware.json с pin map.
+      </div>
+      <ol class="field-help rcv-instr-list">
+        <li>Скачай <code>hardware.json</code>.</li>
+        <li>Подключи телефон/ПК к WiFi <code>ExpressLRS RX</code> (пароль <code>expresslrs</code>).</li>
+        <li>Открой <code>http://10.0.0.1</code> → "Hardware" → upload.</li>
+      </ol>
+      <button class="success rcv-block-btn" onclick="hwJsonDownload()">⬇ Download extracted hardware.json</button>
+      <details class="rcv-advanced-block">
+        <summary class="kv-label rcv-clickable">Preview JSON</summary>
+        <pre id="hwJsonPreview" class="rcv-hwjson-preview"></pre>
+      </details>
+    </div>
+
+    <!-- Limits info -->
+    <details class="col-span-full">
+      <summary class="rcv-subsection-summary"><b>ⓘ What can't the plate do?</b> — architectural limits</summary>
+      <div class="card rcv-advanced-block">
+        <p class="field-help">
+          • <b>Force WiFi programmatic</b> — vanilla не диспатчит UART-MSP. 3× BOOT-press на RX, 60s-auto-wifi, или через handset.<br>
+          • <b>Exit WiFi via CRSF</b> — нет opcode. HTTP POST на <code>10.0.0.1/reboot</code> с телефона или power-cycle.<br>
+          • <b>Force ROM DFU</b> — только BOOT-провод (GPIO3) без RESET. Физ. BOOT+power-cycle.
+        </p>
+      </div>
+    </details>
+
+  </div>  <!-- /rcv-action-recovery -->
 
   <!-- Connection rail -->
   <div class="connection-rail col-span-full">
     <span class="dot on"></span>
     <span class="kv-label">Port B</span>
-    <span class="kv-value">UART @ GP10/GP11 · CRSF 420 000</span>
+    <span class="kv-value">UART @ GP10/11 · CRSF 420 000 / DFU 115 200</span>
     <span class="connection-rail-spacer"></span>
-    <span class="connection-rail-action">RX dispatch · ELRS Flash / CRSF live monitor</span>
+    <span class="connection-rail-action">Owner: dfu_session / crsf_live</span>
   </div>
 
 </div>

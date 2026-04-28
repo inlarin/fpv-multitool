@@ -141,6 +141,7 @@ function showTab(name) {
     fwPopulateModels(); fwSourceChange(); fwPathUpdate();
     const tgt = document.getElementById('fwTarget'); if (tgt) tgt.onchange = fwPathUpdate;
     hwJsonPreviewRender();
+    rcvPickAction(_curRcvAction || 'identify');
     // Auto-probe on first open this session (or if stale >90s).
     const now = Date.now();
     if (!window._rxProbeLast || now - window._rxProbeLast > 90000) {
@@ -1700,41 +1701,28 @@ function applyRxModeGating(mode) {
   });
 }
 
-// === Receiver tab: action-picker accordion ===
-// Click a nav button → matching section opens, all others close. Click
-// again → close the open one. Only 3 workflow sections remain (flash,
-// config, live); Bind + Reboot moved to the Status card's Quick actions.
+// === Receiver tab: 6-action picker (mockup IA) ===
+// Identify / Flash / Watch / Params / Bind / Recovery. Persisted across tab
+// switches via localStorage. Each panel has post-open init hook.
+let _curRcvAction = localStorage.getItem('rcvAction') || 'identify';
+function rcvPickAction(name) {
+  _curRcvAction = name;
+  localStorage.setItem('rcvAction', name);
+  document.querySelectorAll('#rcvActionPicker .action-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.action === name);
+  });
+  ['identify','flash','watch','params','bind','recovery'].forEach(a => {
+    const el = document.getElementById('rcv-action-' + a);
+    if (el) el.style.display = (a === name) ? '' : 'none';
+  });
+  // Post-open init hooks
+  if (name === 'flash') fwPathUpdate();
+  if (name === 'recovery') { try { otadataRefresh(); } catch (_) {} }
+}
+// Backwards-compat shim — older code paths called rcvOpen('flash'/'config'/'live').
 function rcvOpen(section) {
-  const target = document.getElementById('rcv-' + section);
-  const wasOpen = target && target.style.display !== 'none';
-  // Anchor: record viewport-relative Y of the picker BEFORE layout changes,
-  // then restore that offset AFTER. Without this the page "jumps" as sections
-  // of different heights swap, because the browser keeps scroll offset but
-  // content above/below the viewport shifts.
-  const picker = document.querySelector('button[data-rcv]');
-  const anchorRect = picker ? picker.getBoundingClientRect() : null;
-
-  document.querySelectorAll('.rcv-section').forEach(e => e.style.display = 'none');
-  document.querySelectorAll('button[data-rcv]').forEach(b => b.classList.remove('active'));
-  if (!wasOpen && target) {
-    target.style.display = '';
-    const nav = document.querySelector('button[data-rcv="' + section + '"]');
-    if (nav) nav.classList.add('active');
-    // Section-specific post-open init
-    if (section === 'flash')  fwPathUpdate();
-    if (section === 'config') { /* user clicks Load manually */ }
-    if (section === 'live')   { /* CRSF starts on explicit click */ }
-  }
-
-  // Restore the picker's viewport position so the content below it is
-  // predictable. Defers to next frame so layout has settled.
-  if (anchorRect) {
-    requestAnimationFrame(() => {
-      const newRect = picker.getBoundingClientRect();
-      const delta   = newRect.top - anchorRect.top;
-      if (Math.abs(delta) > 1) window.scrollBy({top: delta, left: 0, behavior: 'instant'});
-    });
-  }
+  const map = { flash: 'flash', config: 'params', live: 'watch' };
+  rcvPickAction(map[section] || section);
 }
 
 // === ELRS FLASH ===
@@ -2261,16 +2249,16 @@ async function ctrlBoot(slot) {
 async function rxScan() {
   const btn = document.getElementById('rxScanBtn');
   const err = document.getElementById('rxScanErr');
-  const ov  = document.getElementById('rxOv');
   btn.disabled = true; err.textContent = ''; btn.textContent = '⏳ Scanning…';
   try {
     const txt = await postForm('/api/elrs/receiver_info');
     const d = JSON.parse(txt);
-    document.getElementById('rxChip').textContent =
-      (d.chip.name || 'unknown') + '  (magic ' + (d.chip.magic_hex || '-') + ')';
+    document.getElementById('rxChip').textContent = (d.chip.name || 'unknown');
     document.getElementById('rxMac').textContent = d.chip.mac_ok ? d.chip.mac : '(not read)';
+    const fs = document.getElementById('rxFlashSize');
+    if (fs) fs.textContent = d.chip.flash_size_mb ? (d.chip.flash_size_mb + ' MB') : '—';
     document.getElementById('rxActive').textContent =
-      d.otadata.active_slot >= 0 ? ('app' + d.otadata.active_slot) : 'none (both blank)';
+      d.otadata.active_slot >= 0 ? ('app' + d.otadata.active_slot) : 'none';
     document.getElementById('rxMaxSeq').textContent =
       d.otadata.max_seq + (d.otadata.ok ? '' : ' (read failed)');
 
@@ -2306,7 +2294,6 @@ async function rxScan() {
       col.innerHTML = body;
       slotsDiv.appendChild(col);
     }
-    ov.style.display = 'block';
     rxApplyModeGate();  // re-gate after slot buttons rendered
   } catch (e) {
     err.textContent = 'Scan failed: ' + (e.message || e);
@@ -2318,13 +2305,14 @@ function rxBackupSlot(slot) {
   const off = slot === 0 ? '0x10000' : '0x1f0000';
   document.getElementById('dumpOffset').value = off;
   document.getElementById('dumpSize').value = '0x200000';
-  alert('Dump offset/size prefilled. Open Receiver tab → Advanced → "Dump Receiver Firmware" and press Dump.');
-  showTab('receiver');
+  alert('Dump offset/size prefilled. Switch to Recovery action (Full flash dump card) and press Start dump.');
+  showTab('receiver'); rcvPickAction('recovery');
 }
 function rxFlashToSlot(slot) {
   const radio = document.querySelector('input[name="slotSel"][value="app' + slot + '"]');
   if (radio) { radio.checked = true; if (typeof slotOnSlotChange === 'function') slotOnSlotChange(); }
-  alert('Slot app' + slot + ' selected. Scroll to "Slot-targeted flash" — upload firmware.bin and hit Erase+Flash.');
+  alert('Slot app' + slot + ' selected. Switch to Flash action and use the "Raw slot flash" disclosure to upload + write.');
+  rcvPickAction('flash');
 }
 
 // ===== Stub-flash (auto, no BOOT+power-cycle required) =====
