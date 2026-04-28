@@ -828,6 +828,17 @@ label {
 }
 .toolbar-spacer { flex: 1; }
 
+/* ---------- Semantic text utilities (for state-driven JS) ---------- */
+.text-success { color: var(--success); }
+.text-warn    { color: var(--warn); }
+.text-danger  { color: var(--danger); }
+.text-muted   { color: var(--text-muted); }
+.text-info    { color: var(--info); }
+
+/* ---------- Progress bar variants ---------- */
+.bar-fill.success { background: var(--success); }
+.bar-fill.danger  { background: var(--danger); }
+
 /* ---------- Layout utilities (small set — don't sprawl) ---------- */
 
 /* Span across the full auto-fit grid. Used for full-width banners + page

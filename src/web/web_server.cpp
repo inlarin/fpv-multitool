@@ -438,7 +438,11 @@ void WebServer::start() {
                         const uint8_t *data, size_t len) {
         AsyncWebServerResponse *r = req->beginResponse_P(200, mime, data, len);
         r->addHeader("Content-Encoding", "gzip");
-        r->addHeader("Cache-Control", "max-age=3600");
+        // 60s — short enough that an OTA-updated UI shows up within ~1 min
+        // without explicit Ctrl+Shift+R, long enough that tab switches
+        // don't re-pull the same 50 KB JS each time. Trade-off picked for
+        // a single-user dev tool, not a public site.
+        r->addHeader("Cache-Control", "max-age=60");
         req->send(r);
     };
     s_server->on("/", HTTP_GET, [serveGzip](AsyncWebServerRequest *req) {

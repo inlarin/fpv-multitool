@@ -3163,9 +3163,9 @@ function otaRefresh() {
     if (j.latest) {
       document.getElementById('otaLatest').textContent = j.latest;
       const outdated = j.latest !== j.fw_version;
-      document.getElementById('otaCompare').textContent =
-        outdated ? 'доступна новая версия' : 'актуальная';
-      document.getElementById('otaCompare').style.color = outdated ? '#fa0' : '#0f0';
+      const cmp = document.getElementById('otaCompare');
+      cmp.textContent = outdated ? 'доступна новая версия' : 'актуальная';
+      cmp.className = 'kv-value ' + (outdated ? 'text-warn' : 'text-success');
       document.getElementById('otaPullBtn').disabled = !outdated || !j.latest_url;
     }
     if (j.pull_running) {
@@ -3174,6 +3174,9 @@ function otaRefresh() {
     } else if (j.pull_message) {
       document.getElementById('otaPullStage').textContent = j.pull_message;
     }
+    // Connection rail heap info
+    const rail = document.getElementById('otaRailHeap');
+    if (rail) rail.textContent = 'Free: ' + fmtBytes(j.app_free || 0) + ' · Slot: ' + (j.next || '?');
   }).catch(e=>{
     document.getElementById('otaResult').textContent = 'Info error: ' + e;
   });
@@ -3182,21 +3185,24 @@ function otaRefresh() {
 function otaCheck() {
   const btn = document.getElementById('otaCheckBtn');
   btn.disabled = true;
-  document.getElementById('otaCompare').textContent = 'проверяю...';
+  const cmp = document.getElementById('otaCompare');
+  cmp.textContent = 'проверяю...';
+  cmp.className = 'kv-value text-muted';
   fetch('/api/ota/check', {method:'POST'})
     .then(r => r.text().then(body => ({ok: r.ok, status: r.status, body})))
     .then(res => {
       btn.disabled = false;
       if (!res.ok) {
-        document.getElementById('otaCompare').textContent = 'ошибка HTTP ' + res.status + ': ' + res.body;
-        document.getElementById('otaCompare').style.color = '#f44';
+        cmp.textContent = 'ошибка HTTP ' + res.status + ': ' + res.body;
+        cmp.className = 'kv-value text-danger';
         return;
       }
       otaRefresh();
     })
     .catch(e => {
       btn.disabled = false;
-      document.getElementById('otaCompare').textContent = 'Network error: ' + e;
+      cmp.textContent = 'Network error: ' + e;
+      cmp.className = 'kv-value text-danger';
     });
 }
 
@@ -3207,7 +3213,7 @@ async function otaPull() {
   const bar = document.getElementById('otaPullBar');
   stage.textContent = 'starting';
   bar.style.width = '0%';
-  bar.style.background = '#0af';
+  bar.classList.remove('success', 'danger');
   document.getElementById('otaPullBtn').disabled = true;
 
   fetch('/api/ota/pull', {method:'POST'}).then(r => r.text()).then(t => {
@@ -3220,11 +3226,12 @@ async function otaPull() {
         if (!j.pull_running) {
           clearInterval(otaPullPoll);
           otaPullPoll = null;
+          bar.classList.remove('success', 'danger');
           if ((j.pull_message || '').startsWith('OK')) {
-            bar.style.background = '#0f0';
+            bar.classList.add('success');
             setTimeout(() => location.reload(), 10000);
           } else {
-            bar.style.background = '#f44';
+            bar.classList.add('danger');
             document.getElementById('otaPullBtn').disabled = false;
           }
         }
@@ -3255,9 +3262,10 @@ async function otaUpload() {
 
   btn.disabled = true;
   res.textContent = '';
+  res.className = 'field-help';
   stage.textContent = 'uploading...';
   bar.style.width = '0%';
-  bar.style.background = '#0af';
+  bar.classList.remove('success', 'danger');
 
   xhr.upload.onprogress = (e) => {
     if (e.lengthComputable) {
@@ -3270,15 +3278,15 @@ async function otaUpload() {
     btn.disabled = false;
     if (xhr.status === 200) {
       bar.style.width = '100%';
-      bar.style.background = '#0f0';
+      bar.classList.add('success');
       stage.textContent = 'done — rebooting';
-      res.style.color = '#0f0';
+      res.className = 'field-help text-success';
       res.textContent = xhr.responseText + ' — страница обновится автоматически через 8 с';
       setTimeout(() => location.reload(), 8000);
     } else {
-      bar.style.background = '#f44';
+      bar.classList.add('danger');
       stage.textContent = 'error';
-      res.style.color = '#f44';
+      res.className = 'field-help text-danger';
       res.textContent = 'HTTP ' + xhr.status + ': ' + xhr.responseText;
     }
   };

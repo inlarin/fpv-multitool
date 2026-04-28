@@ -1,42 +1,69 @@
 <div id="tab-ota" class="tab-content" style="display:none">
+
+  <!-- Current firmware status -->
   <div class="card">
-    <h2>OTA Update</h2>
-    <div class="row"><span class="label">FW version:</span><span class="value" id="otaFwVer">-</span></div>
-    <div class="row"><span class="label">Running:</span><span class="value" id="otaRunning">-</span></div>
-    <div class="row"><span class="label">Next slot:</span><span class="value" id="otaNext">-</span></div>
-    <div class="row"><span class="label">App size:</span><span class="value" id="otaAppSize">-</span></div>
-    <div class="row"><span class="label">Free:</span><span class="value" id="otaFree">-</span></div>
-    <div class="row"><span class="label">SDK:</span><span class="value" id="otaSdk">-</span></div>
-    <button onclick="otaRefresh()">Refresh info</button>
-  </div>
-  <div class="card">
-    <h2>GitHub releases</h2>
-    <div class="row"><span class="label">Repo:</span><span class="value" id="otaRepo">-</span></div>
-    <div class="row"><span class="label">Latest:</span><span class="value" id="otaLatest">-</span></div>
-    <div class="row"><span class="label">Status:</span><span class="value" id="otaCompare">-</span></div>
-    <div style="margin-top:8px">
-      <button onclick="otaCheck()" id="otaCheckBtn">Проверить обновления</button>
-      <button onclick="otaPull()" id="otaPullBtn" disabled>Установить из GitHub</button>
+    <div class="card-header">
+      <span class="card-title">Current firmware</span>
+      <button class="ghost btn-sm" onclick="otaRefresh()">Refresh</button>
     </div>
-    <div class="row" style="margin-top:10px"><span class="label">Progress:</span><span class="value" id="otaPullStage">-</span></div>
-    <div class="bar"><div class="bar-fill" id="otaPullBar" style="width:0%;background:#0af"></div></div>
-    <p style="color:#888;font-size:11px;margin:8px 0 0">
-      Для онлайн-апдейта плата должна быть в STA-режиме (подключена к WiFi с интернетом).
+    <div class="kv"><span class="kv-label">Version</span><span class="kv-value mono" id="otaFwVer">—</span></div>
+    <div class="kv"><span class="kv-label">Running slot</span><span class="kv-value mono" id="otaRunning">—</span></div>
+    <div class="kv"><span class="kv-label">Next slot</span><span class="kv-value mono" id="otaNext">—</span></div>
+    <div class="kv"><span class="kv-label">App size</span><span class="kv-value mono" id="otaAppSize">—</span></div>
+    <div class="kv"><span class="kv-label">Free</span><span class="kv-value mono" id="otaFree">—</span></div>
+    <div class="kv"><span class="kv-label">SDK</span><span class="kv-value mono" id="otaSdk">—</span></div>
+  </div>
+
+  <!-- GitHub update -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Update from GitHub</span>
+    </div>
+    <div class="kv"><span class="kv-label">Repo</span><span class="kv-value mono" id="otaRepo">—</span></div>
+    <div class="kv"><span class="kv-label">Latest release</span><span class="kv-value mono" id="otaLatest">—</span></div>
+    <div class="kv"><span class="kv-label">Status</span><span class="kv-value" id="otaCompare">—</span></div>
+    <div class="cluster">
+      <button class="secondary" onclick="otaCheck()" id="otaCheckBtn">Check for updates</button>
+      <button onclick="otaPull()" id="otaPullBtn" disabled>Pull &amp; install</button>
+    </div>
+    <div class="kv"><span class="kv-label">Progress</span><span class="kv-value mono" id="otaPullStage">—</span></div>
+    <div class="bar"><div class="bar-fill" id="otaPullBar"></div></div>
+    <p class="field-help">
+      Online-апдейт требует STA-режим (плата подключена к WiFi с интернетом).
+      После загрузки плата перезагрузится автоматически.
     </p>
   </div>
+
+  <!-- Manual upload -->
   <div class="card">
-    <h2>Upload firmware.bin</h2>
-    <p style="color:#888;font-size:12px;margin:4px 0 10px">
-      PlatformIO: <code>.pio/build/esp32s3/firmware.bin</code>.
-      Плата перезагрузится автоматически после прошивки.
-    </p>
-    <input type="file" id="otaFile" accept=".bin">
-    <div class="row"><span class="label">Статус:</span><span class="value" id="otaStage">idle</span></div>
-    <div class="bar"><div class="bar-fill" id="otaBar" style="width:0%;background:#0af"></div></div>
-    <div style="margin-top:10px">
-      <button id="otaBtn" onclick="otaUpload()">Upload & Flash</button>
-      <button class="danger" onclick="otaAbort()">Abort</button>
+    <div class="card-header">
+      <span class="card-title">Manual upload</span>
+      <span class="badge badge-neutral">advanced</span>
     </div>
-    <div id="otaResult" style="margin-top:10px;color:#0f0;word-break:break-word"></div>
+    <p class="field-help">
+      Залить произвольный <code>firmware.bin</code> с компьютера. PlatformIO путь:
+      <code>.pio/build/esp32s3/firmware.bin</code>.
+    </p>
+    <div class="field">
+      <span class="field-label">Firmware file</span>
+      <input type="file" id="otaFile" accept=".bin">
+    </div>
+    <div class="kv"><span class="kv-label">Status</span><span class="kv-value mono" id="otaStage">idle</span></div>
+    <div class="bar"><div class="bar-fill" id="otaBar"></div></div>
+    <div class="cluster">
+      <button id="otaBtn" onclick="otaUpload()">Upload &amp; flash</button>
+      <button class="danger ghost" onclick="otaAbort()">Abort</button>
+    </div>
+    <div id="otaResult" class="field-help"></div>
   </div>
+
+  <!-- Connection rail -->
+  <div class="connection-rail col-span-full">
+    <span class="dot on"></span>
+    <span class="kv-label">Plate</span>
+    <span class="kv-value">192.168.32.50 · WiFi STA</span>
+    <span class="connection-rail-spacer"></span>
+    <span class="connection-rail-action" id="otaRailHeap">—</span>
+  </div>
+
 </div>
