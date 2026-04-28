@@ -3095,7 +3095,7 @@ function portBRefresh() {
       '(pin_a=GPIO ' + j.pin_a + ', pin_b=GPIO ' + j.pin_b + ')';
     const m = document.getElementById('portBMode');
     m.textContent = j.mode_name;
-    m.className = 'status ' + (j.mode === 0 ? 'off' : 'on');
+    m.className = 'badge ' + (j.mode === 0 ? 'badge-neutral' : 'badge-success');
     document.getElementById('portBOwner').textContent =
       j.owner ? ('owner: ' + j.owner) : '';
     document.getElementById('portBPref').textContent = j.preferred_name;
@@ -3104,14 +3104,15 @@ function portBRefresh() {
     j.modes.forEach(m => {
       const b = document.createElement('button');
       b.textContent = m.name;
-      b.style.flex = '1 1 auto';
-      b.style.minWidth = '70px';
-      if (m.id === j.preferred) {
-        b.className = 'success';
-      }
+      // Active boot-mode shown with primary fill, others as secondary outline.
+      b.className = (m.id === j.preferred) ? '' : 'secondary';
       b.onclick = () => portBSet(m.id);
       c.appendChild(b);
     });
+    // Connection rail update for Sys tab.
+    const rail = document.getElementById('sysRailDetails');
+    if (rail) rail.textContent = 'Port B: ' + j.mode_name +
+      (j.owner ? ' · ' + j.owner : '');
   }).catch(e => {
     document.getElementById('portBMsg').textContent = 'Refresh failed';
   });

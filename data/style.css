@@ -839,6 +839,21 @@ label {
 .bar-fill.success { background: var(--success); }
 .bar-fill.danger  { background: var(--danger); }
 
+/* ---------- Sys-tab specific helpers ---------- */
+/* Native <details> arrow looks ugly inside .card. Hide and rely on the
+   summary text being its own affordance. Used in tab-sys advanced
+   accordion + Mode reference disclosure. */
+.sys-advanced-summary { cursor: pointer; list-style: none; }
+.sys-advanced-summary::-webkit-details-marker { display: none; }
+/* Inset card inside an accordion — dashed border + top spacing */
+.sys-inset-card { margin-top: var(--s-3); border-style: dashed; }
+/* Full-width button (e.g. Force Release) */
+.sys-block-button { width: 100%; }
+/* Reserve a line so empty status messages don't shift layout */
+.sys-min-line { min-height: 1em; }
+/* Mode reference block — preformatted code-output but smaller */
+.sys-mode-reference { white-space: pre; line-height: 1.6; margin-top: var(--s-2); }
+
 /* ---------- Layout utilities (small set — don't sprawl) ---------- */
 
 /* Span across the full auto-fit grid. Used for full-width banners + page
