@@ -34,20 +34,25 @@ the pinout from a flash dump. Verify with a GPIO probe before trusting.
 | TFT_D6      | 16    |
 | TFT_D7      | 15    |
 
-### Touch — FT6336 (older revisions) or GT911 (newer)
+### Touch — **FT6336 confirmed on this physical board** (2026-04-29 sanity scan)
 
 | Function     | GPIO  |
 |--------------|-------|
 | TOUCH_SDA    | 6     |
 | TOUCH_SCL    | 5     |
-| I2C port     | 1     |
-| FT6336 addr  | 0x38  |
-| GT911 addr   | 0x5D or 0x14 (depends on INT/RST strap) |
+| I2C port     | 0 or 1 (Wire / Wire1 — both attach to the same physical pins) |
+| Address      | **0x38** (FT6336 — empirically confirmed by sanity sketch) |
 | Frequency    | 400 kHz |
 
-**Detect at runtime:** scan I2C bus 1 for 0x38 → FT6336, else 0x5D/0x14 → GT911.
-Don't assume from board revision; same SC01 Plus PCB ships with either chip
-depending on production batch.
+**Confirmation source:** [src/board/wt32_sc01_plus/sanity.cpp](../../../src/board/wt32_sc01_plus/sanity.cpp) prints
+`I2C bus 0 (Wire) scan (SDA=6 SCL=5): 0x38 (FT6336 touch)` — only after the
+shared LCD/touch RST line (GPIO 4) is driven HIGH and a 120 ms boot delay
+passes. **Without RST manipulation the I2C scan returns nothing**, because
+the touch IC sits in reset.
+
+GT911 alternative (0x5D / 0x14) was probed too and does not respond on
+this board, so we can hard-code FT6336 going forward — no runtime detect
+needed for this specific PCB.
 
 ### SD card
 
