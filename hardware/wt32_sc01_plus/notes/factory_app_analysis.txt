@@ -1,0 +1,50 @@
+Factory app analysis -- WT32-SC01 Plus, dump 2026-04-29
+========================================================
+
+Layout (all sizes match esptool flash_id):
+  bootloader  0x000000-0x008000   32 KB
+  parttable   0x008000-0x009000    4 KB
+  nvs         0x009000-0x00f000   24 KB   (100% 0xFF -- factory NVS empty)
+  phy_init    0x00f000-0x010000    4 KB
+  factory app 0x010000-0x410000   4 MB    (~2 MB used, see below)
+  free        0x410000-0x1000000  12 MB   (100% 0xFF)
+
+Factory app properties:
+  Real binary size : 0x1f1480 bytes = 1989 KB ~= 1.94 MB
+                     (last non-0xFF byte at offset 0x1f1480 inside the slot)
+  Slot allocation  : 4 MB (so ~2 MB headroom inside the slot before flash erase)
+  ESP image header : 0xE9 magic OK, 5 segments, chip_id 0x09 (ESP32-S3)
+  Framework        : ESP-IDF (not Arduino) -- string paths /IDF/components/...
+  Build origin     : /home/sorz/code_repository/esp32-8ms-v3/
+                     -> "sorz" is the developer; "esp32-8ms-v3" is the project
+                     name. Almost certainly the official Wireless-Tag SC01
+                     Plus demo. Worth searching GitHub before reverse-engineering
+                     pin map / LCD init -- their hardware-init code is likely
+                     directly copy-pastable.
+
+LCD bus / driver hints in strings:
+  components-third-party/bus/8080_lcd_esp32s3.c    -- 8080 parallel LCD bus
+  "screen 8080 interface create failed"            -- error path for above
+  Confirms 8-bit 8080 parallel (ST7796), matches Wireless-Tag datasheet.
+
+Subsystems present in factory binary (from /IDF/ string scan):
+  Display  : 8080 parallel LCD + custom esp32-8ms bus driver
+  SD/MMC   : sdmmc_cmd.c + sdmmc_sd.c + diskio_sdmmc.c + vfs_fat.c
+             (FATFS over SD via SDMMC controller -- not SPI)
+  USB      : vfs_usb_serial_jtag.c (native USB CDC console)
+  Drivers  : i2c, ledc, gpio, spi_master, gdma, uart -- standard IDF set
+
+Notable not present:
+  No "littlefs" / "spiffs" strings found  -- factory app does not use a fs
+                                             partition for assets; LVGL fonts
+                                             likely linked in directly.
+  No "lvgl" / "LVGL" strings found        -- either stripped (LV_USE_LOG=0)
+                                             or assets-only LVGL build.
+
+Implication for our project:
+  - We can erase the entire 16 MB freely; no factory data is at risk
+    (NVS empty, free region is virgin 0xFF)
+  - SD on this board is wired to the SDMMC controller, not SPI -- when we
+    set up our own SD code, prefer the SDMMC interface (faster + 4-bit mode)
+  - Hardware-init code from `esp32-8ms-v3` GitHub project is the canonical
+    reference; pull it before guessing pinouts

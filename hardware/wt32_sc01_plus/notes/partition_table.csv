@@ -1,0 +1,9 @@
+# Wireless-Tag WT32-SC01 Plus — factory partition table
+# Read from flash offset 0x8000 (4 KB) of the original board, before any modification.
+# Layout: single-app, no OTA, no data filesystem, no coredump.
+# Only 4 MB of the 16 MB flash is allocated -- 12 MB free for our use.
+#
+# Name,     Type, SubType,  Offset,    Size,       Flags
+nvs,        data, nvs,      0x9000,    0x6000,
+phy_init,   data, phy,      0xf000,    0x1000,
+factory,    app,  factory,  0x10000,   0x400000,

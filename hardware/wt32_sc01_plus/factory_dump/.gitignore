@@ -1,0 +1,6 @@
+# Raw flash binaries — too large for plain git (full_16mb.bin is 16 MB, app
+# is 4 MB). Keep them locally for restore via:
+#   esptool.py --port COM13 write_flash 0x0 full_16mb.bin
+# Re-create with:
+#   esptool.py --port COM13 read_flash 0 0x1000000 full_16mb.bin
+*.bin
