@@ -208,8 +208,10 @@ Result crsfPingTxModule(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *
 // plate trigger WiFi mode without 60 s auto-AP timeout or 3× BOOT-press.
 Result sendMspWifiMode(const Config &cfg);
 
-// CRSF COMMAND m,m,<id> — sets the active model-match ID. id=0 means
-// "match all" (RX always responds regardless of handset model selection).
+// CRSF COMMAND m,m,<id> — sets the active model-match ID. id=255 (0xFF)
+// means "match any handset model" — RX accepts link from any model.
+// id=0..63 = restrict to handset model with that exact ID (mismatch
+// rejects link). Default ELRS behaviour is 0xFF.
 Result sendCrsfModelMatch(const Config &cfg, uint8_t modelId);
 
 // Synthesize standard CRSF telemetry frames. RX forwards them over the

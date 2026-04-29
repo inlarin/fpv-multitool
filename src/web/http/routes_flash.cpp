@@ -1730,8 +1730,10 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
     // Workaround: 3× rapid BOOT button-press, 60 s auto-wifi timer (if
     // wifi-on-interval > 0), or send via a linked handset.
 
-    // POST /api/elrs/modelmatch?id=N — sets active model-match ID. id=0 makes
-    // RX always respond regardless of handset model selection.
+    // POST /api/elrs/modelmatch?id=N — sets active model-match ID. id=255
+    // (0xFF) = match any handset model (default ELRS behaviour). id=0..63 =
+    // restrict to handset model with that exact ID. Setting id=0 was a bug
+    // earlier — that means "match only model 0" not "match all".
     s_server->on("/api/elrs/modelmatch", HTTP_POST, [](AsyncWebServerRequest *req) {
         uint8_t id = 0;
         if (req->hasParam("id", true)) id = (uint8_t)req->getParam("id", true)->value().toInt();

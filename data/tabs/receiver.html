@@ -154,11 +154,13 @@
         <span class="card-title">Model match override</span>
       </div>
       <p class="field-help">
-        Установить ID, по которому RX матчит handset model. id=0 = "always-match" (RX отвечает любому модели на handset).
+        Установить model ID для matching с handset. <b>id=255 (0xFF) = match any model</b> (default ELRS).
+        id=0..63 = restrict только к этому handset model. Если handset на model X а RX поставлен на Y — link rejected.
       </p>
       <div class="cluster">
-        <label class="kv-label">ID <input id="rxModelId" class="input-compact" type="number" min="0" max="63" value="0"></label>
+        <label class="kv-label">ID <input id="rxModelId" class="input-compact" type="number" min="0" max="255" value="255"></label>
         <button onclick="rxSetModelMatch()" data-need-mode="app">Set</button>
+        <button class="ghost btn-sm" onclick="document.getElementById('rxModelId').value=255;rxSetModelMatch()" data-need-mode="app">Match-all (255)</button>
         <span id="rxModelMatchResult" class="field-help"></span>
       </div>
     </div>
