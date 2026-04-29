@@ -148,14 +148,18 @@ static lv_obj_t *s_status_busy_lbl = nullptr;
 static char     s_busy_text[64]  = {0};
 static int      s_busy_progress  = -1;
 
+static constexpr int STATUS_BAR_H = 24;
+
 static void buildStatusBar(lv_obj_t *parent) {
     s_status_bar = lv_obj_create(parent);
     lv_obj_remove_style_all(s_status_bar);
-    lv_obj_set_size(s_status_bar, lv_pct(100), 32);
+    lv_obj_set_size(s_status_bar, lv_pct(100), STATUS_BAR_H);
     lv_obj_set_pos(s_status_bar, 0, 0);
     lv_obj_set_style_bg_color(s_status_bar, lv_color_hex(0x1a1f24), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_status_bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_status_bar, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_status_bar, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(s_status_bar, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(s_status_bar, 8, LV_PART_MAIN);
     lv_obj_set_flex_flow(s_status_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_status_bar, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -186,11 +190,11 @@ static void buildStatusBar(lv_obj_t *parent) {
 
     s_status_busy = lv_obj_create(s_status_bar);
     lv_obj_remove_style_all(s_status_busy);
-    lv_obj_set_size(s_status_busy, LV_SIZE_CONTENT, 24);
+    lv_obj_set_size(s_status_busy, LV_SIZE_CONTENT, 18);
     lv_obj_set_style_bg_color(s_status_busy, lv_color_hex(0x2E86AB), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_status_busy, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(s_status_busy, 12, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(s_status_busy, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_status_busy, 9, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(s_status_busy, 6, LV_PART_MAIN);
     lv_obj_add_flag(s_status_busy, LV_OBJ_FLAG_HIDDEN);
 
     s_status_busy_lbl = lv_label_create(s_status_busy);
@@ -321,9 +325,9 @@ static void showHome() {
     // computation after lv_obj_remove_style_all). Manual math is rock
     // solid and makes the geometry trivial to reason about.
     //
-    // Content area is 320 wide x (480-32) = 448 tall.
+    // Content area is 320 wide x (480 - status bar) tall.
     constexpr int CONTENT_W = 320;
-    constexpr int CONTENT_H = 480 - 32;
+    constexpr int CONTENT_H = 480 - STATUS_BAR_H;
     constexpr int PAD       = 12;
     constexpr int GAP       = 12;
     constexpr int TILE_W    = (CONTENT_W - 2 * PAD - GAP) / 2;        // 142
@@ -352,15 +356,15 @@ static void showHome() {
 
         lv_obj_t *icon = lv_label_create(tile);
         lv_obj_set_style_text_color(icon, lv_color_hex(0x2E86AB), 0);
-        lv_obj_set_style_text_font(icon, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(icon, &lv_font_montserrat_48, 0);
         lv_label_set_text(icon, SECTIONS[i].icon);
-        lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 4);
+        lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 2);
 
         lv_obj_t *lbl = lv_label_create(tile);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xE0E0E0), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         lv_label_set_text(lbl, SECTIONS[i].label);
-        lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
+        lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, -2);
     }
 }
 
@@ -399,7 +403,7 @@ static void showSection(int idx) {
 
     // Content panel below the back row -- this is what builders fill.
     lv_obj_t *panel = lv_obj_create(s_content_area);
-    lv_obj_set_size(panel, lv_pct(100), 480 - 32 - 40);
+    lv_obj_set_size(panel, lv_pct(100), 480 - STATUS_BAR_H - 40);
     lv_obj_set_pos(panel, 0, 40);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x101418), LV_PART_MAIN);
     lv_obj_set_style_pad_all(panel, 12, 0);
@@ -414,14 +418,14 @@ static void buildSpringboard() {
     lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Status bar at the top (32 px) -- pinned across home/section swaps.
+    // Status bar at the top -- pinned across home/section swaps.
     buildStatusBar(scr);
 
-    // Content area below: 320 x (480-32) = 320 x 448.
+    // Content area below the status bar.
     s_content_area = lv_obj_create(scr);
     lv_obj_remove_style_all(s_content_area);
-    lv_obj_set_size(s_content_area, lv_pct(100), 480 - 32);
-    lv_obj_set_pos(s_content_area, 0, 32);
+    lv_obj_set_size(s_content_area, lv_pct(100), 480 - STATUS_BAR_H);
+    lv_obj_set_pos(s_content_area, 0, STATUS_BAR_H);
     lv_obj_set_style_bg_color(s_content_area, lv_color_hex(0x101418), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_content_area, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_clear_flag(s_content_area, LV_OBJ_FLAG_SCROLLABLE);
