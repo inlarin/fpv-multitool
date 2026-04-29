@@ -160,6 +160,11 @@ struct ChipInfo {
 Result chipInfo(const Config &cfg, ChipInfo *out);
 Result chipInfoInOpenSession(ChipInfo *out);
 
+// Read a single 32-bit register over the open SLIP session. Convenience
+// for callers that want to peek eFuse / GPIO / specific MMIO without
+// rolling their own CMD_READ_REG. Must be called inside an open session.
+bool readRegInOpenSession(uint32_t addr, uint32_t *val);
+
 // Send FLASH_END(reboot=true) inside an open session — used to make RX
 // boot into the freshly-flashed image without closing the session in
 // flash() itself. Idempotent failure (some ROMs don't ack FLASH_END).

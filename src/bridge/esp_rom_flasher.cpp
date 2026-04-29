@@ -712,6 +712,17 @@ Result chipInfoInOpenSession(ChipInfo *out) {
     return FLASH_OK;
 }
 
+// Public helper — single-register read inside an open session. Used by
+// diagnostic endpoints that need eFuse / chip-rev / package-id beyond
+// what chipInfoInOpenSession returns.
+bool readRegInOpenSession(uint32_t addr, uint32_t *val) {
+    if (!s_session_open || !val) return false;
+    s_session_last_use = millis();
+    uint8_t req[4];
+    *(uint32_t*)req = addr;
+    return sendCmd(CMD_READ_REG, req, 4, cksum(req, 4), 3000, val);
+}
+
 // Main flash entry point.
 // Single FLASH_BEGIN for the entire image, then N × FLASH_DATA blocks.
 // Earlier versions chunked at 256 KB because with 1 KB blocks the ROM hit a
