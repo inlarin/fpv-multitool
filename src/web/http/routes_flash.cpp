@@ -2553,10 +2553,19 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
 
         String preset = getParam("preset");
         String product_name, lua_name, hardware_json_str;
+        // Per-preset defaults for options that the vanilla .bin's appendix
+        // already had set (we'd lose them otherwise — confirmed by reading
+        // the original 2704-byte slot of vanilla 3.5.3 for BAYCK).
+        int    pre_domain = -1;
+        int    pre_wifi_on_interval = 0;
+        bool   pre_lock_on_first_connection = false;
         if (preset == "bayck_c3_dual") {
-            product_name = "BAYCK RC C3 Dual";
-            lua_name = "BAYCK 2.4G";
+            product_name = "BAYCKRC C3 900/2400 Dual Band 100mW Gemini RX";  // verbatim from vanilla
+            lua_name     = "BK DB 100 GRX";                                   // verbatim from vanilla
             hardware_json_str = FPSTR(BAYCK_C3_DUAL_HARDWARE_JSON);
+            pre_domain = 1;                          // sx127x EU868 — match vanilla default
+            pre_wifi_on_interval = 60;               // 60 s before WiFi AP fallback (vanilla default)
+            pre_lock_on_first_connection = true;     // critical: keeps RX out of WiFi AP after first link
         } else {
             product_name = getParam("product_name", "Generic ESP32 ELRS RX");
             lua_name = getParam("lua_name", "ELRS RX");
@@ -2577,13 +2586,15 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         opts.product_name = product_name.c_str();
         opts.lua_name     = lua_name.c_str();
         opts.hardware_json = hardware_json_str.length() > 0 ? hardware_json_str.c_str() : nullptr;
-        opts.domain       = domain_str.length() > 0 ? domain_str.toInt() : -1;
+        // Each option: user value if provided, else preset default (which is
+        // 0/-1/false for "custom" preset → effectively omitted from JSON).
+        opts.domain       = domain_str.length() > 0 ? domain_str.toInt() : pre_domain;
         opts.wifi_ssid     = wifi_ssid.length() > 0 ? wifi_ssid.c_str() : nullptr;
         opts.wifi_password = wifi_password.length() > 0 ? wifi_password.c_str() : nullptr;
         opts.rcvr_uart_baud   = baud_str.length() > 0 ? baud_str.toInt() : 0;
-        opts.wifi_on_interval = wifi_int_str.length() > 0 ? wifi_int_str.toInt() : 0;
+        opts.wifi_on_interval = wifi_int_str.length() > 0 ? wifi_int_str.toInt() : pre_wifi_on_interval;
         opts.tlm_interval     = tlm_int_str.length() > 0 ? tlm_int_str.toInt() : 0;
-        opts.lock_on_first_connection = (getParam("lock_on_first_connection") == "1");
+        opts.lock_on_first_connection = (getParam("lock_on_first_connection") == "1") || pre_lock_on_first_connection;
         opts.unlock_higher_power      = (getParam("unlock_higher_power") == "1");
         opts.flash_discriminator = 0;  // → randomized inside patchFirmware
 
