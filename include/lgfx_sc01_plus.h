@@ -21,6 +21,7 @@ class LGFX_SC01Plus : public lgfx::LGFX_Device {
     lgfx::Panel_ST7796   _panel;
     lgfx::Bus_Parallel8  _bus;
     lgfx::Light_PWM      _light;
+    lgfx::Touch_FT5x06   _touch;   // covers FT6336 too -- same register map family
 
 public:
     LGFX_SC01Plus() {
@@ -75,6 +76,28 @@ public:
             cfg.pwm_channel = 7;              // arbitrary unused LEDC channel
             _light.config(cfg);
             _panel.setLight(&_light);
+        }
+
+        // ----- Touch: FT6336 on Wire (I2C0), shared RST line. Min/max
+        //       coords are LEARNED via calibrateTouch() at first boot;
+        //       we just declare the bus here and leave the bounds zeroed.
+        {
+            auto cfg = _touch.config();
+            cfg.pin_sda     = SC01P_TOUCH_SDA;   // 6
+            cfg.pin_scl     = SC01P_TOUCH_SCL;   // 5
+            cfg.pin_int     = -1;                // INT not wired to a pin we use
+            cfg.pin_rst     = -1;                // shared with LCD RST, already toggled by panel init
+            cfg.i2c_port    = 0;                 // Wire (I2C0)
+            cfg.i2c_addr    = SC01P_TOUCH_ADDR_FT6336;   // 0x38
+            cfg.freq        = SC01P_TOUCH_FREQ_HZ;       // 400 kHz
+            cfg.x_min       = 0;
+            cfg.x_max       = SC01P_LCD_WIDTH  - 1;
+            cfg.y_min       = 0;
+            cfg.y_max       = SC01P_LCD_HEIGHT - 1;
+            cfg.bus_shared  = false;
+            cfg.offset_rotation = 0;             // calibrateTouch handles physical alignment
+            _touch.config(cfg);
+            _panel.setTouch(&_touch);
         }
 
         setPanel(&_panel);
