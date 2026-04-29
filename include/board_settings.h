@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <Arduino.h>   // for String
 
 // Persistent board-level settings, NVS-backed.
 //
@@ -24,5 +25,13 @@ void    setTouchCalibrate(const uint16_t in[8]);
 
 // Wipe touch calibration (forces re-calibration on next boot).
 void    clearTouchCalibrate();
+
+// WiFi STA credentials (planned to be settable from a Settings UI later;
+// for bring-up they're written once with hardcoded defaults). Returns
+// "" if the key is unset.
+String  wifiSsid();
+String  wifiPass();
+void    setWifi(const String &ssid, const String &pass);   // both at once
+bool    hasWifiCreds();   // true if both ssid and pass are non-empty
 
 } // namespace BoardSettings

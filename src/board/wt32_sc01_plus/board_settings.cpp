@@ -9,6 +9,8 @@ static bool        s_open = false;
 static constexpr const char *NS_NAME      = "boardcfg";
 static constexpr const char *KEY_ROTATION = "rotation";
 static constexpr const char *KEY_TOUCHCAL = "touch_cal";   // bytes: uint16_t[8] = 16B
+static constexpr const char *KEY_WIFI_SSID = "wifi_ssid";
+static constexpr const char *KEY_WIFI_PASS = "wifi_pass";
 
 void begin() {
     if (s_open) return;
@@ -43,6 +45,26 @@ void setTouchCalibrate(const uint16_t in[8]) {
 void clearTouchCalibrate() {
     if (!s_open) return;
     s_prefs.remove(KEY_TOUCHCAL);
+}
+
+String wifiSsid() {
+    if (!s_open) return String();
+    return s_prefs.getString(KEY_WIFI_SSID, "");
+}
+
+String wifiPass() {
+    if (!s_open) return String();
+    return s_prefs.getString(KEY_WIFI_PASS, "");
+}
+
+void setWifi(const String &ssid, const String &pass) {
+    if (!s_open) return;
+    s_prefs.putString(KEY_WIFI_SSID, ssid);
+    s_prefs.putString(KEY_WIFI_PASS, pass);
+}
+
+bool hasWifiCreds() {
+    return wifiSsid().length() > 0 && wifiPass().length() > 0;
 }
 
 } // namespace BoardSettings
