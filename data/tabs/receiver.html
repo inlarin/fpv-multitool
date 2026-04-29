@@ -134,6 +134,35 @@
       <div class="kv rcv-hidden" id="identStaPassRow"><span class="kv-label">STA password</span><span class="kv-value mono" id="identStaPass">—</span></div>
     </div>
 
+    <!-- TX Identify (via radio link) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">TX module info (via radio)</span>
+        <span class="kv-label">DEVICE_PING dest=0xEE</span>
+      </div>
+      <p class="field-help">
+        Отправляет PING к bound TX через радиолинк. RX forward'ит запрос, TX отвечает DEVICE_INFO.
+        Может вернуть "TX did not reply" — TX-side schedule slot не всегда выдан или некоторые TX modules фильтруют broadcast.
+      </p>
+      <button class="ghost rcv-block-btn" onclick="rxPingTx()" data-need-mode="app">📡 Read TX info</button>
+      <div id="rxTxInfoResult" class="rcv-result-line"></div>
+    </div>
+
+    <!-- Modelmatch -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Model match override</span>
+      </div>
+      <p class="field-help">
+        Установить ID, по которому RX матчит handset model. id=0 = "always-match" (RX отвечает любому модели на handset).
+      </p>
+      <div class="cluster">
+        <label class="kv-label">ID <input id="rxModelId" class="input-compact" type="number" min="0" max="63" value="0"></label>
+        <button onclick="rxSetModelMatch()" data-need-mode="app">Set</button>
+        <span id="rxModelMatchResult" class="field-help"></span>
+      </div>
+    </div>
+
     <!-- Phrase converter (offline tool, always available) -->
     <div class="card">
       <div class="card-header">
@@ -380,7 +409,7 @@
 
   </div>  <!-- /rcv-action-params -->
 
-  <!-- ============== BIND TO TX ============== -->
+  <!-- ============== BIND TO TX + TELEMETRY INJECT ============== -->
   <div id="rcv-action-bind" class="col-span-full" style="display:none">
 
     <div class="card">
@@ -388,10 +417,28 @@
         <span class="card-title">Bind to TX</span>
       </div>
       <p class="field-help">
-        Кнопка ниже отправляет CRSF "enter bind mode" — приёмник зажигает LED 60 секунд и слушает любой не-привязанный TX. Нажми Bind на TX в этом окне — UID запишется в NVS.
+        Отправляет CRSF "enter bind mode" — приёмник 60 секунд слушает любой не-привязанный TX. Нажми Bind на TX в этом окне → UID запишется в NVS.
       </p>
       <button class="success rcv-block-btn" onclick="ctrlBind()" data-need-mode="app">🔗 Enter bind mode (60 s)</button>
-      <p class="field-help">Если RX не в app (DFU/stub), сначала сделай Exit DFU в верхней панели или через "Boot app0/app1" в Recovery.</p>
+      <p class="field-help">Если RX не в app (DFU/stub) — сначала Exit DFU в верхней панели или Boot app0/app1 в Recovery.</p>
+    </div>
+
+    <!-- Inject synthetic telemetry — handset OSD will show as if from a real FC -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Inject test telemetry</span>
+        <span class="kv-label">→ handset OSD via radio</span>
+      </div>
+      <p class="field-help">
+        Плата синтезирует CRSF telemetry frames (sync=0xC8 = от FC), RX forward'ит через OTA uplink → handset OSD показывает.
+        Полезно тестировать handset display без реального FC.
+      </p>
+      <div class="grid">
+        <button onclick="rxInjectTelemetry('battery')" data-need-mode="app">🔋 Battery 16.8V / 87%</button>
+        <button onclick="rxInjectTelemetry('gps')" data-need-mode="app">🛰 GPS Москва · 14 sats</button>
+        <button onclick="rxInjectTelemetry('attitude')" data-need-mode="app">📐 Attitude pitch=15° roll=-8°</button>
+      </div>
+      <div id="rxInjectResult" class="rcv-result-line"></div>
     </div>
 
   </div>  <!-- /rcv-action-bind -->

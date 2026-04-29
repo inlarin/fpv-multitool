@@ -2254,6 +2254,63 @@ function ctrlAutoProbe(delayMs) {
 }
 async function ctrlBind()  { try { ctrlLog(await postForm('/api/elrs/bind')); ctrlAutoProbe(2000); }
                             catch (e) { ctrlLog(e.message || e, true); } }
+
+// === RX one-shot CRSF UART commands (Receiver tab Identify/Bind panels) ===
+
+// PING the bound TX module via radio link — DEVICE_PING dest=0xEE.
+// RX forwards over OTA uplink, TX replies with DEVICE_INFO src=0xEE.
+async function rxPingTx() {
+  const el = document.getElementById('rxTxInfoResult');
+  if (el) el.textContent = 'Pinging TX via radio…';
+  try {
+    const r = await fetch('/api/elrs/tx_info', {method:'POST'});
+    const t = await r.text();
+    if (!r.ok) { if (el) { el.className = 'rcv-result-line text-warn'; el.textContent = '✗ ' + t; } return; }
+    const j = JSON.parse(t);
+    if (el) {
+      el.className = 'rcv-result-line text-success';
+      el.innerHTML = '✓ ' + j.name + '<br>' +
+        '<span class="kv-label">serial=' + j.serial_no + ' hw=0x' + j.hw_id.toString(16) +
+        ' sw=0x' + j.sw_version.toString(16).padStart(8,'0') + ' fields=' + j.field_count + '</span>';
+    }
+  } catch (e) {
+    if (el) { el.className = 'rcv-result-line text-warn'; el.textContent = '✗ ' + (e.message || e); }
+  }
+}
+
+// Set CRSF model-match ID. id=0 = always-match (RX responds regardless).
+async function rxSetModelMatch() {
+  const el = document.getElementById('rxModelMatchResult');
+  const id = +document.getElementById('rxModelId').value || 0;
+  try {
+    const fd = new FormData(); fd.append('id', String(id));
+    const txt = await postForm('/api/elrs/modelmatch', fd);
+    if (el) { el.className = 'field-help text-success'; el.textContent = '✓ ' + txt; }
+  } catch (e) {
+    if (el) { el.className = 'field-help text-warn'; el.textContent = '✗ ' + (e.message || e); }
+  }
+}
+
+// Inject synthetic telemetry frame. Forwarded over radio to handset OSD.
+async function rxInjectTelemetry(type) {
+  const el = document.getElementById('rxInjectResult');
+  const presets = {
+    battery:  { type, voltage_mv: 16800, current_ma: 5000, consumed_mah: 200, pct: 87 },
+    gps:      { type, lat_e7: 557558020, lon_e7: 375617710, gnd_speed: 0, heading: 0, alt_m: 160, sats: 14 },
+    attitude: { type, pitch_e4: 1500, roll_e4: -800, yaw_e4: 0 }
+  };
+  const params = presets[type];
+  if (!params) return;
+  if (el) el.textContent = 'Sending ' + type + '…';
+  try {
+    const fd = new FormData();
+    Object.keys(params).forEach(k => fd.append(k, String(params[k])));
+    const txt = await postForm('/api/elrs/inject_telemetry', fd);
+    if (el) { el.className = 'rcv-result-line text-success'; el.textContent = '✓ ' + txt; }
+  } catch (e) {
+    if (el) { el.className = 'rcv-result-line text-warn'; el.textContent = '✗ ' + (e.message || e); }
+  }
+}
 async function ctrlStub()  { try { ctrlLog(await postForm('/api/crsf/reboot_to_bl')); ctrlAutoProbe(1500); }
                             catch (e) { ctrlLog(e.message || e, true); } }
 async function ctrlExitDfu() { try { ctrlLog(await postForm('/api/flash/exit_dfu')); ctrlAutoProbe(3000); }
