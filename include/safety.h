@@ -54,6 +54,17 @@ void tickValidation(uint32_t threshold_ms = 30000);
 // from a settings UI as a manual override.
 void markValidNow();
 
+// Network watchdog. Call from loop() -- if WiFi.status() never reaches
+// WL_CONNECTED within `timeout_ms` of boot, soft-reboot. Keeps a remote
+// board from sitting forever in AP fallback if its STA target is
+// temporarily down. Does NOTHING after the first successful
+// WL_CONNECTED -- subsequent disconnects are NOT acted on (prevents
+// reboot loops in flaky-network environments; the kernel's WiFi reconnect
+// loop handles those).
+//
+// Defaults: 5 minutes. Pass `0` to disable.
+void tickNetworkWatchdog(uint32_t timeout_ms = 5 * 60 * 1000);
+
 // Read-only accessors for /api/health and similar endpoints.
 const char* otaStateStr();        // "VALID", "PENDING_VERIFY", etc.
 uint32_t    bootCount();          // current value (counter not yet reset)

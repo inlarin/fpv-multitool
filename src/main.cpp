@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 #include "pin_config.h"
+#include "safety.h"
 #include "ui/display.h"
 #include "ui/button.h"
 #include "ui/menu.h"
@@ -61,6 +62,11 @@ static void webBackgroundTask() {
 void setup() {
     Serial.begin(115200);
 
+    // Boot-loop guard + OTA rollback bookkeeping. Must run BEFORE any
+    // potentially-crashy subsystem init so the counter still increments
+    // if init crashes. Same pattern as on the SC01 Plus (main_sc01_plus.cpp).
+    Safety::earlyBootCheck();
+
     WebState::initMutex();  // Must be first — protects shared state
 
     // Watchdog: 30s max task block, panic+reset on timeout
@@ -95,6 +101,11 @@ void setup() {
 
 void loop() {
     esp_task_wdt_reset();  // feed watchdog
+
+    // OTA rollback gate + network watchdog (cheap noops after first hit).
+    Safety::tickValidation();
+    Safety::tickNetworkWatchdog();
+
     StatusLed::loop();
     SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
     UsbMode::pumpLoop();    // USB2TTL transparent CDC↔UART1 bridge (no-op in other modes)

@@ -118,6 +118,11 @@ void loop() {
     // Cheap noop after the first call.
     Safety::tickValidation();
 
+    // Network watchdog: if STA never connects within 5 min of boot,
+    // reboot so we don't sit in AP fallback forever on a remote board.
+    // Cheap noop after the first WL_CONNECTED.
+    Safety::tickNetworkWatchdog();
+
     // Web stack stays alive in BOTH normal mode and safe mode -- it's
     // our recovery channel for OTA reflash if anything goes wrong.
     WebServer::loop();

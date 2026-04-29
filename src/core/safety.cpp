@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <WiFi.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
@@ -138,6 +139,31 @@ void markValidNow() {
         p.end();
     }
     s_validated = true;
+}
+
+void tickNetworkWatchdog(uint32_t timeout_ms) {
+    if (timeout_ms == 0) return;
+
+    // Once we've seen WL_CONNECTED at least once, we trust the kernel's
+    // reconnect loop to handle later flaps. Avoids a feedback loop where
+    // every flap triggers a reboot which knocks WiFi out which causes
+    // another flap. The watchdog only fires if WiFi NEVER comes up.
+    static bool s_seen_connected = false;
+    if (s_seen_connected) return;
+    if (WiFi.status() == WL_CONNECTED) {
+        s_seen_connected = true;
+        Serial.printf("[safety] network watchdog: STA up after %u ms (won't fire again)\n",
+                      (unsigned)(millis() - s_setup_started_ms));
+        return;
+    }
+
+    if (millis() - s_setup_started_ms < timeout_ms) return;
+
+    Serial.printf("[safety] !!! NETWORK WATCHDOG !!!  no WL_CONNECTED in %u ms, rebooting\n",
+                  (unsigned)timeout_ms);
+    Serial.flush();
+    delay(100);
+    esp_restart();
 }
 
 const char* otaStateStr()           { return otaStateName(s_ota_state); }

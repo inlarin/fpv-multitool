@@ -1,0 +1,35 @@
+# Partition table for the WT32-SC01 Plus with a recovery factory slot.
+#
+# Layout (16 MB total):
+#   nvs       data nvs       0x009000 0x005000  (20 KB) -- Preferences storage
+#   otadata   data ota       0x00E000 0x002000  ( 8 KB) -- which app slot is active
+#   factory   app  factory   0x010000 0x100000  ( 1 MB) -- recovery shell (immutable)
+#   app0      app  ota_0     0x110000 0x500000  ( 5 MB) -- main app slot A
+#   app1      app  ota_1     0x610000 0x500000  ( 5 MB) -- main app slot B
+#   spiffs    data spiffs    0xB10000 0x4E0000  (4.875 MB) -- general FAT storage
+#   coredump  data coredump  0xFF0000 0x010000  (64 KB) -- crash dump capture
+#
+# How recovery works:
+#   1. Both ota_0 and ota_1 receive OTA updates from the catalog/web flow
+#   2. Each new image starts in PENDING_VERIFY (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE)
+#   3. If both slots become INVALID/ABORTED (bad firmware twice in a row),
+#      the bootloader falls back to `factory` -- WiFi+OTA-only recovery shell
+#   4. Factory partition is NEVER written to in the field (immutable).
+#      Initial USB flash sets it; subsequent updates are OTA-only.
+#
+# Initial flash sequence (USB, one-time at deployment):
+#   esptool.py write_flash \
+#     0x0      bootloader.bin \
+#     0x8000   partitions.bin \
+#     0x010000 safeboot.bin   \
+#     0x110000 firmware.bin
+#
+# After deployment, only firmware.bin gets updated via /api/ota/upload.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xe000,   0x2000,
+factory,    app,  factory,  0x10000,  0x100000,
+app0,       app,  ota_0,    0x110000, 0x500000,
+app1,       app,  ota_1,    0x610000, 0x500000,
+spiffs,     data, spiffs,   0xb10000, 0x4e0000,
+coredump,   data, coredump, 0xff0000, 0x10000,

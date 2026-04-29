@@ -18,6 +18,8 @@ extern "C" int      cp2112_ep_info(char *out, int cap);
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <esp_system.h>
+#include <esp_core_dump.h>
+#include <esp_partition.h>
 #include <WiFi.h>
 
 namespace RoutesDiag {
@@ -94,6 +96,60 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
     s_server->on("/api/sys/ota_mark_valid", HTTP_POST, [](AsyncWebServerRequest *req) {
         Safety::markValidNow();
         req->send(200, "text/plain", "OTA marked VALID, boot counter reset");
+    });
+
+    // GET /api/sys/coredump -- read the persisted ELF core dump from
+    // the `coredump` partition (default_16MB.csv has it at 0xFF0000,
+    // 64 KB). On a remote device this is how we extract a crash post-
+    // mortem without serial access. Returns:
+    //   404 "no coredump"        -- partition empty or invalid header
+    //   200 application/octet-stream  -- ELF dump (parse with espcoredump.py)
+    s_server->on("/api/sys/coredump", HTTP_GET, [](AsyncWebServerRequest *req) {
+        if (esp_core_dump_image_check() != ESP_OK) {
+            req->send(404, "text/plain", "no coredump");
+            return;
+        }
+        size_t addr = 0, size = 0;
+        if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+            req->send(404, "text/plain", "no coredump (image_get failed)");
+            return;
+        }
+        const esp_partition_t *p = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+        if (!p) {
+            req->send(404, "text/plain", "no coredump partition");
+            return;
+        }
+        // Stream chunked from flash so we don't allocate a 64 KB buffer
+        // in heap (free heap is tight on this board).
+        const uint32_t dump_offset = (uint32_t)addr - p->address;
+        const uint32_t dump_size   = (uint32_t)size;
+        AsyncWebServerResponse *resp = req->beginResponse(
+            "application/octet-stream", dump_size,
+            [dump_offset, dump_size](uint8_t *buf, size_t maxLen, size_t index) -> size_t {
+                if (index >= dump_size) return 0;
+                const esp_partition_t *p = esp_partition_find_first(
+                    ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+                if (!p) return 0;
+                size_t to_read = dump_size - index;
+                if (to_read > maxLen) to_read = maxLen;
+                if (esp_partition_read(p, dump_offset + index, buf, to_read) != ESP_OK) return 0;
+                return to_read;
+            });
+        resp->addHeader("Content-Disposition", "attachment; filename=\"coredump.elf\"");
+        req->send(resp);
+    });
+
+    // POST /api/sys/coredump/erase -- clear the coredump partition so
+    // the next /api/sys/coredump returns 404 until a fresh crash. Use
+    // after you've pulled the dump for analysis.
+    s_server->on("/api/sys/coredump/erase", HTTP_POST, [](AsyncWebServerRequest *req) {
+        esp_err_t err = esp_core_dump_image_erase();
+        if (err == ESP_OK) {
+            req->send(200, "text/plain", "coredump erased");
+        } else {
+            req->send(500, "text/plain", esp_err_to_name(err));
+        }
     });
 
     // I2C preflight diagnostics
