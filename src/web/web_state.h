@@ -115,6 +115,7 @@ struct FlashState {
     uint8_t *fw_data = nullptr;     // firmware buffer (PSRAM)
     size_t fw_size = 0;
     size_t fw_received = 0;         // bytes received during upload
+    size_t fw_capacity = 0;         // allocated buffer size (for in-place patching headroom)
     bool flash_request = false;     // start flashing when true
     bool in_progress = false;
     int progress_pct = 0;
@@ -134,6 +135,7 @@ struct FlashState {
         if (fw_data) { free(fw_data); fw_data = nullptr; }
         fw_size = 0;
         fw_received = 0;
+        fw_capacity = 0;
         lastResult = "";
     }
 
@@ -201,6 +203,7 @@ struct FlashState {
         if (fw_data) { free(fw_data); fw_data = nullptr; }
         fw_size = 0;
         fw_received = 0;
+        fw_capacity = 0;
         in_progress = false;
         lastResult = result;
     }

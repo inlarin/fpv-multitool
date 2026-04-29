@@ -12,6 +12,7 @@
 #include "../web_state.h"
 #include "../../bridge/esp_rom_flasher.h"
 #include "../../bridge/firmware_unpack.h"
+#include "../../bridge/firmware_patch.h"
 #include "../../core/pin_port.h"
 #include "../../crsf/crsf_service.h"
 #include "../../crsf/crsf_config.h"
@@ -36,6 +37,41 @@ namespace RoutesFlash {
 // Max firmware upload size — larger than any realistic ELRS image but well
 // within our 8 MB PSRAM. 2 MB covers 4.0.0 + future builds with room to spare.
 static const size_t MAX_FW_SIZE = 2 * 1024 * 1024;
+
+// Embedded ELRS hardware-customization for the BAYCK RC C3 Dual Gemini RX,
+// mirrored from hardware/bayckrc_c3_dual/hardware.json. Used by the
+// /api/elrs/firmware/patch endpoint when ?preset=bayck_c3_dual is requested,
+// so a generic vanilla firmware can be retargeted without uploading the
+// hardware.json separately. Trailing whitespace/newlines are fine — the
+// firmware writes the whole 2048-byte slot zero-padded.
+static const char BAYCK_C3_DUAL_HARDWARE_JSON[] PROGMEM =
+    "{"
+    "\"serial_rx\":20,"
+    "\"serial_tx\":21,"
+    "\"radio_miso\":5,"
+    "\"radio_mosi\":4,"
+    "\"radio_sck\":6,"
+    "\"radio_busy\":3,"
+    "\"radio_dio1\":1,"
+    "\"radio_nss\":0,"
+    "\"radio_rst\":2,"
+    "\"radio_busy_2\":8,"
+    "\"radio_dio1_2\":18,"
+    "\"radio_nss_2\":7,"
+    "\"radio_rst_2\":10,"
+    "\"power_min\":0,"
+    "\"power_high\":3,"
+    "\"power_max\":3,"
+    "\"power_default\":0,"
+    "\"power_control\":0,"
+    "\"power_values\":[12,16,19,22],"
+    "\"power_values_dual\":[-12,-9,-6,-2],"
+    "\"led_rgb\":19,"
+    "\"led_rgb_isgrb\":true,"
+    "\"radio_dcdc\":true,"
+    "\"button\":9,"
+    "\"radio_rfsw_ctrl\":[31,0,4,8,8,18,0,17]"
+    "}";
 
 static void flashProgress(int pct, const char* stage) {
     // Atomic 2-field update — WS broadcast snapshot used to pull pct + stage
@@ -770,14 +806,14 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                 WebState::flashState.resetForUpload();
 
                 // Determine content length from Content-Length header.
-                // Multipart adds boundary overhead — 1 KB is plenty, and we
-                // clamp to MAX_FW_SIZE so cl just under the cap can't push
-                // us past it.
+                // 4 KB headroom: 1 KB multipart boundary overhead + 2704 B for
+                // the in-place ELRS firmware patch appendix (product_name 128
+                // + lua_name 16 + options_json 512 + hardware_json 2048).
                 size_t alloc_size = MAX_FW_SIZE;
                 if (req->hasHeader("Content-Length")) {
                     size_t cl = req->header("Content-Length").toInt();
                     if (cl > 0 && cl < MAX_FW_SIZE) {
-                        alloc_size = cl + 1024;
+                        alloc_size = cl + 4096;
                         if (alloc_size > MAX_FW_SIZE) alloc_size = MAX_FW_SIZE;
                     }
                 }
@@ -795,6 +831,7 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
                     WebState::flashState.lastResult = "Out of memory";
                     return;
                 }
+                WebState::flashState.fw_capacity = alloc_size;
                 Serial.printf("[Flash] allocated %u bytes for upload\n", (unsigned)alloc_size);
             }
             if (!WebState::flashState.fw_data) return;
@@ -1977,6 +2014,251 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(resp);
     });
 
+    // POST /api/elrs/diag/full — single-DFU-session deep diagnostics.
+    // Reads bootloader (4 KB @ 0x0), partition table (4 KB @ 0x8000), NVS
+    // (auto-located, ~20 KB), SPIFFS first 4 KB (FS detection), coredump
+    // first 4 KB (header check), eFuse registers via READ_REG, JEDEC ID.
+    // Server-side parses headers + decodes; returns compact JSON. ~25 sec.
+    s_server->on("/api/elrs/diag/full", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress"); return;
+        }
+        bool _crsf = crsfPauseForPortB();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_diag")) {
+            crsfResumeAfterPortB(_crsf);
+            req->send(409, "text/plain", "Port B busy"); return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        if (ESPFlasher::openSession(cfg) != ESPFlasher::FLASH_OK) {
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "DFU sync failed — RX must be in DFU"); return;
+        }
+
+        // === Read all flash regions ===
+        uint8_t bootloader[4096];
+        uint8_t parttable[4096];
+        ESPFlasher::ReadRegion bp[2] = {
+            { 0x0,    sizeof(bootloader), bootloader },
+            { 0x8000, sizeof(parttable),  parttable  }
+        };
+        if (ESPFlasher::readFlashMultiInOpenSession(bp, 2) != ESPFlasher::FLASH_OK) {
+            ESPFlasher::closeSession(); PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "Failed reading bootloader/parttable"); return;
+        }
+
+        // Parse partition table to find NVS, SPIFFS, coredump
+        JsonDocument partsDoc;
+        JsonArray partsArr = partsDoc.to<JsonArray>();
+        uint32_t nvs_off = 0, nvs_size = 0;
+        uint32_t spiffs_off = 0, spiffs_size = 0;
+        uint32_t coredump_off = 0, coredump_size = 0;
+        for (int i = 0; i < 16; i++) {
+            const uint8_t *e = parttable + i * 32;
+            uint16_t magic = e[0] | (e[1] << 8);
+            if (magic != 0x50AA) { if (magic == 0xEBEB) break; continue; }
+            uint8_t  type    = e[2];
+            uint8_t  subtype = e[3];
+            uint32_t off     = e[4] | (e[5] << 8) | (e[6] << 16) | (e[7] << 24);
+            uint32_t size    = e[8] | (e[9] << 8) | (e[10] << 16) | (e[11] << 24);
+            char label[17] = {0}; memcpy(label, e + 12, 16);
+            JsonObject p = partsArr.add<JsonObject>();
+            p["idx"] = i; p["type"] = type; p["subtype"] = subtype;
+            p["offset"] = off; p["size"] = size; p["label"] = label;
+            if (type == 1) {
+                if (subtype == 2) { nvs_off = off; nvs_size = size; }
+                else if (subtype == 0x82) { spiffs_off = off; spiffs_size = size; }
+                else if (subtype == 3) { coredump_off = off; coredump_size = size; }
+            }
+        }
+
+        // Read NVS + SPIFFS-first-4KB + coredump-first-4KB in next batch
+        uint8_t *nvs = nullptr;
+        uint8_t spiffs_head[4096];
+        uint8_t coredump_head[4096];
+        bool spiffs_present = (spiffs_off > 0 && spiffs_size > 0);
+        bool coredump_partition = (coredump_off > 0 && coredump_size > 0);
+        if (nvs_size > 0 && nvs_size <= 64 * 1024) {
+            nvs = (uint8_t*)heap_caps_malloc(nvs_size, MALLOC_CAP_SPIRAM);
+            if (!nvs) nvs = (uint8_t*)malloc(nvs_size);
+        }
+        if (!nvs) {
+            ESPFlasher::closeSession(); PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(500, "text/plain", "Out of memory"); return;
+        }
+        // Build a multi-read batch: NVS + SPIFFS-head + coredump-head
+        ESPFlasher::ReadRegion regs[3];
+        size_t nregs = 0;
+        regs[nregs++] = { nvs_off, nvs_size, nvs };
+        if (spiffs_present)   regs[nregs++] = { spiffs_off,   sizeof(spiffs_head),   spiffs_head };
+        if (coredump_partition) regs[nregs++] = { coredump_off, sizeof(coredump_head), coredump_head };
+        if (ESPFlasher::readFlashMultiInOpenSession(regs, nregs) != ESPFlasher::FLASH_OK) {
+            free(nvs);
+            ESPFlasher::closeSession(); PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "Failed reading NVS/SPIFFS/coredump"); return;
+        }
+
+        // === eFuse + chip rev (READ_REG batch) ===
+        // ESP32-C3 eFuse base 0x60008800, MAC at 0x60008844/0x60008848,
+        // chip rev info at 0x60008838 (PKG_VERSION/REV bits).
+        uint32_t efuse[4] = {0, 0, 0, 0};
+        ESPFlasher::readRegInOpenSession(0x60008844, &efuse[0]);  // MAC[0..3]
+        ESPFlasher::readRegInOpenSession(0x60008848, &efuse[1]);  // MAC[4..5] + version bits
+        ESPFlasher::readRegInOpenSession(0x60008834, &efuse[2]);  // PKG/REV
+        ESPFlasher::readRegInOpenSession(0x60008818, &efuse[3]);  // BLK0_W4 (security flags)
+
+        ESPFlasher::closeSession();
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
+
+        // === Build response ===
+        // Helper: base64
+        auto b64encode = [](const uint8_t *src, size_t len) -> char* {
+            static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            size_t outLen = ((len + 2) / 3) * 4;
+            char *out = (char*)malloc(outLen + 1);
+            if (!out) return nullptr;
+            size_t bi = 0;
+            for (size_t i = 0; i < len; i += 3) {
+                uint32_t n = (uint32_t)src[i] << 16;
+                if (i + 1 < len) n |= (uint32_t)src[i + 1] << 8;
+                if (i + 2 < len) n |= (uint32_t)src[i + 2];
+                out[bi++] = tbl[(n >> 18) & 0x3F];
+                out[bi++] = tbl[(n >> 12) & 0x3F];
+                out[bi++] = (i + 1 < len) ? tbl[(n >> 6) & 0x3F] : '=';
+                out[bi++] = (i + 2 < len) ? tbl[n & 0x3F] : '=';
+            }
+            out[outLen] = 0;
+            return out;
+        };
+
+        AsyncResponseStream *resp = req->beginResponseStream("application/json");
+        resp->print("{");
+
+        // Bootloader header
+        resp->print("\"bootloader\":{");
+        resp->print("\"magic\":");      resp->print(bootloader[0]);
+        resp->print(",\"magic_ok\":");   resp->print(bootloader[0] == 0xE9 ? "true" : "false");
+        resp->print(",\"segments\":");   resp->print(bootloader[1]);
+        // ESP image header byte 2 = SPI mode (0=QIO, 1=QOUT, 2=DIO, 3=DOUT, 4=FAST_READ, 5=SLOW_READ)
+        const char *spi_modes[] = {"QIO","QOUT","DIO","DOUT","FAST_READ","SLOW_READ"};
+        resp->print(",\"spi_mode\":\""); resp->print(bootloader[2] < 6 ? spi_modes[bootloader[2]] : "?"); resp->print("\"");
+        // byte 3: high nibble = flash size (0=1MB,1=2MB,2=4MB,3=8MB,4=16MB), low = SPI speed (0=40MHz,1=26.7,2=20,15=80)
+        uint8_t b3 = bootloader[3];
+        const uint32_t flash_sizes[] = {1, 2, 4, 8, 16, 32, 64, 128};
+        const char *spi_speeds[] = {"40MHz","26.7MHz","20MHz","80MHz"};
+        uint8_t fs_idx = (b3 >> 4) & 0x0F;
+        uint8_t sp_idx = b3 & 0x0F;
+        resp->print(",\"flash_size_mb\":"); resp->print(fs_idx < 8 ? flash_sizes[fs_idx] : 0);
+        resp->print(",\"spi_speed\":\"");
+        resp->print(sp_idx == 0 ? "40MHz" : sp_idx == 1 ? "26.7MHz" :
+                    sp_idx == 2 ? "20MHz" : sp_idx == 0xF ? "80MHz" : "?");
+        resp->print("\"");
+        resp->print(",\"min_chip_rev\":"); resp->print(bootloader[15]);
+        resp->print("}");
+
+        // Partitions
+        resp->print(",\"partitions\":");
+        String partsJson; serializeJson(partsDoc, partsJson);
+        resp->print(partsJson);
+
+        // NVS
+        resp->print(",\"nvs\":{");
+        resp->print("\"offset\":"); resp->print(nvs_off);
+        resp->print(",\"size\":");  resp->print(nvs_size);
+        char *nvs_b64 = b64encode(nvs, nvs_size);
+        resp->print(",\"b64\":\""); if (nvs_b64) resp->print(nvs_b64); resp->print("\"");
+        resp->print("}");
+        if (nvs_b64) free(nvs_b64);
+        free(nvs);
+
+        // SPIFFS
+        resp->print(",\"spiffs\":{");
+        if (!spiffs_present) {
+            resp->print("\"present\":false");
+        } else {
+            resp->print("\"present\":true,\"offset\":"); resp->print(spiffs_off);
+            resp->print(",\"size\":"); resp->print(spiffs_size);
+            // Detect FS by first bytes
+            bool all_ff = true;
+            for (size_t i = 0; i < 64; i++) if (spiffs_head[i] != 0xFF) { all_ff = false; break; }
+            const char *fs = "unknown";
+            if (all_ff) fs = "empty";
+            // LittleFS block 0 has revision count + magic at offset 8 = "littlefs" or 0xF0E1...
+            else if (spiffs_head[0] == 0x01 && spiffs_head[8] == 'l' && spiffs_head[9] == 'i' &&
+                     spiffs_head[10] == 't' && spiffs_head[11] == 't') fs = "littlefs";
+            // SPIFFS magic in object id field — first u16 is page header magic
+            else if (spiffs_head[0] == 0x21 && spiffs_head[1] == 0xF0) fs = "spiffs";
+            resp->print(",\"fs\":\""); resp->print(fs); resp->print("\"");
+            // First 64 bytes hex for inspection
+            resp->print(",\"head_hex\":\"");
+            for (int i = 0; i < 32; i++) {
+                char hb[3]; snprintf(hb, 3, "%02X", spiffs_head[i]);
+                resp->print(hb);
+            }
+            resp->print("\"");
+        }
+        resp->print("}");
+
+        // Coredump
+        resp->print(",\"coredump\":{");
+        if (!coredump_partition) {
+            resp->print("\"present\":false");
+        } else {
+            uint32_t total_len = coredump_head[0] | (coredump_head[1] << 8) |
+                                 (coredump_head[2] << 16) | (coredump_head[3] << 24);
+            uint32_t version = coredump_head[4] | (coredump_head[5] << 8) |
+                               (coredump_head[6] << 16) | (coredump_head[7] << 24);
+            bool has_dump = (total_len != 0xFFFFFFFF && total_len != 0 &&
+                             total_len < coredump_size);
+            resp->print("\"partition_offset\":"); resp->print(coredump_off);
+            resp->print(",\"partition_size\":");  resp->print(coredump_size);
+            resp->print(",\"present\":");  resp->print(has_dump ? "true" : "false");
+            if (has_dump) {
+                resp->print(",\"size\":");    resp->print(total_len);
+                resp->print(",\"version\":"); resp->print(version);
+                uint32_t tasks_num = coredump_head[8] | (coredump_head[9] << 8) |
+                                     (coredump_head[10] << 16) | (coredump_head[11] << 24);
+                resp->print(",\"tasks_num\":"); resp->print(tasks_num);
+            }
+        }
+        resp->print("}");
+
+        // eFuse
+        resp->print(",\"efuse\":{");
+        // MAC from BLK0
+        char mac[20];
+        uint8_t mac_bytes[6] = {
+            (uint8_t)(efuse[1] >> 8), (uint8_t)(efuse[1]),
+            (uint8_t)(efuse[0] >> 24), (uint8_t)(efuse[0] >> 16),
+            (uint8_t)(efuse[0] >> 8),  (uint8_t)(efuse[0])
+        };
+        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac_bytes[0], mac_bytes[1], mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]);
+        resp->print("\"mac\":\""); resp->print(mac); resp->print("\"");
+        // Chip rev/pkg from EFUSE BLK0 word at 0x60008834 (per esp-c3 TRM)
+        // ESP32-C3 BLK0 W3 contains: PKG_VERSION (3 bits) + WAFER_VERSION (3 bits) + ...
+        uint32_t blk0_w3 = efuse[2];
+        resp->print(",\"pkg_version\":"); resp->print(blk0_w3 & 0x07);
+        resp->print(",\"wafer_rev\":");   resp->print((blk0_w3 >> 24) & 0x07);
+        resp->print(",\"raw_w3\":\"0x"); { char hb[9]; snprintf(hb, 9, "%08X", blk0_w3); resp->print(hb); } resp->print("\"");
+        resp->print(",\"raw_w4\":\"0x"); { char hb[9]; snprintf(hb, 9, "%08X", efuse[3]); resp->print(hb); } resp->print("\"");
+        // BLK0 W4 has security flags: SECURE_BOOT_EN, SPI_BOOT_CRYPT_CNT, etc.
+        // Bit positions vary; we surface the raw word for the frontend to decode.
+        resp->print("}");
+
+        resp->print("}");
+        req->send(resp);
+    });
+
     s_server->on("/api/flash/exit_dfu", HTTP_POST, [](AsyncWebServerRequest *req) {
         // RX state changes (DFU → app jump). Don't resume CRSF — user
         // restarts Live monitor manually once the new app boots.
@@ -2213,10 +2495,133 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
         WebState::flashState.fw_size = 0;
         WebState::flashState.fw_received = 0;
+        WebState::flashState.fw_capacity = 0;
         WebState::flashState.progress_pct = 0;
         WebState::flashState.stage = "";
         WebState::flashState.lastResult = "";
         req->send(200, "text/plain", "Cleared");
+    });
+
+    // ===== ELRS firmware customization (web-flasher equivalent) =====
+    // POST /api/elrs/firmware/patch — rewrite the appendix at the end of the
+    // already-uploaded firmware (in PSRAM) with a custom UID derived from
+    // bind_phrase, plus optional WiFi creds / domain / etc. The post-patch
+    // size is reflected back into flashState.fw_size so a subsequent
+    // /api/flash/start writes the patched image. No re-upload needed.
+    //
+    // Required form params:
+    //   bind_phrase  — phrase whose MD5 → 6-byte UID (matches official web-flasher)
+    // Optional:
+    //   preset=bayck_c3_dual         — fills product_name+lua_name+hardware_json
+    //   product_name, lua_name       — override preset (or required if no preset)
+    //   hardware_json                — custom hardware blob (ignored if preset set)
+    //   domain                       — sx127x regulatory domain (only for 900 MHz hw)
+    //   wifi_ssid, wifi_password     — runtime WiFi STA credentials
+    //   rcvr_uart_baud               — RX-side CRSF baud (default in fw: 420000)
+    //   wifi_on_interval             — seconds before WiFi AP comes up if not bound
+    //   tlm_interval                 — telemetry rate
+    //   lock_on_first_connection=1   — RX won't auto-fall-back to bind mode
+    //   unlock_higher_power=1        — bypass regulatory power cap
+    s_server->on("/api/elrs/firmware/patch", HTTP_POST, [](AsyncWebServerRequest *req) {
+        auto getParam = [&](const char* name, const char* dflt = nullptr) -> String {
+            if (req->hasParam(name, true)) return req->getParam(name, true)->value();
+            if (req->hasParam(name))       return req->getParam(name)->value();
+            return dflt ? String(dflt) : String();
+        };
+        auto sendJson = [&](int code, const JsonDocument& d) {
+            String out; serializeJson(d, out);
+            req->send(code, "application/json", out);
+        };
+
+        if (WebState::flashState.in_progress) {
+            JsonDocument e; e["ok"] = false;
+            e["error"] = "Flash in progress — wait until done";
+            sendJson(409, e); return;
+        }
+        if (WebState::flashState.fw_size == 0 || !WebState::flashState.fw_data) {
+            JsonDocument e; e["ok"] = false;
+            e["error"] = "No firmware uploaded — POST /api/flash/upload first";
+            sendJson(400, e); return;
+        }
+
+        String bind_phrase = getParam("bind_phrase");
+        if (bind_phrase.length() == 0) {
+            JsonDocument e; e["ok"] = false;
+            e["error"] = "bind_phrase is required";
+            sendJson(400, e); return;
+        }
+
+        String preset = getParam("preset");
+        String product_name, lua_name, hardware_json_str;
+        if (preset == "bayck_c3_dual") {
+            product_name = "BAYCK RC C3 Dual";
+            lua_name = "BAYCK 2.4G";
+            hardware_json_str = FPSTR(BAYCK_C3_DUAL_HARDWARE_JSON);
+        } else {
+            product_name = getParam("product_name", "Generic ESP32 ELRS RX");
+            lua_name = getParam("lua_name", "ELRS RX");
+            hardware_json_str = getParam("hardware_json");
+        }
+
+        // Strings need to outlive the patch call → keep them on the stack
+        // here (not pass-through-getParam-c_str() which would dangle).
+        String wifi_ssid     = getParam("wifi_ssid");
+        String wifi_password = getParam("wifi_password");
+        String domain_str    = getParam("domain");
+        String baud_str      = getParam("rcvr_uart_baud");
+        String wifi_int_str  = getParam("wifi_on_interval");
+        String tlm_int_str   = getParam("tlm_interval");
+
+        FirmwarePatch::Options opts = {};
+        opts.bind_phrase  = bind_phrase.c_str();
+        opts.product_name = product_name.c_str();
+        opts.lua_name     = lua_name.c_str();
+        opts.hardware_json = hardware_json_str.length() > 0 ? hardware_json_str.c_str() : nullptr;
+        opts.domain       = domain_str.length() > 0 ? domain_str.toInt() : -1;
+        opts.wifi_ssid     = wifi_ssid.length() > 0 ? wifi_ssid.c_str() : nullptr;
+        opts.wifi_password = wifi_password.length() > 0 ? wifi_password.c_str() : nullptr;
+        opts.rcvr_uart_baud   = baud_str.length() > 0 ? baud_str.toInt() : 0;
+        opts.wifi_on_interval = wifi_int_str.length() > 0 ? wifi_int_str.toInt() : 0;
+        opts.tlm_interval     = tlm_int_str.length() > 0 ? tlm_int_str.toInt() : 0;
+        opts.lock_on_first_connection = (getParam("lock_on_first_connection") == "1");
+        opts.unlock_higher_power      = (getParam("unlock_higher_power") == "1");
+        opts.flash_discriminator = 0;  // → randomized inside patchFirmware
+
+        FirmwarePatch::Result pr;
+        {
+            WebState::Lock lock;  // serialize against any flash dispatch
+            pr = FirmwarePatch::patchFirmware(
+                WebState::flashState.fw_data,
+                WebState::flashState.fw_capacity,
+                WebState::flashState.fw_size,
+                opts);
+            if (pr.ok) {
+                WebState::flashState.fw_size = pr.new_size;
+            }
+        }
+
+        JsonDocument d;
+        d["ok"]            = pr.ok;
+        d["platform"]      = FirmwarePatch::platformName(pr.platform);
+        d["old_size"]      = pr.old_size;
+        d["new_size"]      = pr.new_size;
+        d["firmware_end"]  = pr.firmware_end;
+        d["product_name"]  = product_name;
+        d["lua_name"]      = lua_name;
+        if (pr.ok) {
+            char uidHex[14];
+            snprintf(uidHex, sizeof(uidHex), "%02X%02X%02X%02X%02X%02X",
+                     pr.uid[0], pr.uid[1], pr.uid[2], pr.uid[3], pr.uid[4], pr.uid[5]);
+            d["uid"] = uidHex;
+            JsonArray uidArr = d["uid_bytes"].to<JsonArray>();
+            for (int i = 0; i < 6; i++) uidArr.add(pr.uid[i]);
+            Serial.printf("[ELRS-Patch] %s → UID %s, size %u → %u\n",
+                          bind_phrase.c_str(), uidHex,
+                          (unsigned)pr.old_size, (unsigned)pr.new_size);
+        } else {
+            d["error"] = pr.error ? pr.error : "Unknown patch error";
+        }
+        sendJson(pr.ok ? 200 : 400, d);
     });
 
 }  // registerRoutesFlash

@@ -2070,6 +2070,62 @@ async function fwDoUpload() {
     btn.disabled = false;
   }
 }
+function fwPatchPresetChange() {
+  const preset = document.getElementById('fwPatchPreset').value;
+  const customBox = document.getElementById('fwPatchCustomBox');
+  customBox.classList.toggle('rcv-hidden', preset !== 'custom');
+}
+async function fwPatchApply() {
+  const status = document.getElementById('fwPatchResult');
+  const btn = document.getElementById('fwPatchBtn');
+  const phrase = document.getElementById('fwPatchPhrase').value.trim();
+  if (!phrase) { status.textContent = '✗ Bind phrase обязателен'; status.style.color = '#f66'; return; }
+  if (!_fwCached) { status.textContent = '✗ Сначала Upload firmware (Step 1)'; status.style.color = '#f66'; return; }
+  btn.disabled = true;
+  status.textContent = 'Patching…';
+  status.style.color = '';
+  try {
+    const fd = new FormData();
+    fd.append('bind_phrase', phrase);
+    fd.append('preset', document.getElementById('fwPatchPreset').value);
+    if (document.getElementById('fwPatchPreset').value === 'custom') {
+      fd.append('product_name', document.getElementById('fwPatchProduct').value);
+      fd.append('lua_name', document.getElementById('fwPatchLua').value);
+    }
+    const ssid = document.getElementById('fwPatchWifiSsid').value;
+    const pass = document.getElementById('fwPatchWifiPass').value;
+    const baud = document.getElementById('fwPatchBaud').value;
+    const dom  = document.getElementById('fwPatchDomain').value;
+    if (ssid) fd.append('wifi_ssid', ssid);
+    if (pass) fd.append('wifi_password', pass);
+    if (baud) fd.append('rcvr_uart_baud', baud);
+    if (dom)  fd.append('domain', dom);
+    if (document.getElementById('fwPatchLock').checked)         fd.append('lock_on_first_connection', '1');
+    if (document.getElementById('fwPatchUnlockPower').checked)  fd.append('unlock_higher_power', '1');
+    const r = await fetch('/api/elrs/firmware/patch', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!j.ok) {
+      status.textContent = '✗ ' + (j.error || 'patch failed') + ' (platform: ' + (j.platform || '?') + ')';
+      status.style.color = '#f66';
+      return;
+    }
+    // Reflect new size in cached descriptor so Flash step uses patched buffer.
+    _fwCached.size = j.new_size;
+    _fwCached.name = (_fwCached.name.replace(/ \[patched.*\]$/, '')) + ' [patched UID ' + j.uid + ']';
+    document.getElementById('fwCached').textContent =
+      _fwCached.name + ' (' + (_fwCached.size/1024).toFixed(1) + ' KB)';
+    status.textContent = '✓ ' + j.platform + ' · UID ' + j.uid
+                       + ' · ' + j.product_name + ' / ' + j.lua_name
+                       + ' · ' + j.old_size + ' → ' + j.new_size + ' B'
+                       + ' (appendix at offset 0x' + j.firmware_end.toString(16) + ')';
+    status.style.color = '#0f0';
+  } catch (e) {
+    status.textContent = '✗ ' + (e.message || e);
+    status.style.color = '#f66';
+  } finally {
+    btn.disabled = false;
+  }
+}
 async function fwFlash() {
   const status = document.getElementById('fwResult');
   const stage  = document.getElementById('fwStage');

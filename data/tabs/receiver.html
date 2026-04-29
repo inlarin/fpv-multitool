@@ -266,6 +266,42 @@
       </div>
     </div>
 
+    <!-- Step 2½: ELRS firmware customization (optional, web-flasher equivalent) -->
+    <details class="col-span-full">
+      <summary class="rcv-subsection-summary"><b>▸ 2½. Customize ELRS firmware</b> — bind phrase, hardware.json, options (web-flasher equivalent, optional)</summary>
+      <div class="card rcv-advanced-block">
+        <div class="banner banner-info">
+          Аналог <a href="https://expresslrs.github.io/web-flasher/" target="_blank">official web-flasher</a>: патчит уже залитый в PSRAM .bin — записывает UID (MD5 от bind phrase) + hardware.json + опции в конец app-image. Применять <b>после Upload и до Flash</b>.
+        </div>
+        <div class="kv">
+          <span class="kv-label">Preset</span>
+          <select id="fwPatchPreset" onchange="fwPatchPresetChange()">
+            <option value="bayck_c3_dual" selected>BAYCK RC C3 Dual (built-in hardware.json)</option>
+            <option value="custom">Custom (no hardware.json — for target-specific builds)</option>
+          </select>
+        </div>
+        <div class="kv">
+          <span class="kv-label">Bind phrase</span>
+          <input type="text" id="fwPatchPhrase" placeholder="e.g. mysecret123" autocomplete="off" class="input-compact">
+        </div>
+        <div id="fwPatchCustomBox" class="rcv-hidden">
+          <div class="kv"><span class="kv-label">product_name</span><input type="text" id="fwPatchProduct" class="input-compact" value="Generic ESP32 ELRS RX"></div>
+          <div class="kv"><span class="kv-label">lua_name</span><input type="text" id="fwPatchLua" class="input-compact" value="ELRS RX"></div>
+        </div>
+        <details>
+          <summary class="rcv-subsection-summary">▸ Advanced options</summary>
+          <div class="kv"><span class="kv-label">WiFi SSID</span><input type="text" id="fwPatchWifiSsid" class="input-compact" placeholder="(firmware default)"></div>
+          <div class="kv"><span class="kv-label">WiFi password</span><input type="text" id="fwPatchWifiPass" class="input-compact" placeholder="(firmware default)"></div>
+          <div class="kv"><span class="kv-label">RX UART baud</span><input type="text" id="fwPatchBaud" class="input-compact" placeholder="420000"></div>
+          <div class="kv"><span class="kv-label">Domain (sx127x only)</span><input type="text" id="fwPatchDomain" class="input-compact" placeholder="(none — only for 900 MHz)"></div>
+          <div class="kv"><label class="kv-label"><input type="checkbox" id="fwPatchLock"> lock_on_first_connection (no auto-WiFi-AP fallback)</label></div>
+          <div class="kv"><label class="kv-label"><input type="checkbox" id="fwPatchUnlockPower"> unlock_higher_power (bypass regulatory cap)</label></div>
+        </details>
+        <button onclick="fwPatchApply()" id="fwPatchBtn" class="rcv-block-btn">🔧 Apply patch to uploaded firmware</button>
+        <div id="fwPatchResult" class="rcv-result-line"></div>
+      </div>
+    </details>
+
     <!-- Step 3: Flash -->
     <div class="card col-span-full">
       <div class="card-header">
