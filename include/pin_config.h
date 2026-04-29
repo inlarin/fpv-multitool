@@ -1,8 +1,25 @@
 #pragma once
 
 // =============================================================
-// ESP32-S3-LCD-1.47B Pin Configuration
-// Board: Waveshare ESP32-S3-LCD-1.47B / diymore clone
+// Pin Configuration -- chooses board variant via build flags.
+//
+// BOARD_WT32_SC01_PLUS=1   -> include pin_config_sc01_plus.h
+// (default, no flag)        -> Waveshare ESP32-S3-LCD-1.47B definitions below
+//
+// Both headers expose the same API surface (PORT_B_PIN_A/B + BATT_SDA,
+// SIGNAL_OUT, ELRS_TX/RX, ELRS_BOOT, RGB_LED_PIN, BAT_ADC_PIN, etc.).
+// Subsystem code only ever includes this header and gets the right
+// values per build env -- no #ifdef sprinkled across the codebase.
+// =============================================================
+
+#if defined(BOARD_WT32_SC01_PLUS)
+
+#include "pin_config_sc01_plus.h"
+
+#else
+
+// =============================================================
+// ESP32-S3-LCD-1.47B (Waveshare / diymore clone) -- the original board.
 //
 // All user-accessible features are wired through Port B (GPIO 10/11)
 // + power (5V, GND). See PinPort for dynamic mode switching.
@@ -62,3 +79,5 @@
 
 // --- Reserved / not used ---
 // GPIO 2, 3, 43, 44 — legacy fields, currently unused (kept for future expansion)
+
+#endif  // BOARD_WT32_SC01_PLUS

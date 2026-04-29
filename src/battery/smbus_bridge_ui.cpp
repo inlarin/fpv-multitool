@@ -4,23 +4,7 @@
 #include "ui/button.h"
 #include <esp_task_wdt.h>
 
-namespace BridgeStats {
-    volatile uint32_t cmdWrite    = 0;
-    volatile uint32_t cmdRead     = 0;
-    volatile uint32_t cmdAddrRead = 0;
-    volatile uint32_t cmdPing     = 0;
-    volatile uint32_t errCrc      = 0;
-    volatile uint32_t errI2C      = 0;
-    volatile uint32_t lastSlave   = 0;
-    volatile uint32_t lastReg     = 0;
-    volatile uint32_t lastStatus  = 0xFF;
-    void reset() {
-        cmdWrite = cmdRead = cmdAddrRead = cmdPing = 0;
-        errCrc = errI2C = 0;
-        lastSlave = lastReg = 0;
-        lastStatus = 0xFF;
-    }
-}
+// BridgeStats storage moved to smbus_bridge.cpp -- see comment there.
 
 static void drawFrame() {
     auto *g = Display::gfx();

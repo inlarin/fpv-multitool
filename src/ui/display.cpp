@@ -1,5 +1,18 @@
 #include "display.h"
 
+#if defined(BOARD_WT32_SC01_PLUS)
+
+// SC01 Plus uses LovyanGFX via BoardDisplay (src/board/wt32_sc01_plus/),
+// and LVGL on top. The legacy Arduino_GFX-based menu/tester screens are
+// not compiled into the SC01 Plus build (excluded via build_src_filter).
+// We keep the Display:: namespace as a no-op stub so anything still
+// referencing it links cleanly without a hard wall of #ifdefs.
+void          Display::init()                 {}
+Arduino_GFX*  Display::gfx()                  { return nullptr; }
+void          Display::backlight(bool /*on*/) {}
+
+#else
+
 static Arduino_DataBus *s_bus = nullptr;
 static Arduino_GFX *s_gfx = nullptr;
 
@@ -21,3 +34,5 @@ Arduino_GFX* Display::gfx() {
 void Display::backlight(bool on) {
     digitalWrite(LCD_BL, on ? HIGH : LOW);
 }
+
+#endif  // BOARD_WT32_SC01_PLUS
