@@ -1412,12 +1412,14 @@ Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *ou
     delay(20);
     while (s_uart->available()) s_uart->read();
 
-    // TX ping. orig=0xEA matches elrsV3.lua handset-to-receiver convention
-    // (line 386: handsetId = 0xEA for non-TX devices). Was 0xEC earlier —
-    // the RX's dispatch path didn't care about orig, but its DEVICE_INFO
-    // reply chain may: fix now to match reference.
+    // TX ping. dest=0xEC (CRSF_ADDRESS_CRSF_RECEIVER) is REQUIRED — vanilla
+    // ELRS 3.5.x telemetry.cpp::processInternalTelemetryPackage only fires
+    // the DEVICE_INFO reply when `header->dest_addr == 0xEC`. Earlier we sent
+    // dest=0x00 (broadcast) and the RX silently forwarded our "telemetry" to
+    // the radio link without replying. orig=0xEA matches elrsV3.lua handset-
+    // to-receiver convention.
     auto sendPing = [&]() {
-        uint8_t ping[6] = {0xEC, 0x04, 0x28, 0x00, 0xEA, 0x00};
+        uint8_t ping[6] = {0xEC, 0x04, 0x28, 0xEC, 0xEA, 0x00};
         ping[5] = crsfCrc8(ping + 2, 3);
         while (s_uart->available()) s_uart->read();
         s_uart->write(ping, 6);
