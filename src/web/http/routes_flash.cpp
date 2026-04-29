@@ -402,6 +402,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         }
 
         // Test 2 (CRSF DEVICE_PING @ 420000) — only if DFU didn't answer.
+        // Try non-inverted first (most ELRS forks/MILELRS), then inverted
+        // (vanilla 3.5.x default — RX outputs inverted CRSF for FC-side).
         if (!dfu_ok) {
             delay(50);
             ESPFlasher::Config cfg;
@@ -409,8 +411,16 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
             cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
             cfg.baud_rate = 420000;
+            cfg.invert_uart = false;
             if (ESPFlasher::crsfDevicePing(cfg, 250, &devInfo) == ESPFlasher::FLASH_OK && devInfo.ok) {
                 mode = "app";
+            } else {
+                // Retry with inverted CRSF
+                delay(50);
+                cfg.invert_uart = true;
+                if (ESPFlasher::crsfDevicePing(cfg, 250, &devInfo) == ESPFlasher::FLASH_OK && devInfo.ok) {
+                    mode = "app";
+                }
             }
         }
 

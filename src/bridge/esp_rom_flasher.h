@@ -30,6 +30,7 @@ struct Config {
     uint32_t flash_baud = 460800;  // higher baud after sync (optional)
     uint32_t flash_offset = 0;     // flash offset address (0x0 for full image)
     bool stay_in_loader = false;   // true = send FLASH_END(1) to stay in DFU so caller can chain more operations
+    bool invert_uart   = false;    // true = inverted CRSF (vanilla ELRS RX default for FC-side UART)
     ProgressCallback progress = nullptr;
 };
 

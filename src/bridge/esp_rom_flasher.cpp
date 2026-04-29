@@ -1406,7 +1406,9 @@ Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *ou
 
     s_uart = cfg.uart;
     s_uart->setRxBufferSize(512);
-    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin);
+    // Inverted CRSF: vanilla ELRS RX defaults to inverted UART on FC-side
+    // (Betaflight F4/F7 expectation). 5th arg of begin() is the invert flag.
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin, cfg.invert_uart);
     delay(20);
     while (s_uart->available()) s_uart->read();
 
