@@ -36,13 +36,6 @@ void buildPlaceholder(lv_obj_t *tab, const char *title, const char *body) {
 
 namespace screens {
 
-void buildHome(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "Home",
-        "Dashboard.\nIP, uptime, free heap, port-B mode, "
-        "WiFi RSSI, motor armed indicator -- coming in Phase 2.");
-}
-
 void buildServo(lv_obj_t *tab) {
     buildPlaceholder(tab,
         "Servo",

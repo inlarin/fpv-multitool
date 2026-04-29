@@ -24,6 +24,13 @@ extern "C" int      cp2112_ep_info(char *out, int cap);
 
 #include "board_settings.h"
 
+// LVGL snapshot is only available on the SC01 Plus full-app build (the
+// only one that actually runs LVGL). Guard the include + endpoint.
+#if defined(BOARD_WT32_SC01_PLUS)
+  #include <lvgl.h>
+  #include "ui/board_app.h"
+#endif
+
 namespace RoutesDiag {
 
 void registerRoutesDiag(AsyncWebServer *s_server) {
@@ -153,6 +160,126 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
             req->send(500, "text/plain", esp_err_to_name(err));
         }
     });
+
+#if defined(BOARD_WT32_SC01_PLUS)
+    // GET /api/sys/screenshot.bmp -- capture the current LVGL screen
+    // and stream it back as a 24-bit BMP. Used to inspect the UI from
+    // off-board (no need for the user to describe what's on screen).
+    //
+    // Memory: 320 * 480 * 3 = 460800 bytes for the snapshot buffer
+    // (RGB888) + ~50 bytes for the BMP headers. We allocate from PSRAM
+    // (~2 MB free on this board) so heap stays available.
+    s_server->on("/api/sys/screenshot.bmp", HTTP_GET, [](AsyncWebServerRequest *req) {
+        lv_obj_t *scr = lv_screen_active();
+        if (!scr) { req->send(503, "text/plain", "no LVGL screen"); return; }
+
+        const uint32_t W = lv_obj_get_width(scr);
+        const uint32_t H = lv_obj_get_height(scr);
+        const uint32_t row_bytes_unpadded = W * 3;
+        const uint32_t pad_bytes          = (4 - (row_bytes_unpadded & 3)) & 3;
+        const uint32_t row_bytes          = row_bytes_unpadded + pad_bytes;
+        const uint32_t pixel_bytes        = row_bytes * H;
+
+        // Take snapshot into a PSRAM buffer we own. lv_snapshot_take()
+        // (no _to_buf) goes through LVGL's allocator which is capped at
+        // LV_MEM_SIZE (48 KB) -- way too small for a 460 KB RGB888 frame.
+        // lv_snapshot_take_to_buf bypasses that.
+        const uint32_t snap_size = W * H * 3;
+        uint8_t *snap = (uint8_t *)heap_caps_malloc(snap_size,
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!snap) {
+            req->send(503, "text/plain", "PSRAM alloc (snapshot) failed");
+            return;
+        }
+        lv_image_dsc_t dsc;
+        lv_result_t res = lv_snapshot_take_to_buf(
+            scr, LV_COLOR_FORMAT_RGB888, &dsc, snap, snap_size);
+        if (res != LV_RESULT_OK) {
+            heap_caps_free(snap);
+            req->send(500, "text/plain", "lv_snapshot_take_to_buf failed");
+            return;
+        }
+
+        // Allocate the BMP output buffer in PSRAM and assemble in-place.
+        const uint32_t header_size = 14 + 40;
+        const uint32_t total_size  = header_size + pixel_bytes;
+        uint8_t *bmp = (uint8_t *)heap_caps_malloc(total_size,
+                                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!bmp) {
+            heap_caps_free(snap);
+            req->send(503, "text/plain", "PSRAM alloc (bmp) failed");
+            return;
+        }
+
+        // BMPv3 file header (14 bytes) + DIB header (BITMAPINFOHEADER, 40 bytes).
+        memset(bmp, 0, header_size);
+        bmp[0] = 'B'; bmp[1] = 'M';
+        *(uint32_t *)(bmp + 2)  = total_size;
+        *(uint32_t *)(bmp + 10) = header_size;          // pixel data offset
+        *(uint32_t *)(bmp + 14) = 40;                    // DIB header size
+        *(int32_t  *)(bmp + 18) = (int32_t)W;
+        *(int32_t  *)(bmp + 22) = (int32_t)H;            // positive = bottom-up
+        *(uint16_t *)(bmp + 26) = 1;                     // planes
+        *(uint16_t *)(bmp + 28) = 24;                    // bits/pixel
+        *(uint32_t *)(bmp + 30) = 0;                     // BI_RGB (no compression)
+        *(uint32_t *)(bmp + 34) = pixel_bytes;
+        *(int32_t  *)(bmp + 38) = 2835;                  // 72 dpi x
+        *(int32_t  *)(bmp + 42) = 2835;                  // 72 dpi y
+
+        // LVGL's "LV_COLOR_FORMAT_RGB888" actually stores bytes as
+        // B-G-R in memory (verified empirically: 0x2E86AB hex went
+        // through BMP-spec R/B-swap and came out yellow instead of teal).
+        // BMP also expects B-G-R per pixel, so we just copy bytes raw
+        // and only flip the row order (BMP is bottom-up; snapshot is
+        // top-down). Each row padded to 4-byte boundary.
+        for (uint32_t y = 0; y < H; y++) {
+            uint8_t *dst_row = bmp + header_size + (H - 1 - y) * row_bytes;
+            const uint8_t *src_row = snap + y * W * 3;
+            memcpy(dst_row, src_row, W * 3);
+            // pad bytes already zeroed by memset
+        }
+
+        heap_caps_free(snap);
+
+        // Stream chunked from the assembled BMP buffer; free the buffer
+        // after the response handler is done. Captured by-value into a
+        // shared_ptr-like struct so the lambda owns the lifetime.
+        struct Owner { uint8_t *p; uint32_t sz; ~Owner() { if (p) heap_caps_free(p); } };
+        auto *owner = new Owner{ bmp, total_size };
+
+        AsyncWebServerResponse *resp = req->beginResponse(
+            "image/bmp", total_size,
+            [owner](uint8_t *out, size_t maxLen, size_t index) -> size_t {
+                if (index >= owner->sz) { delete owner; return 0; }
+                size_t n = owner->sz - index;
+                if (n > maxLen) n = maxLen;
+                memcpy(out, owner->p + index, n);
+                return n;
+            });
+        resp->addHeader("Content-Disposition",
+                        "inline; filename=\"sc01_screenshot.bmp\"");
+        req->send(resp);
+    });
+
+    // POST /api/sys/ui/tap?x=NN&y=NN -- synthesize a tap at (x,y).
+    // The pair (PRESS + RELEASE @60ms) is enqueued for the LVGL indev
+    // callback to deliver, so all normal click semantics fire. Returns
+    // 200 OK if queued, 503 if the synthetic queue is saturated.
+    s_server->on("/api/sys/ui/tap", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("x") || !req->hasParam("y")) {
+            req->send(400, "text/plain", "missing x/y query params");
+            return;
+        }
+        int x = req->getParam("x")->value().toInt();
+        int y = req->getParam("y")->value().toInt();
+        if (BoardApp::injectTap((int16_t)x, (int16_t)y)) {
+            req->send(200, "text/plain",
+                      String("tap queued @ (") + x + "," + y + ")");
+        } else {
+            req->send(503, "text/plain", "synthetic touch queue full");
+        }
+    });
+#endif  // BOARD_WT32_SC01_PLUS
 
     // POST /api/sys/beacon/now -- send one beacon RIGHT NOW (synchronous,
     // 5 s timeout). Returns the HTTP status code from the beacon target,

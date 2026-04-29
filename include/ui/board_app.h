@@ -29,6 +29,19 @@ public:
     // Call from the main loop at ~5 ms cadence.
     void loop();
 
+    // Status-bar "working" pill: shows a spinner + label inline on the
+    // top status bar. Use during long-running ops (OTA, flash, scan).
+    // Pass nullptr/empty to clear. Thread-safe to call from event handlers.
+    static void setBusy(const char *label, int progress_pct = -1);
+    static void clearBusy();
+
+    // Synthetic touch injection -- enqueue a press+release at (x, y).
+    // Scheduled within the next few LVGL frames; the indev read callback
+    // pulls from this queue BEFORE polling FT6336 hardware. Used by
+    // /api/sys/ui/tap for off-board UI scripting (closes the screenshot
+    // feedback loop). Returns false if the queue is full.
+    static bool injectTap(int16_t x, int16_t y);
+
 private:
     BoardDisplay *_display = nullptr;
 };

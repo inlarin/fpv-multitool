@@ -507,20 +507,49 @@ Roughly easy → hard, plus prioritized by user-visible value:
 Each commit replaces one placeholder builder, adds the screen's logic,
 and gets OTA-tested before moving on.
 
-## Open architecture questions before starting
+## Architecture decisions (resolved 2026-04-30)
 
-1. **Catalog format on SD**: do we want JSON manifest + raw `.bin` files,
-   or one combined "catalog.bundle" archive? Manifest is more flexible
-   (can update vendor metadata without re-shipping firmware), bundle is
-   simpler to manage.
+1. **Catalog format on SD** — JSON manifest per device + raw `.bin`.
+   Directory hierarchy: `protocol / vendor / side / device /`:
 
-2. **Bind phrase storage**: per-flash session, or persistent "last used"
-   in NVS? Current ELRS-flasher web flow remembers it.
+   ```
+   /catalog/
+   ├── ELRS/
+   │   ├── Bayck/
+   │   │   ├── RX/
+   │   │   │   └── C3-Dual/
+   │   │   │       ├── manifest.json
+   │   │   │       └── firmware.bin
+   │   │   └── TX/
+   │   │       └── ...
+   │   └── HappyModel/
+   │       └── RX/
+   │           └── EP1/  ...
+   ├── TLRS/
+   │   ├── <vendor>/
+   │   │   ├── RX/
+   │   │   └── TX/
+   ```
 
-3. **Touch keyboard**: `lv_keyboard` is full-width. On a 320 px screen
-   that's ~10 px keys — tight but usable. Do we accept that, or roll a
-   custom larger-key keyboard for SSID/password entry?
+   Vendor before side groups all of one manufacturer's devices in one
+   place. `manifest.json` schema sketched in the original commit
+   message; carries vendor / device / version / chip / band / md5 /
+   flash_layout (offset map) / bind_uid (offsets + preset defaults) /
+   notes. The patcher in `routes_flash.cpp` already speaks this format
+   internally; Phase 3 just externalizes the parameters from code to
+   per-device JSON.
 
-4. **Status bar live updates**: every 1 s? 100 ms? More frequent = more
-   redraw cost. Probably 1 s for everything except an explicit "working"
-   indicator (which can be 100 ms).
+2. **Bind phrase**: persist last-entered in NVS, prefill the field on
+   next entry, with an explicit "Clear bind phrase memory" in Settings.
+   UX target: flashing 5 receivers in a row to bind to one TX -> type
+   the phrase once.
+
+3. **Touch keyboard**: use the built-in `lv_keyboard` as-is. Don't
+   roll a custom one. The ~10 px keys on 320 px width are tight but
+   usable per the LVGL widgets demo.
+
+4. **Status bar refresh**: 1 Hz default for normal stats (uptime,
+   heap, RSSI, IP). 100 ms for the inline "working" indicator
+   (spinner / progress bar during OTA / flash). RECHECK this once we
+   can interact with the device live -- if 1 Hz feels sluggish in
+   practice, drop to 500 ms; if it feels noisy, stretch to 5 s.

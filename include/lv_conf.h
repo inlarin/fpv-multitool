@@ -43,6 +43,9 @@
 #define LV_USE_DEMO_WIDGETS  0
 #define LV_USE_DEMO_BENCHMARK 0
 
+// ---- Snapshot (lv_snapshot_take) -- needed for /api/sys/screenshot ----
+#define LV_USE_SNAPSHOT      1
+
 // ---- Performance overlays (turn on later if we want fps/HUD) ----
 #define LV_USE_PERF_MONITOR  0
 #define LV_USE_MEM_MONITOR   0
