@@ -134,6 +134,22 @@
       <div class="kv rcv-hidden" id="identStaPassRow"><span class="kv-label">STA password</span><span class="kv-value mono" id="identStaPass">—</span></div>
     </div>
 
+    <!-- RX runtime config (NVS dump + decode) -->
+    <div class="card col-span-full">
+      <div class="card-header">
+        <span class="card-title">RX runtime config (NVS)</span>
+        <span class="kv-label">single-DFU-session read</span>
+      </div>
+      <p class="field-help">
+        Читает partition table @ 0x8000 (auto-locating NVS), затем NVS partition (~20 KB), парсит eeprom blob,
+        декодирует ELRS rx_config_t. Нужен RX в DFU. Все ключевые runtime настройки — UID, bindStorage,
+        modelId, PWM mappings, antenna mode, RF rate, vbat calibration.
+      </p>
+      <button onclick="rxReadNvs()" data-need-mode="dfu" class="rcv-block-btn">📖 Read partition table + NVS</button>
+      <div id="rxNvsStatus" class="rcv-result-line"></div>
+      <div id="rxNvsResult" class="rcv-advanced-block"></div>
+    </div>
+
     <!-- TX Identify (via radio link) -->
     <div class="card">
       <div class="card-header">

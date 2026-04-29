@@ -1846,6 +1846,137 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(200, "text/plain", msg);
     });
 
+    // POST /api/elrs/nvs/info — single-session DFU read of the partition
+    // table at 0x8000 (4 KB) + auto-located NVS partition contents. Returns
+    // partitions JSON + NVS bytes as base64. Frontend parses NVS pages,
+    // finds 'eeprom' blob, decodes ELRS rx_config_t. RX must be in DFU.
+    s_server->on("/api/elrs/nvs/info", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress"); return;
+        }
+        bool _crsf = crsfPauseForPortB();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_nvs_info")) {
+            crsfResumeAfterPortB(_crsf);
+            req->send(409, "text/plain", "Port B busy"); return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 115200;
+
+        // Open one DFU session, do both reads, close.
+        ESPFlasher::Result r = ESPFlasher::openSession(cfg);
+        if (r != ESPFlasher::FLASH_OK) {
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "DFU sync failed — RX must be in DFU (BOOT + power-cycle)");
+            return;
+        }
+
+        // Read partition table 4 KB at 0x8000 + a temporary buffer for NVS.
+        // We need to know NVS size before alloc — but standard partition table
+        // is bounded. Read partition table first.
+        uint8_t parttable[4096];
+        ESPFlasher::ReadRegion r1 = { 0x8000, sizeof(parttable), parttable };
+        if (ESPFlasher::readFlashMultiInOpenSession(&r1, 1) != ESPFlasher::FLASH_OK) {
+            ESPFlasher::closeSession();
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "Failed reading partition table");
+            return;
+        }
+
+        // Parse to find NVS (type=DATA=1, subtype=NVS=2). Magic is 0x50AA LE.
+        uint32_t nvs_off = 0, nvs_size = 0;
+        JsonDocument parts_doc;
+        JsonArray parts_arr = parts_doc.to<JsonArray>();
+        for (int i = 0; i < 16; i++) {
+            const uint8_t *e = parttable + i * 32;
+            uint16_t magic = e[0] | (e[1] << 8);
+            if (magic != 0x50AA) {
+                if (magic == 0xEBEB) break;  // MD5 trailer
+                continue;
+            }
+            uint8_t  type    = e[2];
+            uint8_t  subtype = e[3];
+            uint32_t off     = e[4] | (e[5] << 8) | (e[6] << 16) | (e[7] << 24);
+            uint32_t size    = e[8] | (e[9] << 8) | (e[10] << 16) | (e[11] << 24);
+            char label[17] = {0};
+            memcpy(label, e + 12, 16);
+            JsonObject p = parts_arr.add<JsonObject>();
+            p["idx"] = i;
+            p["type"] = type; p["subtype"] = subtype;
+            p["offset"] = off; p["size"] = size;
+            p["label"] = label;
+            if (type == 1 && subtype == 2) {  // DATA / NVS
+                nvs_off = off; nvs_size = size;
+            }
+        }
+        if (!nvs_off || nvs_size == 0 || nvs_size > 64 * 1024) {
+            ESPFlasher::closeSession();
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "NVS partition not found in table");
+            return;
+        }
+
+        // Read full NVS partition into PSRAM (up to 64 KB worth of buffer).
+        uint8_t *nvs = (uint8_t*)heap_caps_malloc(nvs_size, MALLOC_CAP_SPIRAM);
+        if (!nvs) nvs = (uint8_t*)malloc(nvs_size);
+        if (!nvs) {
+            ESPFlasher::closeSession();
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(500, "text/plain", "Out of memory");
+            return;
+        }
+        ESPFlasher::ReadRegion r2 = { nvs_off, nvs_size, nvs };
+        if (ESPFlasher::readFlashMultiInOpenSession(&r2, 1) != ESPFlasher::FLASH_OK) {
+            free(nvs);
+            ESPFlasher::closeSession();
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(502, "text/plain", "Failed reading NVS");
+            return;
+        }
+        ESPFlasher::closeSession();
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
+
+        // Build JSON: partitions + NVS bytes as base64.
+        // Pre-compute base64 buffer size (4 chars per 3 bytes, padded).
+        size_t b64_len = ((nvs_size + 2) / 3) * 4;
+        char *b64 = (char*)malloc(b64_len + 1);
+        if (!b64) { free(nvs); req->send(500, "text/plain", "OOM"); return; }
+        static const char b64chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        size_t bi = 0;
+        for (size_t i = 0; i < nvs_size; i += 3) {
+            uint32_t n = (uint32_t)nvs[i] << 16;
+            if (i + 1 < nvs_size) n |= (uint32_t)nvs[i + 1] << 8;
+            if (i + 2 < nvs_size) n |= (uint32_t)nvs[i + 2];
+            b64[bi++] = b64chars[(n >> 18) & 0x3F];
+            b64[bi++] = b64chars[(n >> 12) & 0x3F];
+            b64[bi++] = (i + 1 < nvs_size) ? b64chars[(n >> 6) & 0x3F] : '=';
+            b64[bi++] = (i + 2 < nvs_size) ? b64chars[n & 0x3F] : '=';
+        }
+        b64[b64_len] = 0;
+        free(nvs);
+
+        // Build response. Use AsyncResponseStream for big strings.
+        AsyncResponseStream *resp = req->beginResponseStream("application/json");
+        resp->print("{\"partitions\":");
+        String partsJson; serializeJson(parts_doc, partsJson);
+        resp->print(partsJson);
+        resp->print(",\"nvs_offset\":"); resp->print(nvs_off);
+        resp->print(",\"nvs_size\":"); resp->print(nvs_size);
+        resp->print(",\"nvs_b64\":\"");
+        resp->print(b64);
+        resp->print("\"}");
+        free(b64);
+        req->send(resp);
+    });
+
     s_server->on("/api/flash/exit_dfu", HTTP_POST, [](AsyncWebServerRequest *req) {
         // RX state changes (DFU → app jump). Don't resume CRSF — user
         // restarts Live monitor manually once the new app boots.

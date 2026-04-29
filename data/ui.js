@@ -2255,6 +2255,222 @@ function ctrlAutoProbe(delayMs) {
 async function ctrlBind()  { try { ctrlLog(await postForm('/api/elrs/bind')); ctrlAutoProbe(2000); }
                             catch (e) { ctrlLog(e.message || e, true); } }
 
+// === RX NVS / partition table reader + decoder ===
+// Uses /api/elrs/nvs/info which (in one DFU session) returns:
+//   - parsed partition table (offsets + sizes + labels)
+//   - raw NVS partition bytes as base64
+// JS-side parses NVS pages, finds latest 'eeprom' blob, decodes ELRS
+// rx_config_t struct and surfaces every field to the UI.
+
+const _NVS_PAGE_SIZE = 4096;
+const _NVS_ENTRY_SIZE = 32;
+const _NVS_ENTRIES_PER_PAGE = 126;
+const _NVS_HEADER = 64;  // 32-byte page header + 32-byte entry-state bitmap
+
+// base64 → Uint8Array
+function _b64ToBytes(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+function _u32le(b, o) { return b[o] | (b[o+1]<<8) | (b[o+2]<<16) | (b[o+3]<<24) >>> 0; }
+function _u16le(b, o) { return b[o] | (b[o+1]<<8); }
+
+// Walk all entries in NVS partition. Returns array of {page, slot, off, ns_idx, type, span, chunk_idx, key, data8}.
+function _nvsAllEntries(buf) {
+  const out = [];
+  const nPages = Math.floor(buf.length / _NVS_PAGE_SIZE);
+  for (let p = 0; p < nPages; p++) {
+    const pageStart = p * _NVS_PAGE_SIZE;
+    for (let slot = 0; slot < _NVS_ENTRIES_PER_PAGE; slot++) {
+      const off = pageStart + _NVS_HEADER + slot * _NVS_ENTRY_SIZE;
+      const e = buf.subarray(off, off + _NVS_ENTRY_SIZE);
+      let allFF = true;
+      for (let k = 0; k < _NVS_ENTRY_SIZE; k++) if (e[k] !== 0xFF) { allFF = false; break; }
+      if (allFF) continue;
+      // Decode key (16 bytes, null-trimmed)
+      let keyEnd = 8;
+      while (keyEnd < 24 && e[keyEnd] !== 0) keyEnd++;
+      const key = String.fromCharCode.apply(null, e.subarray(8, keyEnd));
+      out.push({
+        page: p, slot, off,
+        ns_idx: e[0], type: e[1], span: e[2], chunk_idx: e[3],
+        crc: _u32le(e, 4), key,
+        data8: e.subarray(24, 32)
+      });
+    }
+  }
+  return out;
+}
+
+function _nvsPageSeq(buf, page) {
+  return _u32le(buf, page * _NVS_PAGE_SIZE + 4);
+}
+
+// Find latest 'eeprom' blob (ELRS rx_config). NVS is log-structured —
+// pick the blob_idx with highest page-seq, then collect its blob_data
+// chunks (also picking latest seq per chunk_idx).
+function _nvsExtractEeprom(buf) {
+  const entries = _nvsAllEntries(buf);
+  // BLOB_INDEX (0x48), key=eeprom
+  const idxs = entries.filter(e => e.type === 0x48 && e.key === 'eeprom');
+  if (!idxs.length) return null;
+  idxs.forEach(e => { e.seq = _nvsPageSeq(buf, e.page); });
+  idxs.sort((a, b) => b.seq - a.seq);
+  const idx = idxs[0];
+  const size = _u32le(idx.data8, 0);
+  const chunkCount = idx.data8[4];
+  const chunkStart = idx.data8[5];
+  // Collect blob_data with chunk_idx in [chunkStart, chunkStart+chunkCount-1]
+  const blob = new Uint8Array(size);
+  let bo = 0;
+  for (let ci = 0; ci < chunkCount; ci++) {
+    const targetChunk = chunkStart + ci;
+    let best = null;
+    for (const e of entries) {
+      if (e.type === 0x42 && e.key === 'eeprom' &&
+          e.ns_idx === idx.ns_idx && e.chunk_idx === targetChunk) {
+        const seq = _nvsPageSeq(buf, e.page);
+        if (!best || seq > best.seq) best = Object.assign({seq}, e);
+      }
+    }
+    if (!best) return null;
+    // chunk_size: data8[24:26] is u16 size (we observed bytes 0:2 of data8)
+    // Actually NVS spec says data8[0:4] is chunk size as u32, but ELRS data
+    // shows it as u16 in low bytes — read the smaller.
+    const chunkSize = _u16le(best.data8, 0);
+    const dataOff = best.off + 32;  // data starts right after entry header
+    blob.set(buf.subarray(dataOff, dataOff + chunkSize), bo);
+    bo += chunkSize;
+  }
+  return blob.subarray(0, size);
+}
+
+// Decode ELRS rx_config_t struct (per src/lib/CONFIG/config.h v3.6.3).
+// Layout (packed):
+//   [0:4]   version (u32)
+//   [4:10]  uid[6]
+//   [10]    unused_padding
+//   [11]    serial1Protocol:4 / serial1Protocol_unused:4
+//   [12:16] flash_discriminator (u32)
+//   [16:18] vbat.scale (u16)
+//   [18:20] vbat.offset (i16)
+//   [20]    bindStorage:2 / power:4 / antennaMode:2
+//   [21]    powerOnCounter:3 / forceTlmOff:1 / rateInitialIdx:4
+//   [22]    modelId (u8)
+//   [23]    serialProtocol:4 / failsafeMode:2 / unused:2
+//   [24..]  pwmChannels[N] each rx_config_pwm_t (4 bytes packed bits)
+//   [24+4N] teamraceChannel:4 / teamracePosition:3 / teamracePitMode:1
+//   [...+1] targetSysId
+//   [...+1] sourceSysId
+function decodeRxConfig(blob) {
+  if (!blob || blob.length < 24) return null;
+  const r = {};
+  r.version = _u32le(blob, 0);
+  r.uid = Array.from(blob.subarray(4, 10)).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(':');
+  r.uid_bytes = Array.from(blob.subarray(4, 10));
+  // ELRS bound check: UID[2..5] != 0
+  r.is_bound = !(blob[6] === 0 && blob[7] === 0 && blob[8] === 0 && blob[9] === 0);
+  r.serial1Protocol = blob[11] & 0x0F;
+  r.flash_discriminator = '0x' + _u32le(blob, 12).toString(16).toUpperCase().padStart(8, '0');
+  r.vbat_scale = _u16le(blob, 16);
+  const off16 = _u16le(blob, 18); r.vbat_offset = off16 > 0x7FFF ? off16 - 0x10000 : off16;
+  const b20 = blob[20];
+  r.bindStorage = b20 & 0x03;
+  r.bindStorage_name = ['Returnable','Volatile','Persistent','Administered'][r.bindStorage];
+  r.power = (b20 >> 2) & 0x0F;
+  r.antennaMode = (b20 >> 6) & 0x03;
+  r.antenna_name = ['Antenna A','Antenna B','Diversity'][r.antennaMode] || `0x${r.antennaMode.toString(16)}`;
+  const b21 = blob[21];
+  r.powerOnCounter = b21 & 0x07;
+  r.forceTlmOff = !!((b21 >> 3) & 0x01);
+  r.rateInitialIdx = (b21 >> 4) & 0x0F;
+  r.modelId = blob[22];
+  r.modelId_name = (r.modelId === 0xFF) ? 'match-all (0xFF)' : `model ${r.modelId}`;
+  const b23 = blob[23];
+  r.serialProtocol = b23 & 0x0F;
+  r.serialProtocol_name = ['CRSF','Inverted CRSF','SBUS','Inv. SBUS','SUMD','DJI RS Pro','HoTT','MAVLink','TRAMP','SmartAudio','MSP','SBUS-FAST'][r.serialProtocol] || `0x${r.serialProtocol.toString(16)}`;
+  r.failsafeMode = (b23 >> 4) & 0x03;
+  r.failsafeMode_name = ['Set Position','No Pulses','Last Position'][r.failsafeMode] || '?';
+  // PWM channels: try up to 16, stop when raw == 0xFFFFFFFF
+  r.pwm = [];
+  const PWM_BASE = 24;
+  for (let i = 0; i < 16; i++) {
+    const o = PWM_BASE + i * 4;
+    if (o + 4 > blob.length) break;
+    const raw = _u32le(blob, o);
+    if (raw === 0xFFFFFFFF) break;
+    r.pwm.push({
+      ch: i,
+      failsafe_us: 988 + (raw & 0x3FF),
+      input_ch: (raw >> 10) & 0x0F,
+      inverted: !!((raw >> 14) & 0x01),
+      mode: (raw >> 15) & 0x0F,
+      narrow: !!((raw >> 19) & 0x01),
+      failsafe_mode: (raw >> 20) & 0x03,
+    });
+  }
+  return r;
+}
+
+// Hit /api/elrs/nvs/info, parse, render rx_config in UI.
+async function rxReadNvs() {
+  const status = document.getElementById('rxNvsStatus');
+  const out = document.getElementById('rxNvsResult');
+  if (status) { status.textContent = 'Reading partition table + NVS via DFU…'; status.className = 'rcv-result-line'; }
+  if (out) out.innerHTML = '';
+  try {
+    const r = await fetch('/api/elrs/nvs/info', {method:'POST'});
+    const t = await r.text();
+    if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + t);
+    const j = JSON.parse(t);
+    const bytes = _b64ToBytes(j.nvs_b64);
+    const blob = _nvsExtractEeprom(bytes);
+    if (!blob) throw new Error('eeprom blob not found in NVS');
+    const cfg = decodeRxConfig(blob);
+    // Render
+    let html = '<div class="kv"><span class="kv-label">Partitions</span><span class="kv-value">' + j.partitions.length + ' entries</span></div>';
+    j.partitions.forEach(p => {
+      const tn = p.type === 0 ? 'APP' : p.type === 1 ? 'DATA' : '?';
+      const subnames = {0:'factory/otadata',1:'phy',2:'nvs',3:'coredump',4:'nvs_keys',16:'ota_0',17:'ota_1',130:'spiffs'};
+      const sub = subnames[p.subtype] || ('0x' + p.subtype.toString(16));
+      html += '<div class="kv"><span class="kv-label">  ' + p.label + '</span><span class="kv-value mono rcv-small-mono">' +
+        tn + '/' + sub + ' @ 0x' + p.offset.toString(16).padStart(6,'0') + ' · ' + (p.size/1024).toFixed(0) + ' KB</span></div>';
+    });
+    html += '<hr>';
+    html += '<div class="kv"><span class="kv-label">UID</span><span class="kv-value mono">' + cfg.uid + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Is bound</span><span class="kv-value"><span class="badge ' + (cfg.is_bound ? 'badge-success">YES' : 'badge-warn">NO') + '</span></span></div>';
+    html += '<div class="kv"><span class="kv-label">Bind storage</span><span class="kv-value">' + cfg.bindStorage_name + ' (' + cfg.bindStorage + ')</span></div>';
+    html += '<div class="kv"><span class="kv-label">Model match</span><span class="kv-value">' + cfg.modelId_name + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Power-on counter</span><span class="kv-value mono">' + cfg.powerOnCounter + ' / 3 (3-press WiFi entry)</span></div>';
+    html += '<div class="kv"><span class="kv-label">Force telem off</span><span class="kv-value">' + (cfg.forceTlmOff ? 'YES' : 'no') + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Boot RF rate</span><span class="kv-value mono">idx ' + cfg.rateInitialIdx + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Antenna mode</span><span class="kv-value">' + cfg.antenna_name + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">TX power idx</span><span class="kv-value mono">' + cfg.power + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Serial protocol</span><span class="kv-value">' + cfg.serialProtocol_name + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Failsafe mode</span><span class="kv-value">' + cfg.failsafeMode_name + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">VBAT scale / offset</span><span class="kv-value mono">' + cfg.vbat_scale + ' / ' + cfg.vbat_offset + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Flash discriminator</span><span class="kv-value mono">' + cfg.flash_discriminator + '</span></div>';
+    html += '<div class="kv"><span class="kv-label">Config version</span><span class="kv-value mono">0x' + cfg.version.toString(16).padStart(8,'0').toUpperCase() + '</span></div>';
+    if (cfg.pwm.length) {
+      html += '<hr><div class="kv-label">PWM channels (' + cfg.pwm.length + ' active):</div>';
+      cfg.pwm.forEach(p => {
+        html += '<div class="kv"><span class="kv-label">  Ch' + p.ch + '</span><span class="kv-value mono rcv-small-mono">' +
+          'fs=' + p.failsafe_us + 'µs in=ch' + p.input_ch + (p.inverted?' inv':'') +
+          (p.narrow?' narrow':'') + ' mode=' + p.mode + ' fs_mode=' + p.failsafe_mode + '</span></div>';
+      });
+    }
+    if (out) out.innerHTML = html;
+    if (status) {
+      status.className = 'rcv-result-line text-success';
+      status.textContent = '✓ Parsed ' + j.partitions.length + ' partitions, NVS=' + (j.nvs_size/1024) + 'KB, rx_config decoded (' + blob.length + ' bytes)';
+    }
+  } catch (e) {
+    if (status) { status.className = 'rcv-result-line text-warn'; status.textContent = '✗ ' + (e.message || e); }
+  }
+}
+
 // === RX one-shot CRSF UART commands (Receiver tab Identify/Bind panels) ===
 
 // PING the bound TX module via radio link — DEVICE_PING dest=0xEE.
