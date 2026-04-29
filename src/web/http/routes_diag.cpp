@@ -22,6 +22,8 @@ extern "C" int      cp2112_ep_info(char *out, int cap);
 #include <esp_partition.h>
 #include <WiFi.h>
 
+#include "board_settings.h"
+
 namespace RoutesDiag {
 
 void registerRoutesDiag(AsyncWebServer *s_server) {
@@ -150,6 +152,50 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
         } else {
             req->send(500, "text/plain", esp_err_to_name(err));
         }
+    });
+
+    // POST /api/sys/beacon/now -- send one beacon RIGHT NOW (synchronous,
+    // 5 s timeout). Returns the HTTP status code from the beacon target,
+    // or a negative HTTPClient error.
+    //
+    // CRITICAL: registered BEFORE /api/sys/beacon because
+    // AsyncCallbackWebHandler does prefix-match -- if the broader route
+    // is registered first, it shadows /now (same trap that bit the DFU
+    // routes; see project_dfu_sticky_session.md in memory).
+    s_server->on("/api/sys/beacon/now", HTTP_POST, [](AsyncWebServerRequest *req) {
+        String url = BoardSettings::beaconUrl();
+        if (url.length() == 0) {
+            req->send(400, "text/plain", "no beacon URL configured");
+            return;
+        }
+        int code = Safety::beaconSendNow(url.c_str());
+        req->send(code >= 200 && code < 400 ? 200 : 502, "text/plain",
+                  String("beacon -> ") + String(code));
+    });
+
+    // GET /api/sys/beacon -- return current beacon config.
+    s_server->on("/api/sys/beacon", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+        d["url"]              = BoardSettings::beaconUrl();
+        d["interval_ms"]      = BoardSettings::beaconIntervalMs();
+        d["interval_minutes"] = BoardSettings::beaconIntervalMs() / 60000;
+        d["enabled"]          = BoardSettings::beaconUrl().length() > 0
+                              && BoardSettings::beaconIntervalMs() > 0;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // POST /api/sys/beacon?url=...&minutes=N -- save config.
+    // Pass empty url + minutes=0 to disable.
+    s_server->on("/api/sys/beacon", HTTP_POST, [](AsyncWebServerRequest *req) {
+        String url     = req->hasParam("url",     true) ? req->getParam("url",     true)->value()
+                       : req->hasParam("url")           ? req->getParam("url")          ->value() : "";
+        String minutes = req->hasParam("minutes", true) ? req->getParam("minutes", true)->value()
+                       : req->hasParam("minutes")       ? req->getParam("minutes")      ->value() : "0";
+        uint32_t mins  = (uint32_t)minutes.toInt();
+        BoardSettings::setBeacon(url, mins * 60UL * 1000UL);
+        String resp = "saved url=\"" + url + "\" interval=" + String(mins) + " min";
+        req->send(200, "text/plain", resp);
     });
 
     // I2C preflight diagnostics

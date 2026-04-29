@@ -123,6 +123,13 @@ void loop() {
     // Cheap noop after the first WL_CONNECTED.
     Safety::tickNetworkWatchdog();
 
+    // Health beacon: outbound POST of /api/health-shaped JSON to the
+    // configured URL on a fixed cadence. Required when the device is
+    // behind NAT/firewall. Settings come from BoardSettings; both
+    // empty -> noop.
+    Safety::tickBeacon(BoardSettings::beaconUrl().c_str(),
+                       BoardSettings::beaconIntervalMs());
+
     // Web stack stays alive in BOTH normal mode and safe mode -- it's
     // our recovery channel for OTA reflash if anything goes wrong.
     WebServer::loop();

@@ -5,6 +5,7 @@
 #include <esp_system.h>
 
 #include "board_settings.h"
+#include "safety.h"
 
 namespace SerialCli {
 
@@ -30,8 +31,12 @@ namespace SerialCli {
 
 static void printHelp() {
     Serial.println(F("Commands:"));
-    Serial.println(F("  reboot                  reset chip (normal)"));
-    Serial.println(F("  wifi set <ssid> <pass>  save creds + reconnect"));
+    Serial.println(F("  reboot                       reset chip (normal)"));
+    Serial.println(F("  wifi set <ssid> <pass>       save creds + reconnect"));
+    Serial.println(F("  beacon set <url> <minutes>   configure health-beacon POST"));
+    Serial.println(F("  beacon show                  print current beacon config"));
+    Serial.println(F("  beacon now                   send a beacon NOW (returns http code)"));
+    Serial.println(F("  beacon clear                 disable beacon"));
     Serial.println(F("  wifi show               print current ssid"));
     Serial.println(F("  wifi clear              wipe creds from NVS"));
     Serial.println(F("  wifi reconnect          bounce STA with current creds"));
@@ -79,6 +84,48 @@ static void handle(String line) {
                                 BoardSettings::wifiPass(), 20000);
         Serial.printf("  -> %s  ip=%s\n", ok ? "OK" : "FAIL",
                       WiFi.localIP().toString().c_str());
+        return;
+    }
+    if (line.equalsIgnoreCase("beacon show")) {
+        String url = BoardSettings::beaconUrl();
+        uint32_t ms = BoardSettings::beaconIntervalMs();
+        Serial.printf("beacon url=\"%s\" interval=%u ms (%u min)\n",
+                      url.c_str(), (unsigned)ms, (unsigned)(ms / 60000));
+        return;
+    }
+    if (line.equalsIgnoreCase("beacon clear")) {
+        BoardSettings::setBeacon(String(""), 0);
+        Serial.println(F("beacon disabled"));
+        return;
+    }
+    if (line.equalsIgnoreCase("beacon now")) {
+        String url = BoardSettings::beaconUrl();
+        if (url.length() == 0) {
+            Serial.println(F("no beacon URL configured (try `beacon set <url> <min>`)"));
+            return;
+        }
+        int code = Safety::beaconSendNow(url.c_str());
+        Serial.printf("beacon now -> %d\n", code);
+        return;
+    }
+    if (line.startsWith("beacon set ")) {
+        // Form: "beacon set <url> <minutes>". URL = first whitespace-delimited
+        // token, minutes = rest. Same simple parsing as `wifi set`.
+        String rest = line.substring(strlen("beacon set "));
+        rest.trim();
+        int sp = rest.indexOf(' ');
+        if (sp < 1 || sp >= (int)rest.length() - 1) {
+            Serial.println(F("usage: beacon set <url> <minutes>"));
+            return;
+        }
+        String url = rest.substring(0, sp);
+        String mins_s = rest.substring(sp + 1);
+        mins_s.trim();
+        uint32_t mins = (uint32_t)mins_s.toInt();
+        uint32_t ms = mins * 60UL * 1000UL;
+        BoardSettings::setBeacon(url, ms);
+        Serial.printf("saved beacon url=\"%s\" interval=%u min\n",
+                      url.c_str(), (unsigned)mins);
         return;
     }
     if (line.startsWith("wifi set ")) {

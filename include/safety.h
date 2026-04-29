@@ -65,6 +65,19 @@ void markValidNow();
 // Defaults: 5 minutes. Pass `0` to disable.
 void tickNetworkWatchdog(uint32_t timeout_ms = 5 * 60 * 1000);
 
+// Health beacon. Call from loop() with the configured URL + interval
+// (typically loaded from BoardSettings or a Waveshare-side equivalent).
+// If `url` is empty or `interval_ms` is 0, this is a noop. Otherwise
+// when the time-since-last-attempt exceeds `interval_ms`, POST a small
+// JSON payload of vitals to `url` (5 s timeout, sync, no retry --
+// retries happen on the next interval).
+void tickBeacon(const char *url, uint32_t interval_ms);
+
+// Force-send a beacon NOW regardless of cadence. Returns the HTTP
+// status code (or negative for transport failure). Used by CLI / web
+// "beacon now" actions.
+int beaconSendNow(const char *url);
+
 // Read-only accessors for /api/health and similar endpoints.
 const char* otaStateStr();        // "VALID", "PENDING_VERIFY", etc.
 uint32_t    bootCount();          // current value (counter not yet reset)

@@ -6,11 +6,13 @@ namespace BoardSettings {
 static Preferences s_prefs;
 static bool        s_open = false;
 
-static constexpr const char *NS_NAME      = "boardcfg";
-static constexpr const char *KEY_ROTATION = "rotation";
-static constexpr const char *KEY_TOUCHCAL = "touch_cal";   // bytes: uint16_t[8] = 16B
+static constexpr const char *NS_NAME       = "boardcfg";
+static constexpr const char *KEY_ROTATION  = "rotation";
+static constexpr const char *KEY_TOUCHCAL  = "touch_cal";   // bytes: uint16_t[8] = 16B
 static constexpr const char *KEY_WIFI_SSID = "wifi_ssid";
 static constexpr const char *KEY_WIFI_PASS = "wifi_pass";
+static constexpr const char *KEY_BEACON_URL = "bcn_url";
+static constexpr const char *KEY_BEACON_MS  = "bcn_ms";
 
 void begin() {
     if (s_open) return;
@@ -65,6 +67,22 @@ void setWifi(const String &ssid, const String &pass) {
 
 bool hasWifiCreds() {
     return wifiSsid().length() > 0 && wifiPass().length() > 0;
+}
+
+String beaconUrl() {
+    if (!s_open) return String();
+    return s_prefs.getString(KEY_BEACON_URL, "");
+}
+
+uint32_t beaconIntervalMs() {
+    if (!s_open) return 0;
+    return s_prefs.getUInt(KEY_BEACON_MS, 0);
+}
+
+void setBeacon(const String &url, uint32_t interval_ms) {
+    if (!s_open) return;
+    s_prefs.putString(KEY_BEACON_URL, url);
+    s_prefs.putUInt(KEY_BEACON_MS, interval_ms);
 }
 
 } // namespace BoardSettings

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
@@ -140,6 +141,69 @@ void markValidNow() {
     }
     s_validated = true;
 }
+
+// ---- Health beacon ----------------------------------------------------------
+
+// Build the same vitals payload that /api/health serves, but as a
+// compact JSON the monitor expects to POST-receive. Includes the
+// device MAC as `device_id` (no colons) so a single endpoint can
+// distinguish many devices.
+static String buildBeaconPayload() {
+    String mac = WiFi.macAddress();
+    mac.replace(":", "");
+    mac.toLowerCase();
+
+    String j = "{";
+    j += "\"device_id\":\"" + mac + "\"";
+    j += ",\"uptime_s\":"   + String((uint32_t)(millis() / 1000));
+    j += ",\"free_heap\":"  + String((uint32_t)ESP.getFreeHeap());
+    j += ",\"min_free_heap\":" + String((uint32_t)ESP.getMinFreeHeap());
+    j += ",\"free_psram\":" + String((uint32_t)ESP.getFreePsram());
+    j += ",\"wifi_rssi\":"  + String((int)WiFi.RSSI());
+    j += ",\"wifi_ip\":\""  + WiFi.localIP().toString() + "\"";
+    j += ",\"ota_state\":\"" + String(otaStateName(s_ota_state)) + "\"";
+    j += ",\"boot_count\":" + String((uint32_t)s_boot_count_at_start);
+    j += ",\"validated\":"  + String(s_validated ? "true" : "false");
+    j += ",\"last_reset\":\"" + String(resetReasonName(s_reset_reason)) + "\"";
+    j += "}";
+    return j;
+}
+
+static int doBeaconPost(const char *url) {
+    if (url == nullptr || url[0] == '\0') return -2;
+    if (WiFi.status() != WL_CONNECTED)    return -3;
+
+    HTTPClient http;
+    http.setTimeout(5000);
+    if (!http.begin(url)) return -4;
+    http.addHeader("Content-Type", "application/json");
+
+    String payload = buildBeaconPayload();
+    int code = http.POST(payload);
+    http.end();
+    return code;
+}
+
+void tickBeacon(const char *url, uint32_t interval_ms) {
+    if (url == nullptr || url[0] == '\0' || interval_ms == 0) return;
+
+    static uint32_t s_last_attempt = 0;
+    uint32_t now = millis();
+    // Fire the first beacon ~10 s after boot so vitals reflect a
+    // settled state, not the cold-start moment.
+    if (s_last_attempt == 0 && now < 10000) return;
+    if (s_last_attempt != 0 && (now - s_last_attempt) < interval_ms) return;
+
+    s_last_attempt = now;
+    int code = doBeaconPost(url);
+    Serial.printf("[safety] beacon -> %s : %d\n", url, code);
+}
+
+int beaconSendNow(const char *url) {
+    return doBeaconPost(url);
+}
+
+// ---- Network watchdog -------------------------------------------------------
 
 void tickNetworkWatchdog(uint32_t timeout_ms) {
     if (timeout_ms == 0) return;

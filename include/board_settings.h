@@ -34,4 +34,11 @@ String  wifiPass();
 void    setWifi(const String &ssid, const String &pass);   // both at once
 bool    hasWifiCreds();   // true if both ssid and pass are non-empty
 
+// Health beacon: periodic outbound POST with device vitals to a
+// monitoring endpoint. Required when the device is behind NAT/firewall
+// and we can't reach it inbound. URL "" or interval 0 -> disabled.
+String   beaconUrl();
+uint32_t beaconIntervalMs();             // default 0 (disabled)
+void     setBeacon(const String &url, uint32_t interval_ms);
+
 } // namespace BoardSettings

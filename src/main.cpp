@@ -5,6 +5,7 @@
 #include <esp_task_wdt.h>
 #include "pin_config.h"
 #include "safety.h"
+#include "board_settings.h"
 #include "ui/display.h"
 #include "ui/button.h"
 #include "ui/menu.h"
@@ -67,6 +68,11 @@ void setup() {
     // if init crashes. Same pattern as on the SC01 Plus (main_sc01_plus.cpp).
     Safety::earlyBootCheck();
 
+    // BoardSettings owns the "boardcfg" NVS namespace -- shared by both
+    // boards now (originally SC01-only, moved to src/core/ when the
+    // health-beacon settings became universal).
+    BoardSettings::begin();
+
     WebState::initMutex();  // Must be first — protects shared state
 
     // Watchdog: 30s max task block, panic+reset on timeout
@@ -105,6 +111,8 @@ void loop() {
     // OTA rollback gate + network watchdog (cheap noops after first hit).
     Safety::tickValidation();
     Safety::tickNetworkWatchdog();
+    Safety::tickBeacon(BoardSettings::beaconUrl().c_str(),
+                       BoardSettings::beaconIntervalMs());
 
     StatusLed::loop();
     SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
