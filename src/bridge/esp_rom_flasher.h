@@ -196,6 +196,34 @@ struct ElrsDeviceInfo {
 };
 Result crsfDevicePing(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *out);
 
+// PING the TX module via the radio link. CRSF DEVICE_PING with dest=0xEE
+// (handset address). RX forwards to its bound TX module over the OTA uplink;
+// TX module replies with DEVICE_INFO src=0xEE which RX forwards back to FC
+// UART. Returns the TX-side device info (name, version, etc).
+Result crsfPingTxModule(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *out);
+
+// MSP_ELRS_SET_RX_WIFI_MODE — wraps MSP function 0x0E in MSP-over-CRSF
+// (frame type 0x7C MSP_WRITE). ELRS RX defers 500 ms then calls
+// setWifiUpdateMode() which broadcasts WiFi AP "ExpressLRS RX". Lets the
+// plate trigger WiFi mode without 60 s auto-AP timeout or 3× BOOT-press.
+Result sendMspWifiMode(const Config &cfg);
+
+// CRSF COMMAND m,m,<id> — sets the active model-match ID. id=0 means
+// "match all" (RX always responds regardless of handset model selection).
+Result sendCrsfModelMatch(const Config &cfg, uint8_t modelId);
+
+// Synthesize standard CRSF telemetry frames. RX forwards them over the
+// radio link to TX → handset → OSD. Useful for handset-side display
+// testing without a real flight controller.
+Result sendBatteryTelemetry(const Config &cfg, uint16_t voltage_mV,
+                             uint16_t current_mA, uint32_t consumed_mAh,
+                             uint8_t pct);
+Result sendGpsTelemetry(const Config &cfg, int32_t lat_e7, int32_t lon_e7,
+                         uint16_t gnd_speed_e2, uint16_t heading_e2,
+                         uint16_t alt_m, uint8_t sats);
+Result sendAttitudeTelemetry(const Config &cfg, int16_t pitch_e4,
+                              int16_t roll_e4, int16_t yaw_e4);
+
 // Send CRSF "enter binding" frame (EC 04 32 62 64 <crc>). Safe runtime op —
 // puts RX into bind mode for 60 s. TX-only, no ack expected.
 Result sendCrsfBind(const Config &cfg);

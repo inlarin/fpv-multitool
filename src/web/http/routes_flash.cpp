@@ -1721,11 +1721,128 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         req->send(200, "application/json", out);
     });
 
-    // /api/elrs/enable_wifi was removed — vanilla ELRS doesn't dispatch
-    // UART-received MSP locally (see docs/elrs_state_machine_research.md),
-    // so MSP_ELRS_SET_RX_WIFI_MODE over this wire is architecturally a no-op.
-    // To enter WiFi on the RX: 3× rapid BOOT button-press, 60 s auto-wifi
-    // timer, or command via a linked handset.
+    // /api/elrs/wifi_mode_enter NOT available — verified against ELRS 3.6.3
+    // src/lib/Telemetry/telemetry.cpp lines 270-289: UART-received MSP frames
+    // are routed ONLY to wifi2tcp/mspVtx forwarding, NOT dispatched locally
+    // to MspReceiveComplete() where MSP_ELRS_SET_RX_WIFI_MODE handler lives.
+    // Path is OTA-only — radio uplink from TX module to RX, then RX-internal
+    // dispatch. From the FC UART side, this MSP is architecturally a no-op.
+    // Workaround: 3× rapid BOOT button-press, 60 s auto-wifi timer (if
+    // wifi-on-interval > 0), or send via a linked handset.
+
+    // POST /api/elrs/modelmatch?id=N — sets active model-match ID. id=0 makes
+    // RX always respond regardless of handset model selection.
+    s_server->on("/api/elrs/modelmatch", HTTP_POST, [](AsyncWebServerRequest *req) {
+        uint8_t id = 0;
+        if (req->hasParam("id", true)) id = (uint8_t)req->getParam("id", true)->value().toInt();
+        else if (req->hasParam("id")) id = (uint8_t)req->getParam("id")->value().toInt();
+        bool _crsf = crsfPauseForPortB();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_modelmatch")) {
+            crsfResumeAfterPortB(_crsf);
+            req->send(409, "text/plain", "Port B busy"); return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+        ESPFlasher::sendCrsfModelMatch(cfg, id);
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
+        char msg[64]; snprintf(msg, sizeof(msg), "model-match id set to %u", id);
+        req->send(200, "text/plain", msg);
+    });
+
+    // POST /api/elrs/tx_info — reads the bound TX module's DEVICE_INFO via
+    // radio link (PING dest=0xEE → forwarded to TX → reply forwarded back).
+    s_server->on("/api/elrs/tx_info", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (WebState::flashState.in_progress) {
+            req->send(409, "text/plain", "flash in progress"); return;
+        }
+        bool _crsf = crsfPauseForPortB();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_tx_info")) {
+            crsfResumeAfterPortB(_crsf);
+            req->send(409, "text/plain", "Port B busy"); return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+        ESPFlasher::ElrsDeviceInfo info;
+        ESPFlasher::Result r = ESPFlasher::crsfPingTxModule(cfg, 800, &info);
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
+        if (r != ESPFlasher::FLASH_OK || !info.ok) {
+            req->send(502, "text/plain", "TX did not reply — check link is up");
+            return;
+        }
+        JsonDocument d;
+        d["ok"] = true;
+        d["name"] = info.name;
+        d["serial_no"] = info.serial_no;
+        d["hw_id"] = info.hw_id;
+        d["sw_version"] = info.sw_version;
+        d["field_count"] = info.field_count;
+        d["parameter_version"] = info.parameter_version;
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
+    // POST /api/elrs/inject_telemetry?type=battery|gps|attitude — synthesizes
+    // a telemetry frame from the FC side. RX forwards it over the OTA uplink
+    // to TX → handset → OSD. Useful for handset-side display testing without
+    // a real flight controller.
+    s_server->on("/api/elrs/inject_telemetry", HTTP_POST, [](AsyncWebServerRequest *req) {
+        String t = req->hasParam("type", true) ? req->getParam("type", true)->value()
+                  : req->hasParam("type") ? req->getParam("type")->value() : "battery";
+        bool _crsf = crsfPauseForPortB();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_inject")) {
+            crsfResumeAfterPortB(_crsf);
+            req->send(409, "text/plain", "Port B busy"); return;
+        }
+        ESPFlasher::Config cfg;
+        cfg.uart = &Serial1;
+        cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+        cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+        cfg.baud_rate = 420000;
+        auto pi = [&](const char *k, int def) {
+            if (req->hasParam(k, true)) return (int)req->getParam(k, true)->value().toInt();
+            if (req->hasParam(k))       return (int)req->getParam(k)->value().toInt();
+            return def;
+        };
+        const char *msg = "ok";
+        if (t == "battery") {
+            ESPFlasher::sendBatteryTelemetry(cfg,
+                (uint16_t)pi("voltage_mv", 16800),
+                (uint16_t)pi("current_ma", 5000),
+                (uint32_t)pi("consumed_mah", 0),
+                (uint8_t)pi("pct", 75));
+            msg = "battery frame queued for handset OSD";
+        } else if (t == "gps") {
+            ESPFlasher::sendGpsTelemetry(cfg,
+                pi("lat_e7", 555512345),
+                pi("lon_e7", 376123456),
+                (uint16_t)pi("gnd_speed", 0),
+                (uint16_t)pi("heading", 0),
+                (uint16_t)pi("alt_m", 100),
+                (uint8_t)pi("sats", 12));
+            msg = "GPS frame queued";
+        } else if (t == "attitude") {
+            ESPFlasher::sendAttitudeTelemetry(cfg,
+                (int16_t)pi("pitch_e4", 0),
+                (int16_t)pi("roll_e4",  0),
+                (int16_t)pi("yaw_e4",   0));
+            msg = "attitude frame queued";
+        } else {
+            PinPort::release(PinPort::PORT_B);
+            crsfResumeAfterPortB(_crsf);
+            req->send(400, "text/plain", "type must be battery|gps|attitude"); return;
+        }
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(_crsf);
+        req->send(200, "text/plain", msg);
+    });
 
     s_server->on("/api/flash/exit_dfu", HTTP_POST, [](AsyncWebServerRequest *req) {
         // RX state changes (DFU → app jump). Don't resume CRSF — user

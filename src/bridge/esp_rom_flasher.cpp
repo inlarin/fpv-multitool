@@ -1577,6 +1577,219 @@ Result crsfParamWrite(const Config &cfg, uint8_t field_id, const uint8_t *data, 
     return FLASH_OK;
 }
 
+// PING the TX module (handset address 0xEE) via the radio link.
+// Frame: <0xEC> <0x08> <0x28> <dest=0xEE> <orig=0xEA> <crc>
+//        the 6th-byte payload is empty per CRSF DEVICE_PING spec; total len 4
+//        (type + dest + orig + crc — same as RX ping)
+// RX forwards to TX over OTA, TX replies with src=0xEE DEVICE_INFO, RX
+// proxies back out FC UART. Listen for `<addr> <len> 0x29 ... <orig=0xEE>`.
+Result crsfPingTxModule(const Config &cfg, uint32_t timeout_ms, ElrsDeviceInfo *out) {
+    if (!cfg.uart || !out) return FLASH_ERR_INVALID_INPUT;
+    memset(out, 0, sizeof(*out));
+
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(512);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin, cfg.invert_uart);
+    delay(20);
+    while (s_uart->available()) s_uart->read();
+
+    // Build PING with dest=0xEE (handset/TX module), orig=0xC8 (FC).
+    // telemetry.cpp:273 only forwards over OTA when orig==FC, so 0xC8 is
+    // mandatory here. CRSF sync byte at [0] uses 0xC8 (FC) for consistency.
+    auto sendPing = [&]() {
+        uint8_t ping[6] = {0xC8, 0x04, 0x28, 0xEE, 0xC8, 0x00};
+        ping[5] = crsfCrc8(ping + 2, 3);
+        while (s_uart->available()) s_uart->read();
+        s_uart->write(ping, 6);
+        s_uart->flush();
+    };
+    sendPing();
+
+    // Radio round-trip is slow (~50-100 ms over 50 Hz link); allow longer
+    // timeout than direct RX ping. Re-send halfway through if no reply.
+    uint8_t buf[256];
+    size_t got = 0;
+    uint32_t deadline = millis() + timeout_ms;
+    uint32_t half = millis() + timeout_ms / 2;
+    bool resent = false;
+    while (millis() < deadline && got < sizeof(buf)) {
+        while (s_uart->available() && got < sizeof(buf)) buf[got++] = s_uart->read();
+        if (!resent && got < 4 && millis() >= half) { sendPing(); resent = true; }
+        delay(2);
+    }
+    s_uart->end();
+
+    // Find DEVICE_INFO with orig=0xEE (TX module).
+    int found = -1;
+    for (size_t i = 0; i + 5 < got; i++) {
+        uint8_t len = buf[i + 1];
+        if (buf[i + 2] == 0x29 && len >= 12 && i + 2 + len <= got &&
+            buf[i + 4] == 0xEE) {  // orig (src) is TX module
+            found = (int)i;
+            break;
+        }
+    }
+    if (found < 0) return FLASH_ERR_READ_FAILED;
+
+    uint8_t plen = buf[found + 1];
+    const uint8_t *body = buf + found + 3;
+    int body_len = plen - 2;
+    int name_start = 2;
+    int name_end = name_start;
+    while (name_end < body_len && body[name_end] != 0) name_end++;
+    int nlen = name_end - name_start;
+    if (nlen > (int)sizeof(out->name) - 1) nlen = sizeof(out->name) - 1;
+    memcpy(out->name, body + name_start, nlen);
+    out->name[nlen] = 0;
+    int after = name_end + 1;
+    if (after + 14 > body_len) return FLASH_ERR_READ_FAILED;
+    auto be32 = [](const uint8_t *p) {
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    };
+    out->serial_no = be32(body + after);
+    out->hw_id     = be32(body + after + 4);
+    out->sw_version = be32(body + after + 8);
+    out->field_count       = body[after + 12];
+    out->parameter_version = body[after + 13];
+    out->ok = true;
+    return FLASH_OK;
+}
+
+// MSP CRC8: XOR of size + function + payload bytes.
+static inline uint8_t mspCrc8(uint8_t size, uint8_t function, const uint8_t *data, uint8_t data_len) {
+    uint8_t crc = 0;
+    crc ^= size;
+    crc ^= function;
+    for (uint8_t i = 0; i < data_len; i++) crc ^= data[i];
+    return crc;
+}
+
+// MSP-over-CRSF helper. Wraps an MSP request in a CRSF MSP_WRITE (0x7C)
+// frame. Format: <sync=0xC8> <len> <0x7C> <dest=0xEC> <orig=0xEA>
+//                 <msp_status=0x10> <msp_size> <msp_func> <msp_data...>
+//                 <msp_crc> <crsf_crc>
+// msp_status bit 4 = "start of MSP frame", bits 0-3 = chunk seq (0).
+static Result sendMspOverCrsf(const Config &cfg, uint8_t function,
+                               const uint8_t *data, uint8_t data_len) {
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(256);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin, cfg.invert_uart);
+    delay(20);
+
+    // Total frame length: sync(1) + len(1) + type(1) + dest(1) + orig(1) +
+    //                     status(1) + size(1) + func(1) + data + msp_crc(1) + crsf_crc(1)
+    uint8_t buf[64];
+    if (8 + data_len + 2 > sizeof(buf)) { s_uart->end(); return FLASH_ERR_INVALID_INPUT; }
+    buf[0] = 0xC8;                         // sync (FC address)
+    buf[1] = 0x07 + data_len;              // len: type + dest + orig + status + size + func + data + msp_crc + crsf_crc - 2 = 7 + data_len
+    buf[2] = 0x7C;                         // CRSF type: MSP_WRITE
+    buf[3] = 0xEC;                         // ext dest: receiver
+    buf[4] = 0xEA;                         // ext orig: handset (we impersonate)
+    buf[5] = 0x10;                         // MSP status: start-of-frame, seq 0
+    buf[6] = data_len;                     // MSP payload size
+    buf[7] = function;                     // MSP function code
+    for (uint8_t i = 0; i < data_len; i++) buf[8 + i] = data[i];
+    buf[8 + data_len] = mspCrc8(data_len, function, data, data_len);
+    // CRSF CRC over [type, dest, orig, status, size, func, data..., msp_crc]
+    buf[9 + data_len] = crsfCrc8(buf + 2, 7 + data_len);
+
+    s_uart->write(buf, 10 + data_len);
+    s_uart->flush();
+    delay(50);
+    s_uart->end();
+    return FLASH_OK;
+}
+
+// MSP_ELRS_SET_RX_WIFI_MODE = 0x0E, no payload.
+Result sendMspWifiMode(const Config &cfg) {
+    return sendMspOverCrsf(cfg, 0x0E, nullptr, 0);
+}
+
+// CRSF COMMAND m,m,<id> — sets active model-match. Frame type 0x32, payload
+// 'm' 'm' <id>. Format: <0xEC> <0x05> <0x32> 'm' 'm' <id> <crc>.
+Result sendCrsfModelMatch(const Config &cfg, uint8_t modelId) {
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(128);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin, cfg.invert_uart);
+    delay(20);
+    uint8_t frame[7] = {0xEC, 0x05, 0x32, 'm', 'm', modelId, 0x00};
+    frame[6] = crsfCrc8(frame + 2, 4);
+    s_uart->write(frame, sizeof(frame));
+    s_uart->flush();
+    delay(50);
+    s_uart->end();
+    return FLASH_OK;
+}
+
+// Build + send a standard CRSF telemetry frame from FC-side. Sync 0xC8 (FC
+// address) tells the RX "this is from the FC, forward over radio uplink."
+// payload is the type-specific telemetry struct in big-endian.
+static Result sendCrsfTelemetryFrame(const Config &cfg, uint8_t type,
+                                      const uint8_t *payload, uint8_t payload_len) {
+    if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
+    s_uart = cfg.uart;
+    s_uart->setRxBufferSize(128);
+    s_uart->begin(cfg.baud_rate, SERIAL_8N1, cfg.rx_pin, cfg.tx_pin, cfg.invert_uart);
+    delay(20);
+    uint8_t buf[64];
+    if (4 + payload_len > (int)sizeof(buf)) { s_uart->end(); return FLASH_ERR_INVALID_INPUT; }
+    buf[0] = 0xC8;                  // sync
+    buf[1] = payload_len + 2;       // len = type + payload + crc - sync - len
+    buf[2] = type;
+    for (uint8_t i = 0; i < payload_len; i++) buf[3 + i] = payload[i];
+    buf[3 + payload_len] = crsfCrc8(buf + 2, payload_len + 1);
+    s_uart->write(buf, 4 + payload_len);
+    s_uart->flush();
+    delay(20);
+    s_uart->end();
+    return FLASH_OK;
+}
+
+// CRSF_FRAMETYPE_BATTERY_SENSOR (0x08) — voltage, current, fuel, pct
+Result sendBatteryTelemetry(const Config &cfg, uint16_t voltage_mV,
+                             uint16_t current_mA, uint32_t consumed_mAh,
+                             uint8_t pct) {
+    // payload (BE): voltage*0.1V (u16) | current*0.1A (u16) | fuel mAh (u24) | pct (u8) = 8 bytes
+    uint16_t v = voltage_mV / 100;  // 100 mV → 0.1 V units? CRSF: 0.1 V/lsb so divide mV by 100
+    uint16_t c = current_mA / 100;
+    uint32_t f = consumed_mAh & 0xFFFFFF;
+    uint8_t payload[8] = {
+        (uint8_t)(v >> 8), (uint8_t)v,
+        (uint8_t)(c >> 8), (uint8_t)c,
+        (uint8_t)(f >> 16), (uint8_t)(f >> 8), (uint8_t)f,
+        pct
+    };
+    return sendCrsfTelemetryFrame(cfg, 0x08, payload, sizeof(payload));
+}
+
+// CRSF_FRAMETYPE_GPS (0x02) — lat e7, lon e7, gnd_speed*0.01 km/h, heading*0.01 deg, alt+1000 m, sats
+Result sendGpsTelemetry(const Config &cfg, int32_t lat_e7, int32_t lon_e7,
+                         uint16_t gnd_speed_e2, uint16_t heading_e2,
+                         uint16_t alt_m, uint8_t sats) {
+    uint8_t p[15] = {
+        (uint8_t)(lat_e7 >> 24), (uint8_t)(lat_e7 >> 16), (uint8_t)(lat_e7 >> 8), (uint8_t)lat_e7,
+        (uint8_t)(lon_e7 >> 24), (uint8_t)(lon_e7 >> 16), (uint8_t)(lon_e7 >> 8), (uint8_t)lon_e7,
+        (uint8_t)(gnd_speed_e2 >> 8), (uint8_t)gnd_speed_e2,
+        (uint8_t)(heading_e2 >> 8), (uint8_t)heading_e2,
+        (uint8_t)((alt_m + 1000) >> 8), (uint8_t)(alt_m + 1000),
+        sats
+    };
+    return sendCrsfTelemetryFrame(cfg, 0x02, p, sizeof(p));
+}
+
+// CRSF_FRAMETYPE_ATTITUDE (0x1E) — pitch, roll, yaw in radians × 1e4
+Result sendAttitudeTelemetry(const Config &cfg, int16_t pitch_e4,
+                              int16_t roll_e4, int16_t yaw_e4) {
+    uint8_t p[6] = {
+        (uint8_t)(pitch_e4 >> 8), (uint8_t)pitch_e4,
+        (uint8_t)(roll_e4 >> 8), (uint8_t)roll_e4,
+        (uint8_t)(yaw_e4 >> 8), (uint8_t)yaw_e4
+    };
+    return sendCrsfTelemetryFrame(cfg, 0x1E, p, sizeof(p));
+}
+
 // CRSF "enter binding" — EC 04 32 62 64 <crc> at cfg.baud_rate.
 Result sendCrsfBind(const Config &cfg) {
     if (!cfg.uart) return FLASH_ERR_INVALID_INPUT;
