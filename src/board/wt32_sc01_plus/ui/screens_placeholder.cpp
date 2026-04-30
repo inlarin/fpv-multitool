@@ -46,12 +46,7 @@ namespace screens {
 
 // buildSniff moved to screen_sniff.cpp.
 
-void buildCatalog(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "Catalog",
-        "ELRS firmware presets on SD.\nVendor / chip / version "
-        "list -> one-tap flash -- Phase 3 (the big one).");
-}
+// buildCatalog moved to screen_catalog.cpp.
 
 // buildSettings moved out of the placeholder file -- see screen_settings.cpp.
 
