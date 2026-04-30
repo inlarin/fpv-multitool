@@ -36,12 +36,7 @@ void buildPlaceholder(lv_obj_t *tab, const char *title, const char *body) {
 
 namespace screens {
 
-void buildServo(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "Servo",
-        "PWM servo tester.\nBig pulse-us slider, sweep mode, "
-        "endpoint markers -- Phase 2.");
-}
+// buildServo moved to screen_servo.cpp.
 
 void buildMotor(lv_obj_t *tab) {
     buildPlaceholder(tab,
