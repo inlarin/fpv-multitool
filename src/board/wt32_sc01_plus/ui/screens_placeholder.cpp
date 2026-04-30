@@ -52,12 +52,7 @@ void buildBattery(lv_obj_t *tab) {
         "DF editor, MAC catalog -- Phase 2.");
 }
 
-void buildElrs(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "ELRS RX",
-        "Receiver tools.\nLink monitor (RSSI / LQ / SNR / channels), "
-        "bind, parameter edit, in-place patch -- Phase 2.");
-}
+// buildElrs moved to screen_elrs.cpp.
 
 void buildSniff(lv_obj_t *tab) {
     buildPlaceholder(tab,
