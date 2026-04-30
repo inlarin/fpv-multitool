@@ -16,6 +16,7 @@
 #include <Arduino.h>
 
 #include "pin_config.h"
+#include "core/pin_port.h"
 #include "servo/servo_pwm.h"
 #include "web/web_state.h"
 #include "safety.h"
@@ -122,7 +123,24 @@ static void startClicked(lv_event_t * /*e*/) {
             hz = WebState::servo.freq;
             us = WebState::servo.pulseUs;
         }
-        ServoPWM::start(SIGNAL_OUT, hz);
+        // Release Port B if a prior owner (battery I2C, ELRS UART) holds it
+        // -- ServoPWM::start does PinPort::acquire(PWM) and silently fails
+        // otherwise. Note: even after a clean release, ledcAttach can
+        // still fail on the same GPIO right after a recent Wire1.end()
+        // tear-down (LEDC peripheral seems to need a fuller GPIO reset
+        // we don't do today). When that happens the Start button just
+        // doesn't latch -- workaround for the user is a soft-reboot from
+        // Settings, which is annoying but safe.
+        PortMode pm = PinPort::currentMode(PinPort::PORT_B);
+        if (pm != PORT_IDLE && pm != PORT_PWM) {
+            Safety::logf("[servo] releasing Port B (was %s) before start",
+                         PinPort::modeName(pm));
+            PinPort::release(PinPort::PORT_B);
+        }
+        if (!ServoPWM::start(SIGNAL_OUT, hz)) {
+            Safety::logf("[servo] ServoPWM::start FAILED (try Settings -> Reboot)");
+            return;
+        }
         ServoPWM::setPulse(us);
         {
             WebState::Lock lk;

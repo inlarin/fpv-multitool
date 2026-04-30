@@ -1,5 +1,6 @@
 #include "servo_pwm.h"
 #include "core/pin_port.h"
+#include <driver/gpio.h>
 
 static const int PWM_RES = 16;
 static uint8_t s_pin = 0;
@@ -22,6 +23,10 @@ bool ServoPWM::start(uint8_t pin, int freq) {
     }
     s_pin = pin;
     s_freq = freq;
+    // Full GPIO matrix reset -- without this, ledcAttach silently fails
+    // when the pin was just torn down from a Wire1 (I2C) session, even
+    // after pinMode(INPUT). Symptom: ledcAttach returns 0, no PWM output.
+    gpio_reset_pin((gpio_num_t)pin);
     if (!ledcAttach(pin, freq, PWM_RES)) {
         PinPort::release(PinPort::PORT_B);
         return false;
