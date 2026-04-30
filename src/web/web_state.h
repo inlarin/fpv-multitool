@@ -15,9 +15,23 @@ void initMutex();
 
 // RAII guard. Mutex is recursive — nested Lock from the same task is
 // safe. Pair with xSemaphoreTakeRecursive/GiveRecursive.
+//
+// Bounded wait (2 s) instead of portMAX_DELAY: AsyncTCP task is
+// subscribed to the FreeRTOS task watchdog (default 5 s in this
+// project's safety net), and an indefinite wait here would take it
+// down silently when loopTask is genuinely stuck. 2 s is generous --
+// the heaviest hold (executeFlash setup) is well under that. If we
+// still time out, log loudly + abort() so the panic handler captures
+// a core dump and the rollback safety net cleans up on next boot,
+// rather than a TWDT trip that wedges the whole device.
 class Lock {
 public:
-    Lock()  { xSemaphoreTakeRecursive(mutex, portMAX_DELAY); }
+    Lock() {
+        if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
+            Serial.println(F("[WebState::Lock] timeout waiting 2s -- abort()"));
+            abort();   // safety net (boot counter + rollback) takes over
+        }
+    }
     ~Lock() { xSemaphoreGiveRecursive(mutex); }
 };
 

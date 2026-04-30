@@ -47,6 +47,18 @@ public:
     // before begin().
     static BoardDisplay& display();
 
+    // LVGL lock for cross-task access. loopTask takes it around
+    // lv_timer_handler; AsyncTCP-task code (web routes that touch any
+    // lv_* API like screenshot) MUST take it before calling LVGL.
+    // Recursive so callers nested under the same task are safe.
+    //
+    // lvLock returns false if the wait timed out (500 ms). Callers from
+    // AsyncTCP task SHOULD check the return and bail with a 503 instead
+    // of barging on -- otherwise they'd race loopTask. Always pair a
+    // successful lvLock with one lvUnlock.
+    static bool lvLock();
+    static void lvUnlock();
+
 private:
     BoardDisplay *_display = nullptr;
 };

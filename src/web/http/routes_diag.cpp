@@ -179,6 +179,16 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
     // (RGB888) + ~50 bytes for the BMP headers. We allocate from PSRAM
     // (~2 MB free on this board) so heap stays available.
     s_server->on("/api/sys/screenshot.bmp", HTTP_GET, [](AsyncWebServerRequest *req) {
+        // Cross-task LVGL access. AsyncWebServer runs us on the AsyncTCP
+        // task; loopTask is concurrently running lv_timer_handler. Grab
+        // BoardApp::lvLock to block timer ticks during the snapshot, or
+        // bail with 503 if we can't get it within 500 ms.
+        if (!BoardApp::lvLock()) {
+            req->send(503, "text/plain", "LVGL busy (couldn't grab lock in 500ms)");
+            return;
+        }
+        struct LockGuard { ~LockGuard() { BoardApp::lvUnlock(); } } _lock_guard;
+
         lv_obj_t *scr = lv_screen_active();
         if (!scr) { req->send(503, "text/plain", "no LVGL screen"); return; }
 
