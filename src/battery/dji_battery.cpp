@@ -98,19 +98,38 @@ static const int UNSEAL_KEYS_COUNT = sizeof(UNSEAL_KEYS) / sizeof(UNSEAL_KEYS[0]
 // =====================================================================
 // Init / probing
 // =====================================================================
-void DJIBattery::init() {
-    // Try to acquire Port B in I2C mode. If busy with another mode
-    // (UART/PWM/GPIO), skip init — battery tab will show "not connected"
-    // until user switches to I2C via System → Port B Mode.
-    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "battery")) {
-        Serial.println("[DJIBattery] Port B busy, skipping I2C init");
-        return;
+//
+// Lazy init pattern (2026-04-30): historically `init()` was called at
+// boot from main_*.cpp, which unconditionally grabbed Port B in I2C
+// mode and quietly broke the Servo / Motor screens (they need PWM and
+// silently failed PinPort::acquire). Now boot only inits if the user
+// preselected I2C as their preferred Port B mode in NVS; otherwise
+// every public DJIBattery API calls `tryEnsureInit()` which is safe
+// to call from any thread / any port state.
+
+static bool s_initialized = false;
+
+static bool tryEnsureInit() {
+    PortMode cur = PinPort::currentMode(PinPort::PORT_B);
+    if (cur == PORT_I2C && s_initialized) return true;   // already good
+    if (cur != PORT_IDLE && cur != PORT_I2C) {
+        // Port held in UART/PWM/GPIO -- can't read I2C without disturbing
+        // whoever is using it (servo, ELRS, etc). Caller will see
+        // !connected and surface that to the user.
+        s_initialized = false;
+        return false;
     }
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "battery")) return false;
     SMBus::init(PinPort::sda_pin(PinPort::PORT_B),
                 PinPort::scl_pin(PinPort::PORT_B));
+    s_initialized = true;
+    return true;
 }
 
+void DJIBattery::init() { tryEnsureInit(); }
+
 bool DJIBattery::isConnected() {
+    if (!tryEnsureInit()) return false;
     return SMBus::devicePresent(BATT_ADDR);
 }
 

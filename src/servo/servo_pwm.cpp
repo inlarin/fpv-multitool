@@ -1,8 +1,18 @@
 #include "servo_pwm.h"
 #include "core/pin_port.h"
+#include "safety.h"
 #include <driver/gpio.h>
 
-static const int PWM_RES = 16;
+// 16-bit at 50 Hz worked on the Waveshare board but ledcAttach returns
+// false on the SC01 Plus -- LovyanGFX already holds LEDC channel 7
+// (timer 3) for the LCD backlight, and Arduino-ESP32 v3's auto-channel
+// allocator gets confused enough that the attach silently fails.
+//
+// 14-bit gives 16384 steps over a 20 ms period = ~1.2 us per step, way
+// finer than the ~5 us we actually care about for hobby servos, and
+// it's small enough that the LEDC timer divider lands cleanly without
+// fighting LovyanGFX's timer 3 reservation.
+static const int PWM_RES = 14;
 static uint8_t s_pin = 0;
 static int s_freq = 50;
 static int s_pulseUs = 1500;
@@ -24,13 +34,19 @@ bool ServoPWM::start(uint8_t pin, int freq) {
     s_pin = pin;
     s_freq = freq;
     // Full GPIO matrix reset -- without this, ledcAttach silently fails
-    // when the pin was just torn down from a Wire1 (I2C) session, even
-    // after pinMode(INPUT). Symptom: ledcAttach returns 0, no PWM output.
+    // when the pin was just torn down from a Wire1 (I2C) session.
     gpio_reset_pin((gpio_num_t)pin);
+    pinMode(pin, OUTPUT);          // explicit OUTPUT before ledcAttach
+                                    // (some Arduino-ESP32 v3 builds need
+                                    // this; harmless when not needed)
     if (!ledcAttach(pin, freq, PWM_RES)) {
+        Safety::logf("[ServoPWM] ledcAttach(pin=%d freq=%d res=%d) FAILED",
+                     pin, freq, PWM_RES);
         PinPort::release(PinPort::PORT_B);
         return false;
     }
+    Safety::logf("[ServoPWM] ledcAttach OK pin=%d freq=%d res=%d",
+                 pin, freq, PWM_RES);
     s_active = true;
     applyPulse();
     return true;

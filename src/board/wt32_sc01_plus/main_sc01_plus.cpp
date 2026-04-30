@@ -98,10 +98,14 @@ void setup() {
     // ---- WiFi + WebServer (same routes as Waveshare) ----
     autoStartWifi();
 
-    // ---- Battery / SMBus subsystems (Port B in I2C mode by default) ----
-    DJIBattery::init();
-    AutelBattery::init();
-    SMBusBridge::begin();
+    // ---- Battery / SMBus subsystems ----
+    // No more unconditional Port B grab here. DJIBattery / AutelBattery
+    // self-init on first read (lazy pattern), so the boot sequence
+    // leaves Port B in whatever mode PinPort::applyAtBoot picked from
+    // NVS preferred mode -- specifically NOT I2C unless the user chose
+    // it in Settings. This keeps Servo/Motor screens working out of the
+    // box on a fresh board where preferred mode is IDLE.
+    SMBusBridge::begin();   // bridge mode setup; doesn't acquire Port B
 
     // ---- SD_MMC mount (catalog firmware library + future logging) ----
     // Done at boot so the LVGL Catalog screen never has to call

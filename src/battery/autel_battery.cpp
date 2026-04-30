@@ -73,21 +73,31 @@ static const UnsealAttempt KEYS_LEGACY[] = {
 static const int KEYS_LEGACY_COUNT = sizeof(KEYS_LEGACY) / sizeof(KEYS_LEGACY[0]);
 
 // =====================================================================
-// Init
+// Init -- lazy (2026-04-30): boot no longer grabs Port B in I2C, so the
+// first call to any public API self-initialises if Port B is free or
+// already in I2C. See DJIBattery::init for the full rationale.
 // =====================================================================
-void AutelBattery::init() {
-    // Share Wire1/Port B with DJIBattery — both use same 0x0B address.
-    // PinPort::acquire returns true if already acquired by us or free.
-    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "autel_battery")) {
-        Serial.println("[AutelBattery] Port B busy, skipping");
-        return;
+
+static bool s_autel_initialized = false;
+
+static bool tryEnsureInitAutel() {
+    PortMode cur = PinPort::currentMode(PinPort::PORT_B);
+    if (cur == PORT_I2C && s_autel_initialized) return true;
+    if (cur != PORT_IDLE && cur != PORT_I2C) {
+        s_autel_initialized = false;
+        return false;
     }
-    // SMBus::init is idempotent if already inited — safe to call again.
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "autel_battery")) return false;
     SMBus::init(PinPort::sda_pin(PinPort::PORT_B),
                 PinPort::scl_pin(PinPort::PORT_B));
+    s_autel_initialized = true;
+    return true;
 }
 
+void AutelBattery::init() { tryEnsureInitAutel(); }
+
 bool AutelBattery::isConnected() {
+    if (!tryEnsureInitAutel()) return false;
     return SMBus::devicePresent(BATT_ADDR);
 }
 
