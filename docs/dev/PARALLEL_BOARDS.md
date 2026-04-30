@@ -64,6 +64,17 @@ src/
   │     ui_index.html.h etc.   WAVESHARE web UI assets (data/ → header)
   │
   ├── board/
+  │     ├── wsh_s3_lcd_147b/   WAVESHARE ESP32-S3-LCD-1.47B-ONLY.
+  │     │     main.cpp                  boot
+  │     │     display.cpp / .h          Arduino_GFX ST7789 facade
+  │     │     button.cpp / .h           BOOT-button polling
+  │     │     status_led.cpp / .h       WS2812 RGB LED helper
+  │     │     usb2ttl.cpp / .h          local USB serial bridge
+  │     │     ui/menu.cpp               top-level button-driven menu
+  │     │     ui/{servo,motor,crsf}_tester.cpp  feature screens
+  │     │     ui/{battery,smbus_bridge}_ui.cpp  battery screens
+  │     │     ui/wifi_app.cpp           on-LCD WiFi setup flow
+  │     │
   │     └── wt32_sc01_plus/    SC01-PLUS-ONLY.
   │           main_sc01_plus.cpp     boot
   │           board_display.cpp      LovyanGFX + FT6336 facade
@@ -72,25 +83,15 @@ src/
   │           safeboot.cpp           recovery firmware (factory partition)
   │           *_sanity.cpp           Sprint 32 bring-up sketches
   │
-  ├── ui/                      WAVESHARE-ONLY. Local 172×320 screens.
-  │     button.cpp / status_led.cpp / display.cpp / menu.cpp
-  │
-  ├── fpv/                     WAVESHARE-ONLY (so far). ESC telem decoder.
-  │
-  └── main.cpp                 WAVESHARE-ONLY boot.
+  └── fpv/                     SHARED. ESC telemetry decoder
+                               (consumed by web routes_telemetry).
 ```
 
-**Asymmetry to be aware of (current state, 2026-04-30):**
-
-* Waveshare top-level code (`main.cpp`, `ui/`, `*_tester.cpp`,
-  `*_ui.cpp`, `web/wifi_app.cpp`) lives at `src/` root, NOT under
-  `src/board/waveshare/`. Historical, predates the SC01 Plus port.
-* SC01 Plus opts in via `+<*>` then explicitly excludes Waveshare files
-  in its `build_src_filter`. Every new Waveshare-only file must be
-  added to that exclusion list, OR the SC01 Plus build breaks.
-* **Migration goal (not urgent):** move Waveshare-specific code to
-  `src/board/waveshare/` and flip both envs to opt-IN. Leave for a
-  dedicated session once nothing's mid-flight.
+**Symmetry achieved 2026-05-01 (commit `24253ae`).** Both boards live
+under `src/board/<codename>/`. Adding a new Waveshare-only file only
+requires putting it under `src/board/wsh_s3_lcd_147b/` — no
+`build_src_filter` edits needed, the SC01 Plus env's single
+`-<board/wsh_s3_lcd_147b/>` exclude covers everything inside.
 
 ---
 
@@ -167,13 +168,14 @@ servo, motor, CRSF, RCSniffer), web routes, or the safety net.
 
 ### 4.3 Adding a Waveshare-only feature
 
-1. Source under `src/ui/`, `src/<feature>/<feature>_tester.cpp`, or a
-   new `src/<area>/`.
-2. **Add the file to `[env:wt32_sc01_plus]`'s `build_src_filter`
-   exclusion list** in `platformio.ini`. Otherwise the SC01 Plus build
-   pulls it in and either fails to compile (touches Arduino_GFX or RGB
-   LED) or breaks at link time.
-3. Build both envs.
+1. Source goes under `src/board/wsh_s3_lcd_147b/`:
+   * Hardware abstractions (display, button, status_led, usb2ttl) at
+     the board root.
+   * Screens / UI flows under `src/board/wsh_s3_lcd_147b/ui/`.
+2. The SC01 Plus env's single `-<board/wsh_s3_lcd_147b/>` exclude
+   already covers any new file you drop in there — no
+   `build_src_filter` edits needed.
+3. Build both envs to confirm.
 
 ### 4.4 Modifying shared code
 
