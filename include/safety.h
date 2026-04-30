@@ -31,6 +31,7 @@
 // main app can adopt the same pattern in a follow-up commit.
 
 #include <stdint.h>
+#include <stddef.h>
 
 namespace Safety {
 
@@ -77,6 +78,13 @@ void tickBeacon(const char *url, uint32_t interval_ms);
 // status code (or negative for transport failure). Used by CLI / web
 // "beacon now" actions.
 int beaconSendNow(const char *url);
+
+// In-memory diagnostic ring -- 4 KB buffer of recent Serial-style log
+// lines, surfaced via /api/sys/log. Lets us inspect what the firmware
+// said off-board when the COM-port path is flaky (Windows USB-CDC
+// reattach quirks). Call from any TU; thread-safe via internal mutex.
+void   logf(const char *fmt, ...);
+size_t logCopy(char *out, size_t cap);   // copies up to `cap` bytes, returns N copied
 
 // Read-only accessors for /api/health and similar endpoints.
 const char* otaStateStr();        // "VALID", "PENDING_VERIFY", etc.

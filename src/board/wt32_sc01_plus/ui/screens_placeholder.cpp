@@ -78,11 +78,6 @@ void buildCatalog(lv_obj_t *tab) {
         "list -> one-tap flash -- Phase 3 (the big one).");
 }
 
-void buildSettings(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "Settings",
-        "WiFi config, display rotation, touch recalibrate, "
-        "USB descriptor mode, brightness -- Phase 4.");
-}
+// buildSettings moved out of the placeholder file -- see screen_settings.cpp.
 
 } // namespace screens

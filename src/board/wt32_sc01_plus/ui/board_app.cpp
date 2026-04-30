@@ -12,6 +12,7 @@
 
 #include "ui/board_app.h"
 #include "board_display.h"
+#include "safety.h"
 
 #include <Arduino.h>
 #include <lvgl.h>
@@ -66,53 +67,59 @@ bool BoardApp::injectTap(int16_t x, int16_t y) {
     // Need 2 free slots (PRESS + RELEASE).
     if (synthCount() + 2 >= SYNTH_CAP) return false;
     uint32_t now = millis();
+    Safety::logf("[indev] queueing tap @ (%d,%d)", x, y);
+    // Press for 200 ms -- generous so LVGL's indev_read sees the
+    // PRESSED state across multiple polls (typical period 30 ms) before
+    // the RELEASE. Earlier 60 ms was sometimes too short to fire
+    // click events on buttons that needed a couple of confirming polls.
     s_synth[s_synth_tail] = { x, y, true,  now };
     s_synth_tail = (s_synth_tail + 1) % SYNTH_CAP;
-    s_synth[s_synth_tail] = { x, y, false, now + 60 };
+    s_synth[s_synth_tail] = { x, y, false, now + 500 };
     s_synth_tail = (s_synth_tail + 1) % SYNTH_CAP;
     return true;
 }
 
-// Sticky state -- once a synthetic PRESSED event is delivered, keep
-// reporting "still pressed at the same point" to LVGL until the matching
-// RELEASE event time arrives. Without this, a synthetic press could be
-// "interrupted" by a real-touch poll that returns RELEASED, breaking
-// the click sequence.
+// Sticky state -- the most recently delivered synthetic event keeps
+// being reported until the next event in the queue is due. Critical:
+// dequeue at most ONE event per indev_read call, so LVGL definitely
+// sees the PRESSED frame before the RELEASED frame even if both are
+// already past their `when_ms`. If we drained both in one shot, only
+// RELEASED would land and the click would never fire.
 static bool     s_synth_active = false;
+static bool     s_synth_pressed = false;
 static int16_t  s_synth_x = 0, s_synth_y = 0;
-static uint32_t s_synth_release_at = 0;
 
 static void lv_indev_read_cb(lv_indev_t * /*indev*/, lv_indev_data_t *data) {
     uint32_t now = millis();
 
-    // Drain any synthetic events whose `when_ms` has come due. Process
-    // them in order; the latest determines current state.
-    while (synthCount() > 0 && s_synth[s_synth_head].when_ms <= now) {
+    // At most one event per call. Whichever we just popped becomes the
+    // sticky state, returned until the next event is due.
+    if (synthCount() > 0 && s_synth[s_synth_head].when_ms <= now) {
         SynthEvt &e = s_synth[s_synth_head];
-        if (e.pressed) {
-            s_synth_active     = true;
-            s_synth_x          = e.x;
-            s_synth_y          = e.y;
-            s_synth_release_at = 0;
-        } else {
-            s_synth_release_at = e.when_ms;
-        }
         s_synth_head = (s_synth_head + 1) % SYNTH_CAP;
+        s_synth_active  = true;
+        s_synth_pressed = e.pressed;
+        s_synth_x       = e.x;
+        s_synth_y       = e.y;
     }
 
-    // While the synthetic press is active, override real touch.
     if (s_synth_active) {
-        if (s_synth_release_at != 0 && now >= s_synth_release_at) {
-            // Deliver RELEASE once, then clear the active flag.
-            data->state   = LV_INDEV_STATE_RELEASED;
-            data->point.x = s_synth_x;
-            data->point.y = s_synth_y;
-            s_synth_active = false;
-            return;
-        }
-        data->state   = LV_INDEV_STATE_PRESSED;
+        data->state   = s_synth_pressed ? LV_INDEV_STATE_PRESSED
+                                        : LV_INDEV_STATE_RELEASED;
         data->point.x = s_synth_x;
         data->point.y = s_synth_y;
+        // Diagnostic: log every transition so we can confirm LVGL saw
+        // both PRESSED and RELEASED frames at the right coords.
+        static bool last_pressed = false;
+        if (s_synth_pressed != last_pressed) {
+            Safety::logf("[indev] synth %s @ (%d,%d)",
+                         s_synth_pressed ? "PRESS" : "RELEASE",
+                         s_synth_x, s_synth_y);
+            last_pressed = s_synth_pressed;
+        }
+        // Hand control back to real touch ONE poll after a release event:
+        // mark inactive now so the very next call falls through to FT6336.
+        if (!s_synth_pressed) s_synth_active = false;
         return;
     }
 
@@ -276,6 +283,10 @@ void BoardApp::clearBusy() {
     s_busy_progress = -1;
 }
 
+BoardDisplay& BoardApp::display() {
+    return *s_display;
+}
+
 // ---- Springboard navigation -------------------------------------------------
 //
 // Home screen is a 2x4 grid of section tiles. Tap a tile -> the content
@@ -309,6 +320,7 @@ static void showSection(int idx);
 
 static void homeTileClicked(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    Safety::logf("[ui] tile clicked idx=%d (%s)", idx, SECTIONS[idx].label);
     showSection(idx);
 }
 
@@ -319,23 +331,30 @@ static void backClicked(lv_event_t * /*e*/) {
 static void showHome() {
     lv_obj_clean(s_content_area);
     lv_obj_set_layout(s_content_area, LV_LAYOUT_NONE);
+    // Vertical scroll fallback so even pathological grid sizes (e.g.
+    // user rotated landscape on a build that hasn't adapted) stay
+    // navigable -- finger-scroll to find Settings.
+    lv_obj_set_scroll_dir(s_content_area, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_content_area, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(s_content_area, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Explicit positioning -- LVGL flex_wrap was dropping every tile into
-    // a single row regardless of the wrap setting (likely due to width
-    // computation after lv_obj_remove_style_all). Manual math is rock
-    // solid and makes the geometry trivial to reason about.
-    //
-    // Content area is 320 wide x (480 - status bar) tall.
-    constexpr int CONTENT_W = 320;
-    constexpr int CONTENT_H = 480 - STATUS_BAR_H;
-    constexpr int PAD       = 12;
-    constexpr int GAP       = 12;
-    constexpr int TILE_W    = (CONTENT_W - 2 * PAD - GAP) / 2;        // 142
-    constexpr int TILE_H    = (CONTENT_H - 2 * PAD - 3 * GAP) / 4;    // 97
+    // Adapt grid columns to current screen orientation. Read dims from
+    // the display singleton (NOT from s_content_area -- LVGL hasn't
+    // run a layout pass yet so its computed width/height are still 0).
+    // In landscape (W>H) we go 4 cols x 2 rows; portrait stays 2 cols x 4.
+    const int W = BoardApp::display().width();
+    const int H = BoardApp::display().height() - STATUS_BAR_H;
+    const int COLS = (W > H) ? 4 : 2;
+    const int ROWS = (NUM_SECTIONS + COLS - 1) / COLS;
+
+    constexpr int PAD = 12;
+    constexpr int GAP = 12;
+    const int TILE_W = (W - 2 * PAD - (COLS - 1) * GAP) / COLS;
+    const int TILE_H = (H - 2 * PAD - (ROWS - 1) * GAP) / ROWS;
 
     for (int i = 0; i < NUM_SECTIONS; i++) {
-        int col = i % 2;
-        int row = i / 2;
+        int col = i % COLS;
+        int row = i / COLS;
         int x   = PAD + col * (TILE_W + GAP);
         int y   = PAD + row * (TILE_H + GAP);
 

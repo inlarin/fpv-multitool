@@ -42,6 +42,11 @@ public:
     // feedback loop). Returns false if the queue is full.
     static bool injectTap(int16_t x, int16_t y);
 
+    // Borrow the display singleton -- screen builders need it for
+    // setRotation / setBrightness / etc. Undefined behavior if called
+    // before begin().
+    static BoardDisplay& display();
+
 private:
     BoardDisplay *_display = nullptr;
 };

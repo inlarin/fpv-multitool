@@ -7,6 +7,8 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace Safety {
 
@@ -201,6 +203,59 @@ void tickBeacon(const char *url, uint32_t interval_ms) {
 
 int beaconSendNow(const char *url) {
     return doBeaconPost(url);
+}
+
+// ---- In-memory diagnostic ring ----------------------------------------------
+//
+// Simple 4 KB ring -- stamped with millis() per line. Mostly a stand-in
+// for `pio device monitor` when the Windows USB-CDC port reattaches in
+// strange ways and we lose serial output.
+
+static constexpr size_t LOG_CAP = 4096;
+static char     s_log_buf[LOG_CAP];
+static size_t   s_log_head = 0;        // next byte to write
+static size_t   s_log_used = 0;        // valid bytes in buf (<= LOG_CAP)
+static SemaphoreHandle_t s_log_mtx = nullptr;
+
+static void logEnsureMtx() {
+    if (!s_log_mtx) s_log_mtx = xSemaphoreCreateMutex();
+}
+
+void logf(const char *fmt, ...) {
+    logEnsureMtx();
+    char line[128];
+    int prefix = snprintf(line, sizeof(line), "[%u] ", (unsigned)millis());
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line + prefix, sizeof(line) - prefix, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    size_t total = (size_t)(prefix + n);
+    if (total >= sizeof(line)) total = sizeof(line) - 1;
+    if (total < sizeof(line) - 1) line[total++] = '\n';
+
+    Serial.write((const uint8_t *)line, total);   // mirror to Serial too
+
+    if (xSemaphoreTake(s_log_mtx, pdMS_TO_TICKS(20)) != pdTRUE) return;
+    for (size_t i = 0; i < total; i++) {
+        s_log_buf[s_log_head] = line[i];
+        s_log_head = (s_log_head + 1) % LOG_CAP;
+        if (s_log_used < LOG_CAP) s_log_used++;
+    }
+    xSemaphoreGive(s_log_mtx);
+}
+
+size_t logCopy(char *out, size_t cap) {
+    logEnsureMtx();
+    if (xSemaphoreTake(s_log_mtx, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    size_t n = (s_log_used < cap) ? s_log_used : cap;
+    // Walk back from head by n bytes (oldest to newest).
+    size_t start = (s_log_head + LOG_CAP - n) % LOG_CAP;
+    for (size_t i = 0; i < n; i++) {
+        out[i] = s_log_buf[(start + i) % LOG_CAP];
+    }
+    xSemaphoreGive(s_log_mtx);
+    return n;
 }
 
 // ---- Network watchdog -------------------------------------------------------

@@ -152,6 +152,15 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
     // POST /api/sys/coredump/erase -- clear the coredump partition so
     // the next /api/sys/coredump returns 404 until a fresh crash. Use
     // after you've pulled the dump for analysis.
+    // GET /api/sys/log -- dump the in-memory diagnostic ring (4 KB).
+    // Stand-in for `pio device monitor` when COM-port behavior is flaky.
+    s_server->on("/api/sys/log", HTTP_GET, [](AsyncWebServerRequest *req) {
+        static char buf[4200];
+        size_t n = Safety::logCopy(buf, sizeof(buf) - 1);
+        buf[n] = 0;
+        req->send(200, "text/plain", buf);
+    });
+
     s_server->on("/api/sys/coredump/erase", HTTP_POST, [](AsyncWebServerRequest *req) {
         esp_err_t err = esp_core_dump_image_erase();
         if (err == ESP_OK) {
@@ -175,71 +184,69 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
 
         const uint32_t W = lv_obj_get_width(scr);
         const uint32_t H = lv_obj_get_height(scr);
-        const uint32_t row_bytes_unpadded = W * 3;
-        const uint32_t pad_bytes          = (4 - (row_bytes_unpadded & 3)) & 3;
-        const uint32_t row_bytes          = row_bytes_unpadded + pad_bytes;
-        const uint32_t pixel_bytes        = row_bytes * H;
+        // 16-bit RGB565 BMP: 2 bytes/pixel. For W = 320 or 480, row size
+        // (W*2) is already 4-byte aligned, no padding needed. We pick
+        // RGB565 over RGB888 to halve PSRAM peak (307 KB vs 460 KB) so
+        // screenshots still work when an LVGL modal/keyboard is open and
+        // the heap is fragmented.
+        const uint32_t row_bytes   = W * 2;
+        const uint32_t pixel_bytes = row_bytes * H;
 
-        // Take snapshot into a PSRAM buffer we own. lv_snapshot_take()
-        // (no _to_buf) goes through LVGL's allocator which is capped at
-        // LV_MEM_SIZE (48 KB) -- way too small for a 460 KB RGB888 frame.
-        // lv_snapshot_take_to_buf bypasses that.
-        const uint32_t snap_size = W * H * 3;
-        uint8_t *snap = (uint8_t *)heap_caps_malloc(snap_size,
-                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!snap) {
-            req->send(503, "text/plain", "PSRAM alloc (snapshot) failed");
-            return;
-        }
-        lv_image_dsc_t dsc;
-        lv_result_t res = lv_snapshot_take_to_buf(
-            scr, LV_COLOR_FORMAT_RGB888, &dsc, snap, snap_size);
-        if (res != LV_RESULT_OK) {
-            heap_caps_free(snap);
-            req->send(500, "text/plain", "lv_snapshot_take_to_buf failed");
-            return;
-        }
-
-        // Allocate the BMP output buffer in PSRAM and assemble in-place.
-        const uint32_t header_size = 14 + 40;
+        // 16-bit RGB565 BMP via BI_BITFIELDS compression. Single PSRAM
+        // allocation (snapshot writes directly into the BMP buffer at
+        // header_size offset). Header layout:
+        //   14B file header
+        //   40B DIB header (BITMAPINFOHEADER) with biCompression=BI_BITFIELDS=3
+        //   12B color masks (R=0xF800, G=0x07E0, B=0x001F = RGB565)
+        // = 66 byte header.
+        const uint32_t header_size = 14 + 40 + 12;
         const uint32_t total_size  = header_size + pixel_bytes;
         uint8_t *bmp = (uint8_t *)heap_caps_malloc(total_size,
                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!bmp) {
-            heap_caps_free(snap);
             req->send(503, "text/plain", "PSRAM alloc (bmp) failed");
             return;
         }
 
-        // BMPv3 file header (14 bytes) + DIB header (BITMAPINFOHEADER, 40 bytes).
         memset(bmp, 0, header_size);
         bmp[0] = 'B'; bmp[1] = 'M';
         *(uint32_t *)(bmp + 2)  = total_size;
-        *(uint32_t *)(bmp + 10) = header_size;          // pixel data offset
+        *(uint32_t *)(bmp + 10) = header_size;
         *(uint32_t *)(bmp + 14) = 40;                    // DIB header size
         *(int32_t  *)(bmp + 18) = (int32_t)W;
         *(int32_t  *)(bmp + 22) = (int32_t)H;            // positive = bottom-up
         *(uint16_t *)(bmp + 26) = 1;                     // planes
-        *(uint16_t *)(bmp + 28) = 24;                    // bits/pixel
-        *(uint32_t *)(bmp + 30) = 0;                     // BI_RGB (no compression)
+        *(uint16_t *)(bmp + 28) = 16;                    // bits/pixel
+        *(uint32_t *)(bmp + 30) = 3;                     // BI_BITFIELDS
         *(uint32_t *)(bmp + 34) = pixel_bytes;
         *(int32_t  *)(bmp + 38) = 2835;                  // 72 dpi x
         *(int32_t  *)(bmp + 42) = 2835;                  // 72 dpi y
+        *(uint32_t *)(bmp + 54) = 0xF800;                // R mask
+        *(uint32_t *)(bmp + 58) = 0x07E0;                // G mask
+        *(uint32_t *)(bmp + 62) = 0x001F;                // B mask
 
-        // LVGL's "LV_COLOR_FORMAT_RGB888" actually stores bytes as
-        // B-G-R in memory (verified empirically: 0x2E86AB hex went
-        // through BMP-spec R/B-swap and came out yellow instead of teal).
-        // BMP also expects B-G-R per pixel, so we just copy bytes raw
-        // and only flip the row order (BMP is bottom-up; snapshot is
-        // top-down). Each row padded to 4-byte boundary.
-        for (uint32_t y = 0; y < H; y++) {
-            uint8_t *dst_row = bmp + header_size + (H - 1 - y) * row_bytes;
-            const uint8_t *src_row = snap + y * W * 3;
-            memcpy(dst_row, src_row, W * 3);
-            // pad bytes already zeroed by memset
+        // Snapshot directly into the BMP pixel area as RGB565.
+        lv_image_dsc_t dsc;
+        lv_result_t res = lv_snapshot_take_to_buf(
+            scr, LV_COLOR_FORMAT_RGB565, &dsc,
+            bmp + header_size, pixel_bytes);
+        if (res != LV_RESULT_OK) {
+            heap_caps_free(bmp);
+            req->send(500, "text/plain", "lv_snapshot_take_to_buf failed");
+            return;
         }
 
-        heap_caps_free(snap);
+        // In-place row reverse (BMP is bottom-up; snapshot is top-down).
+        // Stack temp = one row = max 480*2 = 960 bytes.
+        uint8_t *pix = bmp + header_size;
+        uint8_t row_tmp[960];
+        for (uint32_t i = 0; i < H / 2; i++) {
+            uint8_t *a = pix + i * row_bytes;
+            uint8_t *b = pix + (H - 1 - i) * row_bytes;
+            memcpy(row_tmp, a, row_bytes);
+            memcpy(a, b, row_bytes);
+            memcpy(b, row_tmp, row_bytes);
+        }
 
         // Stream chunked from the assembled BMP buffer; free the buffer
         // after the response handler is done. Captured by-value into a
@@ -259,6 +266,35 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
         resp->addHeader("Content-Disposition",
                         "inline; filename=\"sc01_screenshot.bmp\"");
         req->send(resp);
+    });
+
+    // POST /api/sys/rotation?val=N -- emergency rotation reset.
+    // If the user accidentally rotated into landscape and the home grid
+    // hasn't been adapted yet, the Settings tile may scroll off-screen
+    // and there's no way back from the touch UI. This endpoint sets
+    // rotation in NVS directly + reboots; on next boot BoardDisplay
+    // applies the new rotation.
+    s_server->on("/api/sys/rotation", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("val")) {
+            req->send(400, "text/plain", "missing val=N (0..3)");
+            return;
+        }
+        int v = req->getParam("val")->value().toInt();
+        if (v < 0 || v > 3) {
+            req->send(400, "text/plain", "val must be 0..3");
+            return;
+        }
+        BoardSettings::setRotation((uint8_t)v);
+        AsyncWebServerResponse *resp = req->beginResponse(
+            200, "text/plain",
+            String("rotation set to ") + v + ", rebooting...");
+        resp->addHeader("Connection", "close");
+        req->send(resp);
+        xTaskCreate([](void*) {
+            WiFi.disconnect(true, false);
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            esp_restart();
+        }, "rotReset", 2048, nullptr, 1, nullptr);
     });
 
     // POST /api/sys/ui/tap?x=NN&y=NN -- synthesize a tap at (x,y).
