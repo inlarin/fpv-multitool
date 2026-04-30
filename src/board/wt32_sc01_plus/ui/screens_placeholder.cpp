@@ -38,12 +38,7 @@ namespace screens {
 
 // buildServo moved to screen_servo.cpp.
 
-void buildMotor(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "Motor",
-        "DShot ESC + telemetry.\nArm/Disarm, throttle slider, "
-        "live RPM/temp/current chart -- Phase 2.");
-}
+// buildMotor moved to screen_motor.cpp.
 
 // buildBattery moved to screen_battery.cpp.
 
