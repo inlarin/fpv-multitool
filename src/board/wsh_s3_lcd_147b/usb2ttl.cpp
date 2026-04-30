@@ -1,9 +1,9 @@
-#include "usb2ttl.h"
+﻿#include "usb2ttl.h"
 #include <Arduino.h>
 #include "pin_config.h"
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/status_led.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
 #include "wdt.h"
 #include "core/pin_port.h"
 
@@ -259,7 +259,7 @@ static void redrawPage() {
 // === Main entry ===
 void runUSB2TTL() {
     if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "usb2ttl_app")) {
-        // Port busy — show brief message, then exit back to menu.
+        // Port busy â€” show brief message, then exit back to menu.
         auto *g = Display::gfx();
         g->fillScreen(RGB565_BLACK);
         g->setTextSize(1);
@@ -323,7 +323,7 @@ void runUSB2TTL() {
                            PinPort::tx_pin(PinPort::PORT_B));
                 uart.setRxBufferSize(4096);
 
-                // Enter flash mode: pull BOOT low (skipped if no BOOT pin —
+                // Enter flash mode: pull BOOT low (skipped if no BOOT pin â€”
                 // user holds the receiver's own BOOT button while powering on).
                 if (ELRS_BOOT >= 0) {
                     digitalWrite(ELRS_BOOT, LOW);

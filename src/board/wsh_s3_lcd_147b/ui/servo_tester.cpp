@@ -1,9 +1,9 @@
-#include "servo_tester.h"
+﻿#include "servo_tester.h"
 #include <Arduino.h>
 #include "pin_config.h"
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/status_led.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
 #include "wdt.h"
 
 // === Servo config ===
@@ -233,7 +233,7 @@ static bool selectMode() {
                     pwmUpdate();
                     break;
                 } else if (sel == ITEM_STEP) {
-                    // Cycle: 1 → 5 → 10 → 50 → 100 → 1
+                    // Cycle: 1 â†’ 5 â†’ 10 â†’ 50 â†’ 100 â†’ 1
                     if (s_stepSize < 5) s_stepSize = 5;
                     else if (s_stepSize < 10) s_stepSize = 10;
                     else if (s_stepSize < 50) s_stepSize = 50;
@@ -270,7 +270,7 @@ void runServoTester() {
         if (evt == BTN_LONG_PRESS) {
             pwmStop();
             if (!selectMode()) {
-                // User chose "<< Menu" — exit to main menu
+                // User chose "<< Menu" â€” exit to main menu
                 pinMode(SERVO_PIN, INPUT);
                 return;
             }

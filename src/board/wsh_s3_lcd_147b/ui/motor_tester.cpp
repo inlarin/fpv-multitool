@@ -1,10 +1,10 @@
-#include "motor_tester.h"
+﻿#include "motor_tester.h"
 #include <Arduino.h>
 #include "pin_config.h"
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/status_led.h"
-#include "dshot.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
+#include "motor/dshot.h"
 #include "wdt.h"
 #include "web/web_state.h"
 
@@ -50,7 +50,7 @@ static void drawStateBar() {
         state = "ARMED (LOCKED)";
     } else if (s_armed && !s_safetyLock) {
         bg = RGB565_DARKGREEN;    // live = dark green
-        state = "LIVE — motor may spin";
+        state = "LIVE â€” motor may spin";
     }
     g->fillRect(0, 0, LCD_WIDTH, 22, bg);
     g->setTextSize(1);
@@ -342,7 +342,7 @@ static bool runSetup() {
                         break;
                     }
                     case SI_STEP:
-                        // Cycle: 10 → 20 → 50 → 100 → 200 → 10
+                        // Cycle: 10 â†’ 20 â†’ 50 â†’ 100 â†’ 200 â†’ 10
                         if (s_throttleStep < 20) s_throttleStep = 20;
                         else if (s_throttleStep < 50) s_throttleStep = 50;
                         else if (s_throttleStep < 100) s_throttleStep = 100;
@@ -350,7 +350,7 @@ static bool runSetup() {
                         else s_throttleStep = 10;
                         break;
                     case SI_MAX_THROTTLE:
-                        // Cycle: 500 → 1000 → 1500 → 2000 → 500
+                        // Cycle: 500 â†’ 1000 â†’ 1500 â†’ 2000 â†’ 500
                         if (s_maxThrottle < 1000) s_maxThrottle = 1000;
                         else if (s_maxThrottle < 1500) s_maxThrottle = 1500;
                         else if (s_maxThrottle < 2000) s_maxThrottle = 2000;
@@ -399,13 +399,13 @@ void runMotorTester() {
         ButtonEvent evt = Button::poll();
 
         if (!s_armed) {
-            // Not armed — long press opens setup
+            // Not armed â€” long press opens setup
             if (evt == BTN_LONG_PRESS) {
                 if (!runSetup()) return; // exit to menu
                 drawControl();
             }
         } else if (s_safetyLock) {
-            // Armed but locked — click to unlock, DblClk to disarm
+            // Armed but locked â€” click to unlock, DblClk to disarm
             if (evt == BTN_CLICK) {
                 s_safetyLock = false;
                 drawControl();
@@ -426,7 +426,7 @@ void runMotorTester() {
                 drawControl();
             }
         } else {
-            // Armed + unlocked (LIVE) — throttle control
+            // Armed + unlocked (LIVE) â€” throttle control
             if (evt == BTN_CLICK) {
                 s_throttle = min((int)s_throttle + s_throttleStep, (int)s_maxThrottle);
                 updateThrottleDisplay();
@@ -449,7 +449,7 @@ void runMotorTester() {
         }
 
         // Send DShot frame continuously (~500Hz)
-        // Map: UI 0=disarm, UI 1-2000 → DShot 48-2047
+        // Map: UI 0=disarm, UI 1-2000 â†’ DShot 48-2047
         if (s_armed && (micros() - lastSend > 2000)) {
             uint16_t dsVal = (s_throttle == 0) ? 0 : constrain(s_throttle + 47, 48, 2047);
             DShot::sendThrottle(dsVal);

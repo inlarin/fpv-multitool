@@ -1,12 +1,12 @@
-#include "wifi_app.h"
+﻿#include "wifi_app.h"
 #include <Arduino.h>
 #include <qrcode.h>
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/status_led.h"
-#include "wifi_manager.h"
-#include "web_server.h"
-#include "web_state.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
+#include "web/wifi_manager.h"
+#include "web/web_server.h"
+#include "web/web_state.h"
 #include "battery/dji_battery.h"
 #include "motor/dshot.h"
 #include "motor/motor_dispatch.h"
@@ -21,8 +21,8 @@ static void drawQR(int x, int y, const char *text, int scale = 4) {
     auto *g = Display::gfx();
 
     // QR version 4 (33x33) with ECC_LOW fits ~78 alphanumeric or ~62 chars
-    // WiFi QR "WIFI:T:WPA;S:FPV-MultiTool;P:fpv12345;;" = 40 chars → fits v3 (29x29) or v4 (33x33)
-    // URL "http://192.168.4.1" = 18 chars → fits v2 (25x25)
+    // WiFi QR "WIFI:T:WPA;S:FPV-MultiTool;P:fpv12345;;" = 40 chars â†’ fits v3 (29x29) or v4 (33x33)
+    // URL "http://192.168.4.1" = 18 chars â†’ fits v2 (25x25)
     QRCode qr;
     uint8_t qrData[qrcode_getBufferSize(4)];
     qrcode_initText(&qr, qrData, 4, ECC_LOW, text);
@@ -91,7 +91,7 @@ static void drawStatus() {
     // For AP: WiFi QR auto-joins network when scanned
     // For STA: URL QR opens browser directly
     int qrScale = 4;
-    int qrSize = 33 * qrScale; // v4 = 33 modules × 4 = 132px
+    int qrSize = 33 * qrScale; // v4 = 33 modules Ã— 4 = 132px
     int qrX = (LCD_WIDTH - qrSize) / 2;
     int qrY = y + 2;
 

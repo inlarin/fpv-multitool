@@ -1,11 +1,11 @@
-#include "battery_ui.h"
+﻿#include "battery_ui.h"
 #include <Arduino.h>
 #include "pin_config.h"
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/status_led.h"
-#include "dji_battery.h"
-#include "smbus.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
+#include "battery/dji_battery.h"
+#include "battery/smbus.h"
 #include "wdt.h"
 
 enum BattPage {

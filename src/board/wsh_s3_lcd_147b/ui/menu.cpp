@@ -1,6 +1,6 @@
 #include "menu.h"
-#include "display.h"
-#include "button.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
 
 static const char* APP_NAMES[] = {
     "USB2TTL",

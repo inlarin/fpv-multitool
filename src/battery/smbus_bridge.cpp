@@ -1,19 +1,12 @@
-#include "smbus_bridge.h"
-#include "smbus_bridge_ui.h"
+#include "smbus_bridge.h"   // also pulls BridgeStats namespace declarations
 #include "smbus.h"
 #include <Wire.h>
 #include "pin_config.h"
 #include "core/pin_port.h"
 
-// Storage for the BridgeStats counters. Declarations live in
-// smbus_bridge_ui.h, but the UI .cpp where they used to be defined is
-// not compiled in board variants without the local-LCD UI (e.g. the
-// SC01 Plus build). Keeping the storage here in the business-logic .cpp
-// keeps it linked regardless of which UI surface is enabled.
-//
-// On Waveshare, smbus_bridge_ui.cpp redefines them as well -- this is
-// why those copies are #ifdef'd out (search smbus_bridge_ui.cpp for
-// "BOARD_WT32_SC01_PLUS").
+// Storage for BridgeStats counters declared in smbus_bridge.h. Defined
+// here in the shared business-logic .cpp so they link on every board
+// regardless of whether the local-LCD stats screen is built.
 namespace BridgeStats {
     volatile uint32_t cmdWrite    = 0;
     volatile uint32_t cmdRead     = 0;

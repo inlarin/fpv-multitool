@@ -30,3 +30,23 @@ namespace SMBusBridge {
     void loop();      // call from main loop
     bool isActive();  // true if bridge mode enabled (first valid packet received)
 }
+
+// Live counters incremented by the bridge as it processes packets.
+// Defined in smbus_bridge.cpp (shared); the Waveshare smbus_bridge_ui.cpp
+// reads these for the on-LCD stats screen.
+//
+// Lives in the shared header (not the Waveshare-only UI header) so that
+// other consumers (web stats endpoint, future SC01 Plus screen) can read
+// them without dragging in a board-specific header.
+namespace BridgeStats {
+    extern volatile uint32_t cmdWrite;
+    extern volatile uint32_t cmdRead;
+    extern volatile uint32_t cmdAddrRead;
+    extern volatile uint32_t cmdPing;
+    extern volatile uint32_t errCrc;
+    extern volatile uint32_t errI2C;
+    extern volatile uint32_t lastSlave;
+    extern volatile uint32_t lastReg;
+    extern volatile uint32_t lastStatus;
+    void reset();
+}

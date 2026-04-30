@@ -1,4 +1,4 @@
-// ESP32-S3 FPV MultiTool
+﻿// ESP32-S3 FPV MultiTool
 // Main entry: menu + app switching
 #include <Arduino.h>
 #include <WiFi.h>
@@ -6,29 +6,29 @@
 #include "pin_config.h"
 #include "safety.h"
 #include "board_settings.h"
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/menu.h"
-#include "ui/status_led.h"
-#include "bridge/usb2ttl.h"
-#include "servo/servo_tester.h"
-#include "motor/motor_tester.h"
-#include "battery/battery_ui.h"
-#include "web/wifi_app.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/ui/menu.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
+#include "board/wsh_s3_lcd_147b/usb2ttl.h"
+#include "board/wsh_s3_lcd_147b/ui/servo_tester.h"
+#include "board/wsh_s3_lcd_147b/ui/motor_tester.h"
+#include "board/wsh_s3_lcd_147b/ui/battery_ui.h"
+#include "board/wsh_s3_lcd_147b/ui/wifi_app.h"
 #include "web/wifi_manager.h"
 #include "web/web_server.h"
 #include "web/web_state.h"
 #include "battery/dji_battery.h"
 #include "battery/autel_battery.h"
 #include "battery/smbus_bridge.h"
-#include "battery/smbus_bridge_ui.h"
+#include "board/wsh_s3_lcd_147b/ui/smbus_bridge_ui.h"
 #include "core/usb_mode.h"
 #include "core/pin_port.h"
 #include "rc_sniffer/rc_sniffer.h"
 #include "usb_emu/cp2112_emu.h"
 #include "motor/dshot.h"
 #include "motor/motor_dispatch.h"
-#include "crsf/crsf_tester.h"
+#include "board/wsh_s3_lcd_147b/ui/crsf_tester.h"
 #include "fpv/esc_telem.h"
 #include "servo/servo_pwm.h"
 
@@ -36,7 +36,7 @@ static AppId currentApp = APP_NONE;
 
 // Try STA from saved creds, otherwise start AP
 static void autoStartWifi() {
-    // Don't write creds to ESP-IDF WiFi NVS namespace on every begin() —
+    // Don't write creds to ESP-IDF WiFi NVS namespace on every begin() â€”
     // we keep them in our own Preferences "wifi" store. Without this, each
     // boot rewrites WiFi NVS and slows reconnect; without persistent=false
     // there's also a benign warning about "saving WiFi config" every boot.
@@ -73,7 +73,7 @@ void setup() {
     // health-beacon settings became universal).
     BoardSettings::begin();
 
-    WebState::initMutex();  // Must be first — protects shared state
+    WebState::initMutex();  // Must be first â€” protects shared state
 
     // Watchdog: 30s max task block, panic+reset on timeout
     esp_task_wdt_config_t wdt_cfg = {
@@ -115,8 +115,8 @@ void loop() {
                        BoardSettings::beaconIntervalMs());
 
     StatusLed::loop();
-    SMBusBridge::loop();    // serial→SMBus proxy for PC-side tools
-    UsbMode::pumpLoop();    // USB2TTL transparent CDC↔UART1 bridge (no-op in other modes)
+    SMBusBridge::loop();    // serialâ†’SMBus proxy for PC-side tools
+    UsbMode::pumpLoop();    // USB2TTL transparent CDCâ†”UART1 bridge (no-op in other modes)
     RCSniffer::loop();      // SBUS/iBus/PPM frame parser (no-op when not running)
     ESCTelem::loop();       // KISS/BLHeli_32 ESC telemetry (no-op when not running)
     ButtonEvent evt = Button::poll();

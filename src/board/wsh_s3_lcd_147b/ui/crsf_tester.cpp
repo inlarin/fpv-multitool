@@ -1,11 +1,11 @@
-#include "crsf_tester.h"
+﻿#include "crsf_tester.h"
 #include <Arduino.h>
 #include "pin_config.h"
-#include "ui/display.h"
-#include "ui/button.h"
-#include "ui/status_led.h"
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
+#include "board/wsh_s3_lcd_147b/status_led.h"
 #include "wdt.h"
-#include "crsf_service.h"
+#include "crsf/crsf_service.h"
 #include "web/web_state.h"
 #include "core/pin_port.h"
 
@@ -29,7 +29,7 @@ static bool s_startedHere = false;  // true if we started CRSFService in this se
 static void ensureRunning() {
     if (CRSFService::isRunning()) return;
     if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "crsf")) {
-        Serial.println("[CRSF] Port B busy — switch to UART in System → Port B Mode");
+        Serial.println("[CRSF] Port B busy â€” switch to UART in System â†’ Port B Mode");
         return;
     }
     bool inv = WebState::crsf.isInverted();
@@ -277,7 +277,7 @@ void runCRSFTester() {
             return;
         }
 
-        // Periodic refresh (5 Hz) — telemetry updates are slow
+        // Periodic refresh (5 Hz) â€” telemetry updates are slow
         if (millis() - lastDraw > 200) {
             const auto &st = CRSFService::state();
             // Full redraw on connection state change (header color flips)

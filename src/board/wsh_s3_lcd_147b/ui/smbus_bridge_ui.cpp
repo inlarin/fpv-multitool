@@ -1,7 +1,7 @@
-#include "smbus_bridge_ui.h"
-#include "smbus_bridge.h"
-#include "ui/display.h"
-#include "ui/button.h"
+﻿#include "smbus_bridge_ui.h"
+#include "battery/smbus_bridge.h"            // SMBusBridge::* + BridgeStats::*
+#include "board/wsh_s3_lcd_147b/display.h"
+#include "board/wsh_s3_lcd_147b/button.h"
 #include <esp_task_wdt.h>
 
 // BridgeStats storage moved to smbus_bridge.cpp -- see comment there.
