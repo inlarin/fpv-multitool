@@ -45,12 +45,7 @@ void buildMotor(lv_obj_t *tab) {
         "live RPM/temp/current chart -- Phase 2.");
 }
 
-void buildBattery(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "Battery",
-        "DJI / Autel / clone batteries.\nQuick read, cycles reset, "
-        "DF editor, MAC catalog -- Phase 2.");
-}
+// buildBattery moved to screen_battery.cpp.
 
 // buildElrs moved to screen_elrs.cpp.
 
