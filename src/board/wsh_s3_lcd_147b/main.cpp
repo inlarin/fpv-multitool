@@ -28,6 +28,7 @@
 #include "board/wsh_s3_lcd_147b/button.h"
 #include "board/wsh_s3_lcd_147b/status_led.h"
 #include "board/wsh_s3_lcd_147b/status_screen.h"
+#include "board/wsh_s3_lcd_147b/imu.h"
 
 #include "web/wifi_manager.h"
 #include "web/web_server.h"
@@ -82,6 +83,12 @@ void setup() {
     Display::init();
     Button::init(BTN_BOOT);
     StatusLed::init();
+
+    // Onboard QMI8658 IMU on Wire0 (SDA=48, SCL=47). We use it only for
+    // accelerometer-based screen auto-rotate; gyro stays disabled.
+    // No hard dependency: status_screen falls back to a fixed rotation
+    // if init() fails.
+    IMU::init();
 
     // Restore user-preferred Port B mode from NVS (IDLE by default).
     PinPort::applyAtBoot();
