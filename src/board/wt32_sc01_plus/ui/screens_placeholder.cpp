@@ -49,12 +49,7 @@ void buildMotor(lv_obj_t *tab) {
 
 // buildElrs moved to screen_elrs.cpp.
 
-void buildSniff(lv_obj_t *tab) {
-    buildPlaceholder(tab,
-        "RC Sniff",
-        "SBUS / iBus / PPM frame sniffer.\n16-channel chart, "
-        "frame rate, CRC errors -- Phase 2.");
-}
+// buildSniff moved to screen_sniff.cpp.
 
 void buildCatalog(lv_obj_t *tab) {
     buildPlaceholder(tab,
