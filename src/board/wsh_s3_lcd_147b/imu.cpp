@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "pin_config.h"
+#include "safety.h"     // Safety::logf -> in-memory log ring (/api/sys/log)
 
 namespace {
 
@@ -45,9 +46,10 @@ bool IMU::init() {
 
     // WHO_AM_I sanity check.
     uint8_t who = 0;
-    if (readBytes(REG_WHO_AM_I, &who, 1) != 1 || who != WHO_AM_I_VAL) {
-        Serial.printf("[IMU] no QMI8658 (WHO_AM_I=0x%02X, expected 0x%02X)\n",
-                      who, WHO_AM_I_VAL);
+    int n = readBytes(REG_WHO_AM_I, &who, 1);
+    if (n != 1 || who != WHO_AM_I_VAL) {
+        Safety::logf("[IMU] WHO_AM_I read failed (got n=%d val=0x%02X, want 0x%02X)",
+                     n, who, WHO_AM_I_VAL);
         s_ready = false;
         return false;
     }
@@ -61,12 +63,12 @@ bool IMU::init() {
     // CTRL7: enable accel only (gyro left off to save power).
     if (!writeReg(REG_CTRL7, 0x01)) goto fail;
 
-    Serial.println("[IMU] QMI8658 ready (accel-only, +-2g, 58Hz)");
+    Safety::logf("[IMU] QMI8658 ready (accel-only, +-2g, 125Hz)");
     s_ready = true;
     return true;
 
 fail:
-    Serial.println("[IMU] config writes failed");
+    Safety::logf("[IMU] config writes failed");
     s_ready = false;
     return false;
 }
@@ -83,9 +85,15 @@ bool IMU::readAccel(int16_t &x, int16_t &y, int16_t &z) {
     return true;
 }
 
+// Last orientation we returned when the gravity vector clearly fell
+// onto the X or Y axis. Used to "freeze" rotation when the board lies
+// flat (Z dominant, no signal in the screen plane) instead of jumping
+// to an arbitrary default.
+static uint8_t s_lastInPlane = 3;
+
 uint8_t IMU::detectOrientation() {
     int16_t x, y, z;
-    if (!readAccel(x, y, z)) return 1;   // default landscape
+    if (!readAccel(x, y, z)) return s_lastInPlane;
 
     // We pick the rotation by which axis carries gravity.
     // Threshold: 0.5g = 8192 LSB at +-2g range.
@@ -93,25 +101,28 @@ uint8_t IMU::detectOrientation() {
 
     int ax = abs(x), ay = abs(y);
 
-    // Empirical axis mapping for Waveshare ESP32-S3-LCD-1.47B:
-    //   USB-C on bottom edge in portrait orientation.
-    //   Board flat on table, screen up: gravity points -Z (z ~ -16384).
-    //   Board upright, USB-C down (portrait normal):  +Y is down  (rot 0).
-    //   Board upright, USB-C up   (portrait flipped):  -Y is down  (rot 2).
-    //   Board on its right side  (USB-C on left, landscape): +X down (rot 1).
-    //   Board on its left side   (USB-C on right):           -X down (rot 3).
+    // Empirical axis mapping calibrated against the Waveshare unit on
+    // user's bench (logged accel on /api/sys/log + visual confirmation
+    // of which orientation reads upright):
     //
-    // If the empirical mapping turns out wrong on a particular unit
-    // (different physical mount, board flipped on housing), tweak the
-    // four returns below -- they're the only board-specific bit.
+    //   USB-C on left, screen reads upright  -> +X down -> rotation 3
+    //   USB-C on right, screen reads upright -> -X down -> rotation 1
+    //   USB-C on bottom, portrait upright    -> -Y down -> rotation 0
+    //   USB-C on top, portrait upside down   -> +Y down -> rotation 2
+    //
+    // If a different physical mount needs different routing, this is
+    // the only function to tweak.
+    uint8_t r;
     if (ay >= T && ay >= ax) {
-        return (y > 0) ? 0 : 2;
+        r = (y > 0) ? 2 : 0;
+    } else if (ax >= T && ax > ay) {
+        r = (x > 0) ? 3 : 1;
+    } else {
+        // Z dominant (board flat, screen up or down) -- stick with the
+        // last in-plane orientation rather than snapping to a default
+        // every time the board is set down.
+        return s_lastInPlane;
     }
-    if (ax >= T && ax > ay) {
-        return (x > 0) ? 1 : 3;
-    }
-
-    // Z dominant (board flat, no gravity in plane): keep last-known
-    // by returning 1 as a benign default.
-    return 1;
+    s_lastInPlane = r;
+    return r;
 }

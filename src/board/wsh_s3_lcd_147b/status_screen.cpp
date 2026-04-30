@@ -17,6 +17,7 @@
 #include "status_screen.h"
 #include "display.h"
 #include "imu.h"
+#include "safety.h"     // Safety::logf -> in-memory log ring (/api/sys/log)
 #include "core/build_info.h"
 #include "core/usb_mode.h"
 #include "core/pin_port.h"
@@ -205,6 +206,9 @@ void StatusScreen::tick() {
     if (!g) return;
 
     // ---- Auto-rotate from IMU ----
+    // Log only on actual rotation changes -- per-tick accel logging
+    // was useful during initial axis-mapping calibration but spams
+    // /api/sys/log otherwise.
     if (IMU::isReady()) {
         uint8_t target = IMU::detectOrientation();
         if (target == s_orient_candidate) {
@@ -215,8 +219,8 @@ void StatusScreen::tick() {
         }
         if (s_orient_stable == STABLE_TICKS &&
             target != Display::rotation()) {
+            Safety::logf("[imu] rotating %u -> %u", Display::rotation(), target);
             Display::setRotation(target);
-            // Force full re-init for the new dimensions.
             int W = g->width();
             int H = g->height();
             layoutFor(W, H);

@@ -33,7 +33,11 @@ static const int BL_RES_BITS = 8;     // 0..255 duty
 
 void Display::init() {
     s_bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
-    // Rotation 1 = 90 deg landscape (320x172).
+    // Rotation 3 = 270 deg landscape (320x172). User feedback: rot=1
+    // came up upside-down with USB-C on the left; rot=3 is right-side
+    // up for that mount, so it's the more useful boot default. IMU
+    // auto-rotate will pick a different rotation if the user holds
+    // the board another way.
     //
     // 172x320 panel inside a 240x320 ST7789 controller -> 34px column
     // margin in portrait. Arduino_TFT.cpp::setRotation() routes the
@@ -46,7 +50,7 @@ void Display::init() {
     // We want xStart=34/yStart=0 in portrait and xStart=0/yStart=34 in
     // landscape, which works out to all four offsets being symmetric:
     // COL_OFFSET1 = COL_OFFSET2 = 34, ROW_OFFSET1 = ROW_OFFSET2 = 0.
-    s_gfx = new Arduino_ST7789(s_bus, LCD_RST, 1, true,
+    s_gfx = new Arduino_ST7789(s_bus, LCD_RST, 3, true,
         LCD_WIDTH, LCD_HEIGHT, LCD_COL_OFFSET, 0, LCD_COL_OFFSET, 0);
 
     s_gfx->begin();
