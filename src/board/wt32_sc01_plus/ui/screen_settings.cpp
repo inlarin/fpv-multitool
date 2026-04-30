@@ -26,6 +26,10 @@
 
 namespace screens {
 
+// Fires when the panel is deleted on Back. Kills only OUR timer +
+// nulls static widget pointers. LVGL internal timers MUST be left alone.
+static void settingsCleanup(lv_event_t *e);
+
 // ---- About section live-refresh -------------------------------------------
 
 static lv_obj_t *s_about_uptime = nullptr;
@@ -378,20 +382,28 @@ static void buildAboutSection(lv_obj_t *parent) {
 
 // ---- Public entry ---------------------------------------------------------
 
+static void settingsCleanup(lv_event_t * /*e*/) {
+    if (s_about_timer) { lv_timer_delete(s_about_timer); s_about_timer = nullptr; }
+    s_about_uptime = s_about_heap = s_about_ip = s_about_ota = nullptr;
+    // WiFi modal widgets if open get deleted with the panel anyway.
+    s_wifi_modal = s_wifi_ta_ssid = s_wifi_ta_pass = nullptr;
+    s_wifi_ssid_lbl = s_wifi_keyboard = nullptr;
+}
+
 void buildSettings(lv_obj_t *panel) {
     lv_obj_set_layout(panel, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(panel, 8, LV_PART_MAIN);
     lv_obj_set_scroll_dir(panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(panel, settingsCleanup, LV_EVENT_DELETE, nullptr);
 
     buildDisplaySection(panel);
     buildWifiSection(panel);
     buildAboutSection(panel);
 
-    // 1 Hz refresh of the live About fields. Cancel any prior timer
-    // (if Settings was opened+closed+opened again, we'd leak otherwise).
-    if (s_about_timer) lv_timer_delete(s_about_timer);
+    // 1 Hz refresh of the live About fields. Prior timer is killed by
+    // settingsCleanup on panel destroy.
     s_about_timer = lv_timer_create(aboutTick, 1000, nullptr);
 }
 

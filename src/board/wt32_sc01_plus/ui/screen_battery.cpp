@@ -83,6 +83,15 @@ static lv_obj_t *makeKvRow(lv_obj_t *parent, const char *key) {
     return v;
 }
 
+// Fires when the panel is deleted on Back. Kills only OUR tick + nulls
+// our static widget pointers. LVGL's internal timers MUST not be touched.
+static void batteryCleanup(lv_event_t * /*e*/) {
+    if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
+    s_state_lbl = s_mfr_lbl = s_dev_lbl = s_cycle_lbl = s_soh_lbl = nullptr;
+    s_volt_lbl = s_curr_lbl = s_temp_lbl = s_soc_lbl = s_cap_lbl = nullptr;
+    for (int i = 0; i < 4; i++) s_cell_lbls[i] = nullptr;
+}
+
 // ---- Live refresh ---------------------------------------------------------
 
 static void clearLabels() {
@@ -224,6 +233,7 @@ void buildBattery(lv_obj_t *panel) {
     lv_obj_set_style_pad_gap(panel, 8, LV_PART_MAIN);
     lv_obj_set_scroll_dir(panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(panel, batteryCleanup, LV_EVENT_DELETE, nullptr);
 
     // DJIBattery::init() acquires Port B as I2C internally and runs
     // SMBus::init on the right pins. It's idempotent: if Port B is already
@@ -239,7 +249,7 @@ void buildBattery(lv_obj_t *panel) {
 
     batteryTick(nullptr);   // populate once immediately
 
-    if (s_tick) lv_timer_delete(s_tick);
+    // Prior tick is killed by batteryCleanup when the panel is destroyed.
     s_tick = lv_timer_create(batteryTick, 500, nullptr);   // 2 Hz
 }
 

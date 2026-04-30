@@ -12,6 +12,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <SD_MMC.h>
 #include <esp_task_wdt.h>
 
 #include "pin_config.h"
@@ -101,6 +102,26 @@ void setup() {
     DJIBattery::init();
     AutelBattery::init();
     SMBusBridge::begin();
+
+    // ---- SD_MMC mount (catalog firmware library + future logging) ----
+    // Done at boot so the LVGL Catalog screen never has to call
+    // SD_MMC.begin() synchronously from a click handler -- begin() can
+    // block hundreds of ms and previously froze the UI when called from
+    // the loopTask. Failure here is non-fatal: catalogue stays empty.
+    {
+        pinMode(SC01P_SD_D3, OUTPUT);
+        digitalWrite(SC01P_SD_D3, HIGH);
+        if (SD_MMC.setPins(SC01P_SD_CLK, SC01P_SD_CMD, SC01P_SD_D0)) {
+            if (SD_MMC.begin("/sdcard", true, false, 4000)) {
+                Serial.printf("[boot] SD_MMC mounted: %llu MB\n",
+                              (unsigned long long)(SD_MMC.cardSize() / (1024 * 1024)));
+            } else {
+                Serial.println("[boot] SD_MMC begin failed (no card?)");
+            }
+        } else {
+            Serial.println("[boot] SD_MMC setPins failed");
+        }
+    }
 
     // ---- USB descriptor mode (CDC / CP2112 / Vendor) from NVS ----
     UsbMode::applyAtBoot();

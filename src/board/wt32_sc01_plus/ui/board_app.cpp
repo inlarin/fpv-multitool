@@ -145,12 +145,16 @@ static uint32_t lv_tick_cb() { return millis(); }
 
 #include <WiFi.h>
 
-static lv_obj_t *s_status_bar    = nullptr;
-static lv_obj_t *s_status_wifi   = nullptr;   // icon + IP
-static lv_obj_t *s_status_uptime = nullptr;
-static lv_obj_t *s_status_heap   = nullptr;
-static lv_obj_t *s_status_busy   = nullptr;   // hidden when not busy
-static lv_obj_t *s_status_busy_lbl = nullptr;
+static lv_obj_t   *s_status_bar    = nullptr;
+static lv_obj_t   *s_status_wifi   = nullptr;   // icon + IP
+static lv_obj_t   *s_status_uptime = nullptr;
+static lv_obj_t   *s_status_heap   = nullptr;
+static lv_obj_t   *s_status_busy   = nullptr;   // hidden when not busy
+static lv_obj_t   *s_status_busy_lbl = nullptr;
+static lv_timer_t *s_status_bar_timer = nullptr;   // tracked so screen
+                                                    // timer culling can
+                                                    // skip it (see
+                                                    // sectionPanelDeleted)
 
 static char     s_busy_text[64]  = {0};
 static int      s_busy_progress  = -1;
@@ -318,14 +322,34 @@ static constexpr int NUM_SECTIONS = sizeof(SECTIONS) / sizeof(SECTIONS[0]);
 static void showHome();
 static void showSection(int idx);
 
-static void homeTileClicked(lv_event_t *e) {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    Safety::logf("[ui] tile clicked idx=%d (%s)", idx, SECTIONS[idx].label);
+// Both transitions defer the actual showHome/showSection to lv_async_call
+// so lv_obj_clean() never fires from inside the click event dispatch.
+// LVGL's recommendation: never delete the object that owns the currently-
+// firing event tree synchronously -- use async to break the recursion.
+//
+// We reuse a pair of static slots for the deferred target so the closure
+// captures cleanly without heap.
+
+static int s_pending_section_idx = -1;
+
+static void doShowSection(void *data) {
+    int idx = (int)(intptr_t)data;
     showSection(idx);
 }
 
-static void backClicked(lv_event_t * /*e*/) {
+static void doShowHome(void * /*unused*/) {
     showHome();
+}
+
+static void homeTileClicked(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    Safety::logf("[ui] tile clicked idx=%d (%s)", idx, SECTIONS[idx].label);
+    s_pending_section_idx = idx;
+    lv_async_call(doShowSection, (void *)(intptr_t)idx);
+}
+
+static void backClicked(lv_event_t * /*e*/) {
+    lv_async_call(doShowHome, nullptr);
 }
 
 static void showHome() {
@@ -428,6 +452,11 @@ static void showSection(int idx) {
     lv_obj_set_style_pad_all(panel, 12, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
 
+    // Builders attach their own LV_EVENT_DELETE handler to clean up
+    // their per-screen lv_timer + static widget pointers when the panel
+    // tears down on Back. Centralised "kill all timers" was tried first
+    // and turned out to nuke LVGL's internal indev/display timers too,
+    // freezing input + render -- always leave LVGL's internals alone.
     SECTIONS[idx].builder(panel);
 }
 
@@ -479,7 +508,9 @@ void BoardApp::begin(BoardDisplay &display) {
 
     // 1 Hz status-bar refresh. lv_timer fires from inside lv_timer_handler()
     // which we already drive from loop(), so no extra task / sync needed.
-    lv_timer_create(statusBarTick, 1000, nullptr);
+    // Tracked so sectionPanelDeleted can avoid clobbering it when reaping
+    // a section's per-screen ticks.
+    s_status_bar_timer = lv_timer_create(statusBarTick, 1000, nullptr);
     refreshStatusBar();   // populate immediately so first frame isn't blank
 }
 

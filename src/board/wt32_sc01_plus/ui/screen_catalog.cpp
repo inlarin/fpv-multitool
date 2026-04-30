@@ -49,21 +49,10 @@ static const char *cardTypeStr(uint8_t t) {
     }
 }
 
-static bool tryMount() {
-    pinMode(SC01P_SD_D3, OUTPUT);
-    digitalWrite(SC01P_SD_D3, HIGH);
-    if (!SD_MMC.setPins(SC01P_SD_CLK, SC01P_SD_CMD, SC01P_SD_D0)) {
-        Safety::logf("[catalog] SD_MMC.setPins failed");
-        return false;
-    }
-    if (!SD_MMC.begin("/sdcard", /*mode_1bit=*/true,
-                      /*format_if_mount_failed=*/false,
-                      /*sdmmc_frequency=*/4000)) {
-        Safety::logf("[catalog] SD_MMC.begin failed");
-        return false;
-    }
-    return true;
-}
+// Mount lives in main_sc01_plus.cpp boot path now -- calling SD_MMC.begin()
+// from an LVGL click handler blocks loopTask for hundreds of ms and
+// previously froze the UI. Catalog screen only READS state, never mounts.
+// If the card was hot-swapped after boot, the user reboots from Settings.
 
 // Pretty-print bytes as KB/MB/GB.
 static void formatBytes(uint64_t b, char *out, size_t n) {
@@ -163,16 +152,14 @@ static lv_obj_t *makeKvRow(lv_obj_t *parent, const char *key) {
 static void refresh() {
     if (!s_state_lbl) return;
 
-    s_mount_ok = (SD_MMC.cardType() != CARD_NONE) || tryMount();
+    s_mount_ok = (SD_MMC.cardType() != CARD_NONE);
 
     if (!s_mount_ok) {
-        lv_label_set_text(s_state_lbl, "no card / mount failed");
+        lv_label_set_text(s_state_lbl, "no card -- insert + reboot");
         lv_obj_set_style_text_color(s_state_lbl, lv_color_hex(0xE6A23C), 0);
         lv_label_set_text(s_type_lbl,    "...");
         lv_label_set_text(s_size_lbl,    "...");
         lv_label_set_text(s_catalog_lbl, "...");
-        // Wipe any prior listing rows so a stale tree doesn't survive an
-        // SD-eject -> tap Refresh cycle.
         if (s_listing) lv_obj_clean(s_listing);
         return;
     }
@@ -208,12 +195,18 @@ static void refreshClicked(lv_event_t * /*e*/) {
 
 // ---- Public entry ---------------------------------------------------------
 
+static void catalogCleanup(lv_event_t * /*e*/) {
+    s_state_lbl = s_type_lbl = s_size_lbl = s_catalog_lbl = nullptr;
+    s_listing = nullptr;
+}
+
 void buildCatalog(lv_obj_t *panel) {
     lv_obj_set_layout(panel, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(panel, 8, LV_PART_MAIN);
     lv_obj_set_scroll_dir(panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(panel, catalogCleanup, LV_EVENT_DELETE, nullptr);
 
     // ---- Status card ----
     lv_obj_t *status = makeCard(panel, "SD Card");

@@ -107,6 +107,15 @@ static lv_obj_t *makeKvRow(lv_obj_t *parent, const char *key) {
     return v;
 }
 
+// Fires when the panel is deleted on Back. Kills only OUR tick + nulls
+// our static widget pointers. LVGL's internal timers MUST not be touched.
+static void motorCleanup(lv_event_t * /*e*/) {
+    if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
+    s_state_lbl = s_speed_lbl = s_throttle_lbl = nullptr;
+    s_hero_lbl = s_slider = nullptr;
+    s_arm_btn = s_arm_lbl = s_beep_btn = nullptr;
+}
+
 // ---- Live refresh ---------------------------------------------------------
 
 static void motorTick(lv_timer_t * /*t*/) {
@@ -208,6 +217,7 @@ void buildMotor(lv_obj_t *panel) {
     lv_obj_set_layout(panel, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(panel, 8, LV_PART_MAIN);
+    lv_obj_add_event_cb(panel, motorCleanup, LV_EVENT_DELETE, nullptr);
 
     // Reset throttle on every entry. Doesn't disarm the ESC -- the user
     // can come back to a still-armed motor at zero throttle.
@@ -266,7 +276,7 @@ void buildMotor(lv_obj_t *panel) {
     lv_obj_add_flag(s_beep_btn, LV_OBJ_FLAG_HIDDEN);
 
     motorTick(nullptr);
-    if (s_tick) lv_timer_delete(s_tick);
+    // Prior tick is killed by motorCleanup when the panel is destroyed.
     s_tick = lv_timer_create(motorTick, 250, nullptr);   // 4 Hz
 }
 

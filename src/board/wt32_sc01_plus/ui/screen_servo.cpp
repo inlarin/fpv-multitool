@@ -151,6 +151,22 @@ static void startClicked(lv_event_t * /*e*/) {
     refreshStartButton();
 }
 
+// Fires when the section panel is destroyed (Back tap). Kills our
+// per-screen tick so it doesn't fire later against widgets that have
+// already been freed by lv_obj_clean. We only touch s_tick -- LVGL's
+// own internal timers (indev_proc, display refresh) MUST be left alone.
+static void servoCleanup(lv_event_t * /*e*/) {
+    if (s_tick) {
+        lv_timer_delete(s_tick);
+        s_tick = nullptr;
+    }
+    s_pulse_lbl  = nullptr;
+    s_slider     = nullptr;
+    s_start_btn  = nullptr;
+    s_start_lbl  = nullptr;
+    s_freq_btns[0] = s_freq_btns[1] = nullptr;
+}
+
 // 4 Hz refresh (live readout follows web-side changes too, e.g. someone
 // moving the slider in the browser at the same time).
 static void servoTick(lv_timer_t * /*t*/) {
@@ -174,6 +190,7 @@ void buildServo(lv_obj_t *panel) {
     lv_obj_set_layout(panel, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_gap(panel, 12, LV_PART_MAIN);
+    lv_obj_add_event_cb(panel, servoCleanup, LV_EVENT_DELETE, nullptr);
 
     // ---- Hero pulse readout ----
     s_pulse_lbl = lv_label_create(panel);
@@ -261,7 +278,7 @@ void buildServo(lv_obj_t *panel) {
     refreshStartButton();
 
     // 4 Hz tick to follow external state changes (web UI moving the slider).
-    if (s_tick) lv_timer_delete(s_tick);
+    // Prior tick is killed by servoCleanup when the panel is destroyed.
     s_tick = lv_timer_create(servoTick, 250, nullptr);
 }
 

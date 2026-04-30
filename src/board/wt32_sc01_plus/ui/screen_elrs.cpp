@@ -132,6 +132,16 @@ static void makeChannelRow(lv_obj_t *parent, int idx) {
     s_ch_vals[idx] = v;
 }
 
+// Fires when the panel is deleted on Back. Kills only OUR tick + nulls
+// our static widget pointers. LVGL's internal timers MUST not be touched.
+static void elrsCleanup(lv_event_t * /*e*/) {
+    if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
+    s_state_lbl = s_rssi_lbl = s_lq_lbl = s_snr_lbl = nullptr;
+    s_frames_lbl = s_rf_lbl = nullptr;
+    s_start_btn = s_start_lbl = s_bind_btn = nullptr;
+    for (int i = 0; i < 8; i++) { s_ch_bars[i] = s_ch_vals[i] = nullptr; }
+}
+
 // ---- Live refresh ---------------------------------------------------------
 
 static void elrsTick(lv_timer_t * /*t*/) {
@@ -302,6 +312,7 @@ void buildElrs(lv_obj_t *panel) {
     lv_obj_set_style_pad_gap(panel, 8, LV_PART_MAIN);
     lv_obj_set_scroll_dir(panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(panel, elrsCleanup, LV_EVENT_DELETE, nullptr);
 
     buildStatusCard(panel);
     buildActionRow(panel);     // before channels so Start/Bind stay above the fold
@@ -309,7 +320,7 @@ void buildElrs(lv_obj_t *panel) {
 
     elrsTick(nullptr);   // populate once immediately
 
-    if (s_tick) lv_timer_delete(s_tick);
+    // Prior tick is killed by elrsCleanup when the panel is destroyed.
     s_tick = lv_timer_create(elrsTick, 250, nullptr);   // 4 Hz
 }
 
