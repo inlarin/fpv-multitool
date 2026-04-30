@@ -15,6 +15,7 @@ const char* platformName(Platform p) {
         case Platform::ESP32C3: return "esp32-c3";
         case Platform::ESP32S3: return "esp32-s3";
         case Platform::ESP32C2: return "esp32-c2";
+        case Platform::ESP8266: return "esp8266/esp8285";
         default:                return "unknown";
     }
 }
@@ -34,25 +35,57 @@ void uidFromBindPhrase(const char* phrase, uint8_t out_uid[6]) {
 }
 
 Platform detectPlatform(const uint8_t* bin, size_t binLen) {
-    if (!bin || binLen < 24) return Platform::Unknown;
+    if (!bin || binLen < 16) return Platform::Unknown;
     if (bin[0] != 0xE9) return Platform::Unknown;
+    // ESP32-family: extended header chip_id at byte 12.
     switch (bin[12]) {
         case 0x00: return Platform::ESP32;
         case 0x02: return Platform::ESP32S2;
         case 0x05: return Platform::ESP32C3;
         case 0x09: return Platform::ESP32S3;
         case 0x0C: return Platform::ESP32C2;
-        default:   return Platform::Unknown;
     }
+    // ESP8266 fallback: no extended header — bytes 8..11 are the load
+    // address of segment 0 (typical IRAM 0x4010xxxx, IROM 0x402xxxxx,
+    // or DRAM 0x3FFExxxx). If it lands in those ranges, it's ESP8266.
+    uint32_t addr = (uint32_t)bin[8]
+                  | ((uint32_t)bin[9]  << 8)
+                  | ((uint32_t)bin[10] << 16)
+                  | ((uint32_t)bin[11] << 24);
+    if ((addr >= 0x40100000 && addr < 0x40300000) ||
+        (addr >= 0x3FFE0000 && addr < 0x40000000)) {
+        return Platform::ESP8266;
+    }
+    return Platform::Unknown;
 }
 
 size_t findFirmwareEnd(const uint8_t* bin, size_t binLen, Platform plat) {
     if (plat == Platform::Unknown) return 0;
-    if (binLen < 24) return 0;
+    if (binLen < 16) return 0;
+
+    if (plat == Platform::ESP8266) {
+        // ELRS ESP8266 distributables are MERGED images: bootloader @ 0x0
+        // (n_segs ~2, app entry 0x4010f480), followed by padding, then the
+        // app image starting at 0x1000 with its own E9 magic. Segment
+        // walking from offset 0 only reaches the end of the bootloader.
+        //
+        // Rather than chase the boot+pad+app dance, rely on the known
+        // ELRS appendix layout: every vanilla artifact ships with a
+        // pre-allocated 2704-byte block at the very tail (product_name
+        // 128 + lua_name 16 + options_json 512 + hardware_json 2048).
+        // We validate by checking that the options_json slot begins with
+        // an ASCII '{' — corrupt or non-ELRS images won't match and we
+        // bail rather than overwrite arbitrary data.
+        const size_t kAppendSize = 128 + 16 + 512 + 2048;
+        if (binLen <= kAppendSize) return 0;
+        size_t fwEnd = binLen - kAppendSize;
+        size_t optionsOff = fwEnd + 128 + 16;
+        if (bin[optionsOff] != '{') return 0;
+        return fwEnd;
+    }
 
     uint8_t segs = bin[1];
     if (segs == 0 || segs > 32) return 0;
-
     size_t pos = 24;  // ESP32-family extended header is 24 bytes
     for (uint8_t i = 0; i < segs; i++) {
         if (pos + 8 > binLen) return 0;
@@ -64,7 +97,7 @@ size_t findFirmwareEnd(const uint8_t* bin, size_t binLen, Platform plat) {
         if (pos > binLen) return 0;
     }
     pos = (pos + 16) & ~(size_t)15;  // 16-byte align
-    pos += 32;                        // SHA256 trailer (always present on ESP32-family)
+    pos += 32;                        // SHA256 trailer (ESP32-family only)
     if (pos > binLen) return 0;
     return pos;
 }

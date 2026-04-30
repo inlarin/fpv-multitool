@@ -13,9 +13,10 @@
 // can be customized for any bind phrase / target without rebuilding.
 namespace FirmwarePatch {
 
-// ESP32-family chip_id from byte 12 of the extended image header. ESP8285
-// has a different image layout (legacy 8-byte header, app starts at flash
-// 0x1000 in the merged image) and is intentionally NOT supported here.
+// ESP32-family chip_id from byte 12 of the extended image header.
+// ESP8266/ESP8285 have a legacy 8-byte image header (no extended header,
+// no SHA256 trailer), detected by-IRAM-load-address-fallback when bin[12]
+// doesn't match a known ESP32 chip_id.
 enum class Platform : uint8_t {
     Unknown = 0,
     ESP32   = 1,   // chip_id 0x00
@@ -23,6 +24,7 @@ enum class Platform : uint8_t {
     ESP32C3 = 3,   // chip_id 0x05 — BAYCK RC C3 Dual
     ESP32S3 = 4,   // chip_id 0x09
     ESP32C2 = 5,   // chip_id 0x0C
+    ESP8266 = 6,   // ESP8266/ESP8285 — legacy 8-byte header, no SHA trailer
 };
 
 const char* platformName(Platform p);

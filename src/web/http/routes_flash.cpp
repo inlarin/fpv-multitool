@@ -247,14 +247,24 @@ void executeFlash() {
     Serial.printf("[Flash] Flashing %u bytes\n", fw_size);
     WebState::flashState.setProgress(0, "Starting");
 
-    // RX state changes during flash (reboot into new firmware) — discard the
-    // resume signal. User restarts CRSF Live monitor manually after flash.
-    (void)crsfPauseForPortB();
-
-    if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
-        WebState::flashState.markFlashFailed("Port B busy — switch to UART");
-        if (decompressed) free(decompressed);
-        return;
+    // Sticky-aware acquire: if /api/elrs/dfu/begin?stub=1 has already
+    // opened a session, reuse it. Critical for ESP8266 — its ROM doesn't
+    // implement READ_FLASH_SLOW (0x0E), so post-write 5/5 sample verify
+    // and SPI_FLASH_MD5 only work via the stub-loaded sticky session.
+    // The flash() helper detects the open session via sessionOpen() and
+    // skips its own begin/sync; we just need to NOT re-acquire Port B.
+    bool sticky_was_open = s_dfu_session_active;
+    if (!sticky_was_open) {
+        // RX state changes during flash (reboot into new firmware) — discard
+        // the resume signal. User restarts CRSF Live monitor manually after.
+        (void)crsfPauseForPortB();
+        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_flash")) {
+            WebState::flashState.markFlashFailed("Port B busy — switch to UART");
+            if (decompressed) free(decompressed);
+            return;
+        }
+    } else {
+        ESPFlasher::touchSession();
     }
 
     ESPFlasher::Config cfg;
@@ -373,7 +383,19 @@ void executeFlash() {
         }
     }
 
-    PinPort::release(PinPort::PORT_B);
+    // Sticky session, if used, is now dead — RX rebooted into the new
+    // image (or, on failure, into whatever bootloader state remains).
+    // Close it explicitly so subsequent dump/diag calls don't try to talk
+    // SLIP into a UART that's now a CRSF stream.
+    if (sticky_was_open) {
+        ESPFlasher::closeSession();
+        s_dfu_session_active = false;
+        PinPort::release(PinPort::PORT_B);
+        crsfResumeAfterPortB(s_dfu_session_crsf_was_run);
+        s_dfu_session_crsf_was_run = false;
+    } else {
+        PinPort::release(PinPort::PORT_B);
+    }
 
     if (decompressed) free(decompressed);
 
@@ -953,7 +975,8 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
         uint8_t          *buf;        // PSRAM
         size_t            size;
         uint32_t          offset;
-    } s_dump = {false, 0, "", "", nullptr, 0, 0};
+        bool              use_sticky; // route via readFlashMultiInOpenSession
+    } s_dump = {false, 0, "", "", nullptr, 0, 0, false};
 
     s_server->on("/api/flash/dump/start", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (s_dump.running) { req->send(409, "text/plain", "already running"); return; }
@@ -963,6 +986,18 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             ? strtoul(req->getParam("size", true)->value().c_str(), nullptr, 0) : 0x400000;
         if (size == 0 || size > 0x800000) {
             req->send(400, "text/plain", "size must be 1..8 MB");
+            return;
+        }
+        // ?use_sticky=1 — read through the already-open /dfu/begin session
+        // (mandatory for ESP8266: ROM doesn't implement READ_FLASH_SLOW 0x0E,
+        // only the post-stub flasher does). Caller MUST have opened a sticky
+        // session first via /api/elrs/dfu/begin?stub=1.
+        bool wantSticky = req->hasParam("use_sticky", true)
+            ? (req->getParam("use_sticky", true)->value().toInt() != 0)
+            : false;
+        if (wantSticky && !s_dfu_session_active) {
+            req->send(409, "text/plain",
+                "use_sticky=1 requires an open /api/elrs/dfu/begin session");
             return;
         }
 
@@ -976,52 +1011,90 @@ void registerRoutesFlash(AsyncWebServer *s_server) {
             req->send(500, "text/plain", "alloc failed — no PSRAM/heap for dump");
             return;
         }
-        // Pause CRSF before acquiring Port B. Long-running async op via xTask:
-        // resume only if acquire fails — once xTask owns the port, lambda
-        // returns and we can't safely resume CRSF until the dump completes.
-        // User restarts CRSF Live monitor manually after dump.
-        bool _crsf = crsfPauseForPortB();
-        // Acquire Port B BEFORE flipping `running` so a failed acquire can't
-        // leave the status endpoint reporting a non-existent dump as live.
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_dump")) {
-            crsfResumeAfterPortB(_crsf);
-            free(s_dump.buf); s_dump.buf = nullptr;
-            s_dump.error = "Port B busy — switch Setup to Receiver";
-            req->send(409, "text/plain", s_dump.error);
-            return;
+        // Sticky path: the sticky session already owns Port B and paused CRSF.
+        // Non-sticky: acquire Port B + pause CRSF for the duration of the task.
+        if (!wantSticky) {
+            // Pause CRSF before acquiring Port B. Long-running async op via xTask:
+            // resume only if acquire fails — once xTask owns the port, lambda
+            // returns and we can't safely resume CRSF until the dump completes.
+            // User restarts CRSF Live monitor manually after dump.
+            bool _crsf = crsfPauseForPortB();
+            // Acquire Port B BEFORE flipping `running` so a failed acquire can't
+            // leave the status endpoint reporting a non-existent dump as live.
+            if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_dump")) {
+                crsfResumeAfterPortB(_crsf);
+                free(s_dump.buf); s_dump.buf = nullptr;
+                s_dump.error = "Port B busy — switch Setup to Receiver";
+                req->send(409, "text/plain", s_dump.error);
+                return;
+            }
         }
-        s_dump.size    = size;
-        s_dump.offset  = offset;
-        s_dump.progress = 0;
-        s_dump.stage   = "Queued";
-        s_dump.error   = "";
-        s_dump.running = true;
+        s_dump.size       = size;
+        s_dump.offset     = offset;
+        s_dump.progress   = 0;
+        s_dump.stage      = "Queued";
+        s_dump.error      = "";
+        s_dump.use_sticky = wantSticky;
+        s_dump.running    = true;
 
         xTaskCreate([](void *) {
-            ESPFlasher::Config cfg;
-            cfg.uart = &Serial1;
-            cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
-            cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
-            cfg.baud_rate = 115200;
-            cfg.progress = [](int pct, const char *stage) {
-                s_dump.progress = pct;
-                s_dump.stage = stage;
-            };
-            ESPFlasher::Result r = ESPFlasher::readFlash(
-                cfg, s_dump.offset, s_dump.size, s_dump.buf);
-            if (r != ESPFlasher::FLASH_OK) {
-                s_dump.error = ESPFlasher::errorString(r);
-                s_dump.stage = "Failed";
+            if (s_dump.use_sticky) {
+                // Stub-backed path: chunked readFlashMultiInOpenSession so the
+                // status endpoint shows progress. CHUNK is wall-clock-bounded:
+                // 32 KB at 115200 baud ≈ 3 s, well under the sticky session's
+                // idle watchdog (and InOpenSession refreshes the timestamp).
+                const size_t CHUNK = 32 * 1024;
+                size_t done = 0;
+                s_dump.stage = "Reading (stub)";
+                ESPFlasher::Result res = ESPFlasher::FLASH_OK;
+                while (done < s_dump.size) {
+                    size_t take = (s_dump.size - done > CHUNK) ? CHUNK : (s_dump.size - done);
+                    ESPFlasher::ReadRegion r = {
+                        s_dump.offset + (uint32_t)done,
+                        (uint32_t)take,
+                        s_dump.buf + done
+                    };
+                    res = ESPFlasher::readFlashMultiInOpenSession(&r, 1);
+                    if (res != ESPFlasher::FLASH_OK) break;
+                    done += take;
+                    s_dump.progress = (int)((int64_t)done * 100 / s_dump.size);
+                }
+                if (res != ESPFlasher::FLASH_OK) {
+                    s_dump.error = ESPFlasher::errorString(res);
+                    s_dump.stage = "Failed";
+                } else {
+                    s_dump.stage = "Done";
+                    s_dump.progress = 100;
+                }
+                // Sticky session keeps owning Port B + CRSF pause.
             } else {
-                s_dump.stage = "Done";
-                s_dump.progress = 100;
+                ESPFlasher::Config cfg;
+                cfg.uart = &Serial1;
+                cfg.tx_pin = PinPort::tx_pin(PinPort::PORT_B);
+                cfg.rx_pin = PinPort::rx_pin(PinPort::PORT_B);
+                cfg.baud_rate = 115200;
+                cfg.progress = [](int pct, const char *stage) {
+                    s_dump.progress = pct;
+                    s_dump.stage = stage;
+                };
+                ESPFlasher::Result r = ESPFlasher::readFlash(
+                    cfg, s_dump.offset, s_dump.size, s_dump.buf);
+                if (r != ESPFlasher::FLASH_OK) {
+                    s_dump.error = ESPFlasher::errorString(r);
+                    s_dump.stage = "Failed";
+                } else {
+                    s_dump.stage = "Done";
+                    s_dump.progress = 100;
+                }
+                PinPort::release(PinPort::PORT_B);
             }
-            PinPort::release(PinPort::PORT_B);
             s_dump.running = false;
             vTaskDelete(nullptr);
         }, "elrs_dump", 6144, nullptr, 1, nullptr);
 
-        req->send(202, "text/plain", "dump started — poll /api/flash/dump/status");
+        req->send(202, "text/plain",
+            wantSticky ? "dump started (sticky+stub) — poll /api/flash/dump/status"
+                       : "dump started — poll /api/flash/dump/status");
     });
 
     s_server->on("/api/flash/dump/status", HTTP_GET, [](AsyncWebServerRequest *req) {

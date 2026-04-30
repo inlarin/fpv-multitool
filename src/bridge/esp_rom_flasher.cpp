@@ -67,6 +67,10 @@ static uint32_t s_session_last_use = 0;
 // SLIP protocol as ROM but without the autobauder fragility — mixed
 // READ_REG / READ_FLASH_SLOW chains work reliably. See loadStub() below.
 static bool     s_session_stub_loaded = false;
+// ESP8266 ROM and ROM-stub take a 16-byte FLASH_BEGIN payload (no
+// `encrypted` flag). ESP32-family takes 20 bytes. Set when loadStub()
+// recognises the magic, cleared in closeSession(). Read by flashBegin().
+static bool     s_session_is_esp8266 = false;
 
 // ---- SLIP send ----
 static void slipStart() { s_uart->write(0xC0); }
@@ -208,16 +212,21 @@ static bool flashBegin(uint32_t size, uint32_t offset) {
     *(uint32_t*)(data + 4)  = num_blocks;
     *(uint32_t*)(data + 8)  = block_size;
     *(uint32_t*)(data + 12) = offset;
-    *(uint32_t*)(data + 16) = 0;   // encrypted = 0 (plaintext flash)
+    *(uint32_t*)(data + 16) = 0;   // encrypted = 0 (plaintext flash) — ESP32 only
 
-    uint32_t ck = cksum(data, 20);
+    // ESP8266 ROM/stub takes 4 fields (16 bytes), ESP32-family takes 5 (20).
+    // The fifth field (`encrypted`) was added with the ESP32 ROM in 2016 and
+    // older ESP8266 stubs reject the longer payload outright with FLASH_BEGIN
+    // failed. Detected via loadStub() magic.
+    size_t payload = s_session_is_esp8266 ? 16 : 20;
+    uint32_t ck = cksum(data, payload);
     // ESP32-C3 ROM erases ~40 KB/s — for 1 MB+ writes the pre-erase can
     // take 30+ seconds. Give it 90s (covers up to ~3.5 MB). Without this,
     // sendCmd() times out at 10s, we assume FLASH_BEGIN succeeded, then
     // subsequent FLASH_DATA writes land in NOT-yet-erased sectors and are
     // silently dropped. Observed symptom: first ~288 KB write OK, rest
     // stays 0xFF.
-    return sendCmd(CMD_FLASH_BEGIN, data, 20, ck, 90000);
+    return sendCmd(CMD_FLASH_BEGIN, data, payload, ck, 90000);
 }
 
 // Write one block of flash data (block_size must match flashBegin)
@@ -225,22 +234,30 @@ static bool flashData(const uint8_t *block_data, size_t block_size, uint32_t seq
     // Header (16 bytes) + data
     static uint8_t packet[16 + FLASH_WRITE_BLOCK_SIZE];
 
-    *(uint32_t*)(packet + 0) = block_size;
+    // For ESP32-family ROM the header `size` field declares the actual
+    // payload length but we historically pad up to FLASH_WRITE_BLOCK_SIZE
+    // and ROM tolerates the mismatch. ESP8266 stub does NOT — like its
+    // MEM_DATA cousin (see loadStub padding fix), it reads exactly `size`
+    // bytes from SLIP. A short final block padded to 4 KB causes the
+    // stub to wait for non-existent bytes and the next FLASH_DATA frame
+    // arrives misaligned → "FLASH_DATA failed" near 100 %. esptool.py
+    // never pads either; do the same on ESP8266.
+    bool pad = !s_session_is_esp8266 && block_size < FLASH_WRITE_BLOCK_SIZE;
+    size_t hdr_size = pad ? FLASH_WRITE_BLOCK_SIZE : block_size;
+
+    *(uint32_t*)(packet + 0) = hdr_size;
     *(uint32_t*)(packet + 4) = seq;
     *(uint32_t*)(packet + 8) = 0;
     *(uint32_t*)(packet + 12) = 0;
     memcpy(packet + 16, block_data, block_size);
-
-    // Pad with 0xFF if block is smaller than FLASH_WRITE_BLOCK_SIZE
-    if (block_size < FLASH_WRITE_BLOCK_SIZE) {
+    if (pad) {
         memset(packet + 16 + block_size, 0xFF, FLASH_WRITE_BLOCK_SIZE - block_size);
     }
 
     // Checksum is over the DATA only (per esptool.py)
-    uint32_t ck = cksum(packet + 16, FLASH_WRITE_BLOCK_SIZE);
+    uint32_t ck = cksum(packet + 16, hdr_size);
 
-    // Send full packet (header + padded data)
-    return sendCmd(CMD_FLASH_DATA, packet, 16 + FLASH_WRITE_BLOCK_SIZE, ck, 3000);
+    return sendCmd(CMD_FLASH_DATA, packet, 16 + hdr_size, ck, 3000);
 }
 
 // Finish flashing and optionally reboot
@@ -289,6 +306,7 @@ void closeSession() {
     // Clearing the flag prevents a future openSession() from assuming stub
     // is still loaded — fresh session must re-upload if it wants stub mode.
     s_session_stub_loaded = false;
+    s_session_is_esp8266 = false;
 }
 
 bool sessionOpen() { return s_session_open; }
@@ -388,10 +406,12 @@ Result loadStub(uint32_t chip_magic) {
             uint32_t off = i * BLOCK;
             uint32_t sz  = (len - off > BLOCK) ? BLOCK : (len - off);
             memcpy_P(blk, src_pgm + off, sz);
-            // ROM expects exactly block_size bytes regardless of actual
-            // payload — pad with 0 if the last block is short.
-            if (sz < BLOCK) memset(blk + sz, 0x00, BLOCK - sz);
-            if (!memData(blk, BLOCK, i)) return false;
+            // Send actual block size — DON'T pad short final block. esptool.py
+            // sends actual size; ESP8266 ROM rejects MEM_DATA with size mismatch
+            // between header and checksum coverage (FLASH_DATA failed at the
+            // ninth block of stub_8266_text where actual=40 B but padded=1024).
+            // ESP32-family ROMs accept either form so this is safe globally.
+            if (!memData(blk, sz, i)) return false;
             s_session_last_use = millis();
         }
         return true;
@@ -417,6 +437,7 @@ Result loadStub(uint32_t chip_magic) {
     spiSetParams(0x400000);
 
     s_session_stub_loaded = true;
+    s_session_is_esp8266 = (chip_magic == 0xfff0c101u);
     s_session_last_use = millis();
     return FLASH_OK;
 }
@@ -835,7 +856,13 @@ Result flash(const Config &cfg, const uint8_t *data, size_t size,
         // internal write queue overflows somewhere beyond ~256 KB and
         // subsequent ACKs become lies. Wire time alone is ~365 ms/block at
         // 115200 baud, so ~30 s of added delay is cheap insurance.
-        delay(100);
+        //
+        // ESP8266 stub does its own commit/ack (the stub waits on the SPI
+        // controller before replying), so the throttle is unnecessary AND
+        // pushes total flash time past the stub's internal watchdog — past
+        // ~60 s without inbound traffic the stub aborts mid-stream and the
+        // last few FLASH_DATA blocks return errors. Skip the delay there.
+        if (!s_session_is_esp8266) delay(100);
         if (cfg.progress) {
             int pct = 10 + (int)((chunk_off + block_size) * 85 / size);
             cfg.progress(pct, "Writing");

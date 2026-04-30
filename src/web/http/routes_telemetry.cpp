@@ -80,9 +80,10 @@ void registerRoutesTelemetry(AsyncWebServer *s_server) {
         if (p == "sbus") proto = RC_PROTO_SBUS;
         else if (p == "ibus") proto = RC_PROTO_IBUS;
         else if (p == "ppm")  proto = RC_PROTO_PPM;
+        else if (p == "crsf") proto = RC_PROTO_CRSF;
         else if (p == "auto") { RCSniffer::autoDetect(); req->send(200, "text/plain",
             String("Auto-detected: ") + RCSniffer::protoName(RCSniffer::state().proto)); return; }
-        else { req->send(400, "text/plain", "proto must be sbus/ibus/ppm/auto"); return; }
+        else { req->send(400, "text/plain", "proto must be sbus/ibus/ppm/crsf/auto"); return; }
         RCSniffer::start(proto);
         req->send(200, "text/plain", String("Started ") + RCSniffer::protoName(proto));
     });

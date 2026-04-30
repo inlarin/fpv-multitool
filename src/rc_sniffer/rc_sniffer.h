@@ -9,6 +9,7 @@ enum RCProto : uint8_t {
     RC_PROTO_SBUS,       // 100000 baud, 8E2, inverted UART, 25-byte frame
     RC_PROTO_IBUS,       // 115200 baud, 8N1, 32-byte frame with checksum
     RC_PROTO_PPM,        // PWM pulse train on single pin, channels encoded as widths
+    RC_PROTO_CRSF,       // 420000 baud, 8N1, ELRS / TBS Crossfire (sync 0xC8, CRC8 0xD5)
 };
 
 struct RCState {

@@ -106,6 +106,97 @@ static void ibusByte(uint8_t ch) {
     }
 }
 
+// ===== CRSF parser =====
+// ELRS / TBS Crossfire on 420000 baud, 8N1, non-inverted. Frame layout:
+//   [sync 0xC8][len][type][payload (len-2 bytes)][crc8]
+// CRC8 polynomial 0xD5, computed over type + payload.
+// We only care about RC_CHANNELS_PACKED (type 0x16, payload 22 bytes,
+// 16 × 11-bit channels in SBUS-compatible packing). Other frames (link
+// stats, telemetry) bump frameCount but don't update channels — that
+// keeps frameRateHz a faithful "any CRSF activity" indicator.
+static const uint8_t CRSF_SYNC_FC      = 0xC8;
+static const uint8_t CRSF_TYPE_RC      = 0x16;
+static const uint8_t CRSF_PAYLOAD_RC   = 22;     // 16 × 11-bit packed
+static uint8_t s_crsfBuf[64];                    // sync + len + (≤62 body)
+static int     s_crsfPos = 0;
+static int     s_crsfExpected = 0;               // total frame size once known
+
+static uint8_t crsfCrc8(const uint8_t *p, int n) {
+    uint8_t c = 0;
+    for (int i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int b = 0; b < 8; b++) c = (c & 0x80) ? (uint8_t)((c << 1) ^ 0xD5) : (uint8_t)(c << 1);
+    }
+    return c;
+}
+
+static bool parseCrsfRcFrame(const uint8_t *body /* type + payload */, int body_len) {
+    if (body_len != 1 + CRSF_PAYLOAD_RC) return true;  // not RC frame, but still a valid CRSF frame
+    if (body[0] != CRSF_TYPE_RC)         return true;
+    const uint8_t *p = body + 1;  // skip type
+    uint16_t raw[16];
+    raw[0]  = ((p[0]    | (p[1]  << 8))                       & 0x07FF);
+    raw[1]  = ((p[1]>>3 | (p[2]  << 5))                       & 0x07FF);
+    raw[2]  = ((p[2]>>6 | (p[3]  << 2) | (p[4]  << 10))       & 0x07FF);
+    raw[3]  = ((p[4]>>1 | (p[5]  << 7))                       & 0x07FF);
+    raw[4]  = ((p[5]>>4 | (p[6]  << 4))                       & 0x07FF);
+    raw[5]  = ((p[6]>>7 | (p[7]  << 1) | (p[8]  << 9))        & 0x07FF);
+    raw[6]  = ((p[8]>>2 | (p[9]  << 6))                       & 0x07FF);
+    raw[7]  = ((p[9]>>5 | (p[10] << 3))                       & 0x07FF);
+    raw[8]  = ((p[11]   | (p[12] << 8))                       & 0x07FF);
+    raw[9]  = ((p[12]>>3| (p[13] << 5))                       & 0x07FF);
+    raw[10] = ((p[13]>>6| (p[14] << 2) | (p[15] << 10))       & 0x07FF);
+    raw[11] = ((p[15]>>1| (p[16] << 7))                       & 0x07FF);
+    raw[12] = ((p[16]>>4| (p[17] << 4))                       & 0x07FF);
+    raw[13] = ((p[17]>>7| (p[18] << 1) | (p[19] << 9))        & 0x07FF);
+    raw[14] = ((p[19]>>2| (p[20] << 6))                       & 0x07FF);
+    raw[15] = ((p[20]>>5| (p[21] << 3))                       & 0x07FF);
+    // Same 11-bit→µs conversion as SBUS — both fit the 172..1811 → 988..2012 mapping.
+    for (int i = 0; i < 16; i++) {
+        long r = (long)raw[i];
+        long us = (r - 172L) * 1024L / 1639L + 988L;
+        if (us < 800)  us = 800;
+        if (us > 2200) us = 2200;
+        s_state.channels[i] = (uint16_t)us;
+    }
+    s_state.channelCount = 16;
+    return true;
+}
+
+static void crsfByte(uint8_t ch) {
+    if (s_crsfPos == 0) {
+        if (ch != CRSF_SYNC_FC) return;
+        s_crsfBuf[0] = ch;
+        s_crsfPos = 1;
+        s_crsfExpected = 0;
+        return;
+    }
+    if (s_crsfPos == 1) {
+        // length field: covers type + payload + crc8 (i.e. body + crc).
+        // Valid range: 2..62 (CRSF max body 60 + crc).
+        if (ch < 2 || ch > 62) { s_crsfPos = 0; return; }
+        s_crsfBuf[1] = ch;
+        s_crsfExpected = 2 + ch;  // sync + len + body+crc
+        s_crsfPos = 2;
+        return;
+    }
+    s_crsfBuf[s_crsfPos++] = ch;
+    if (s_crsfPos < s_crsfExpected) return;
+    // Frame complete. Verify CRC8 over body (type + payload), compare with
+    // last byte (the CRC).
+    int body_len = s_crsfExpected - 3;  // exclude sync, len, crc
+    uint8_t crc_calc = crsfCrc8(&s_crsfBuf[2], body_len);
+    uint8_t crc_recv = s_crsfBuf[s_crsfExpected - 1];
+    if (crc_calc == crc_recv) {
+        parseCrsfRcFrame(&s_crsfBuf[2], body_len);
+        s_state.frameCount++;
+        s_state.lastFrameMs = millis();
+    } else {
+        s_state.crcErrors++;
+    }
+    s_crsfPos = 0;
+}
+
 // ===== PPM decoder =====
 // GPIO interrupt captures timestamps of falling edges. Delta between edges
 // = pulse gap → channel width. Long gap (>3ms) = sync, frame boundary.
@@ -177,6 +268,11 @@ void start(RCProto proto) {
             s_ppmChIdx = 0;
             s_ppmFrameReady = false;
             break;
+        case RC_PROTO_CRSF:
+            Serial1.end();
+            Serial1.begin(420000, SERIAL_8N1, rxPin, txPin);
+            s_crsfPos = 0;
+            break;
         default:
             PinPort::release(PinPort::PORT_B);
             return;
@@ -192,6 +288,7 @@ void stop() {
     switch (s_state.proto) {
         case RC_PROTO_SBUS:
         case RC_PROTO_IBUS:
+        case RC_PROTO_CRSF:
             Serial1.end();
             break;
         case RC_PROTO_PPM:
@@ -200,9 +297,11 @@ void stop() {
         default: break;
     }
     s_running = false;
-    s_state.proto = RC_PROTO_NONE;
-    s_state.connected = false;
     PinPort::release(PinPort::PORT_B);
+    // Clear ALL counters/channels — otherwise stale frameCount + decoded
+    // junk from a failed autoDetect bleed into the next session and the
+    // UI shows "92 Hz, 16 channels" even though the sniffer is idle.
+    s_state = {};
 }
 
 bool isRunning() { return s_running; }
@@ -213,6 +312,7 @@ const char *protoName(RCProto p) {
         case RC_PROTO_SBUS: return "SBUS";
         case RC_PROTO_IBUS: return "iBus";
         case RC_PROTO_PPM:  return "PPM";
+        case RC_PROTO_CRSF: return "CRSF";
         default: return "none";
     }
 }
@@ -223,36 +323,23 @@ static uint32_t s_autoStartMs = 0;
 static RCProto  s_autoCur = RC_PROTO_NONE;
 
 void autoDetect() {
-    // Try SBUS first (most common on modern receivers)
-    start(RC_PROTO_SBUS);
-    uint32_t until = millis() + 500;
-    uint32_t startFrames = s_state.frameCount;
-    while (millis() < until) {
-        loop();
-        delay(1);
+    // Order: CRSF first (default for ELRS RX which is what this firmware
+    // mostly drives), then legacy SBUS / iBus / PPM.
+    const RCProto kOrder[] = { RC_PROTO_CRSF, RC_PROTO_SBUS, RC_PROTO_IBUS, RC_PROTO_PPM };
+    for (RCProto p : kOrder) {
+        start(p);
+        uint32_t until = millis() + 500;
+        uint32_t startFrames = s_state.frameCount;
+        while (millis() < until) {
+            loop();
+            delay(1);
+        }
+        if (s_state.frameCount > startFrames) return;
     }
-    if (s_state.frameCount > startFrames) return;
-
-    start(RC_PROTO_IBUS);
-    until = millis() + 500;
-    startFrames = s_state.frameCount;
-    while (millis() < until) {
-        loop();
-        delay(1);
-    }
-    if (s_state.frameCount > startFrames) return;
-
-    start(RC_PROTO_PPM);
-    until = millis() + 500;
-    startFrames = s_state.frameCount;
-    while (millis() < until) {
-        loop();
-        delay(1);
-    }
-    if (s_state.frameCount > startFrames) return;
-
+    // Nothing detected — make sure we're cleanly stopped (start() above
+    // flips state into the last protocol; stop() releases the port AND
+    // wipes counters so the UI doesn't show stale 92-Hz junk).
     stop();
-    s_state.proto = RC_PROTO_NONE;
 }
 
 void loop() {
@@ -266,6 +353,9 @@ void loop() {
             break;
         case RC_PROTO_PPM:
             ppmPoll();
+            break;
+        case RC_PROTO_CRSF:
+            while (Serial1.available()) crsfByte(Serial1.read());
             break;
         default: break;
     }

@@ -2,7 +2,7 @@
 
   <div class="banner banner-info col-span-full">
     Подключи сигнал с приёмника на <code>GPIO 10</code> (ESP RX), GND, 5V. Плата автоматически
-    определит протокол: <b>SBUS · iBus · PPM</b>. Убедись что <b>Port B</b>
+    определит протокол: <b>CRSF · SBUS · iBus · PPM</b>. Убедись что <b>Port B</b>
     (System → Port B Mode) в режиме <code>UART</code> или <code>GPIO</code>.
   </div>
 
@@ -17,6 +17,7 @@
     <div class="cluster">
       <button onclick="rcStart('auto')">🔍 Auto-detect</button>
       <span class="kv-label">or force:</span>
+      <button class="secondary" onclick="rcStart('crsf')">CRSF</button>
       <button class="secondary" onclick="rcStart('sbus')">SBUS</button>
       <button class="secondary" onclick="rcStart('ibus')">iBus</button>
       <button class="secondary" onclick="rcStart('ppm')">PPM</button>
