@@ -170,6 +170,43 @@ void registerRoutesDiag(AsyncWebServer *s_server) {
         }
     });
 
+    // GET /api/sys/board -- per-board hardware identity. The web sys
+    // tab uses this to render the right board name / display / SD /
+    // optional peripherals (IMU, RGB LED, battery ADC) so a single
+    // shared sys.html serves both boards.
+    s_server->on("/api/sys/board", HTTP_GET, [](AsyncWebServerRequest *req) {
+        JsonDocument d;
+#if defined(BOARD_WT32_SC01_PLUS)
+        d["board"]   = "Wireless-Tag WT32-SC01 Plus";
+        d["codename"] = "wt32_sc01_plus";
+        d["mcu"]     = "ESP32-S3R2 \xC2\xB7 240 MHz";
+        d["memory"]  = "512 KB SRAM \xC2\xB7 2 MB QSPI PSRAM \xC2\xB7 16 MB flash";
+        d["display"] = "ST7796 320x480 (LovyanGFX i80)";
+        d["touch"]   = "FT6336 \xC2\xB7 0x38";
+        d["sd"]      = "SDMMC \xC2\xB7 1-bit";
+        d["imu"]     = nullptr;       // no IMU exposed on this board
+        d["rgb_led"] = nullptr;       // no RGB LED
+        d["battery_adc"] = nullptr;   // external power only
+#else
+        d["board"]   = "Waveshare ESP32-S3-LCD-1.47B";
+        d["codename"] = "wsh_s3_lcd_147b";
+        d["mcu"]     = "ESP32-S3R8 \xC2\xB7 240 MHz";
+        d["memory"]  = "512 KB SRAM \xC2\xB7 8 MB OPI PSRAM \xC2\xB7 16 MB flash";
+        d["display"] = "ST7789 172x320 IPS (Arduino_GFX SPI)";
+        d["touch"]   = nullptr;       // no touch
+        d["sd"]      = "SDMMC \xC2\xB7 1-bit (mounted on demand)";
+        d["imu"]     = "QMI8658 \xC2\xB7 0x6B";
+        d["rgb_led"] = "WS2812 \xC2\xB7 GPIO 38";
+        d["battery_adc"] = "GPIO 1 (LiPo divider)";
+#endif
+        d["sdk"]      = ESP.getSdkVersion();
+        d["chip_rev"] = (int)ESP.getChipRevision();
+        d["flash_mb"] = (int)(ESP.getFlashChipSize() / (1024 * 1024));
+        d["psram_mb"] = (int)(ESP.getPsramSize() / (1024 * 1024));
+        String out; serializeJson(d, out);
+        req->send(200, "application/json", out);
+    });
+
 #if defined(BOARD_WT32_SC01_PLUS)
     // GET /api/sys/screenshot.bmp -- capture the current LVGL screen
     // and stream it back as a 24-bit BMP. Used to inspect the UI from

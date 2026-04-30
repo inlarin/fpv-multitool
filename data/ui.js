@@ -4204,6 +4204,13 @@ function handleMsg(m) {
   }
   else if (m.type === 'sys') {
     document.getElementById('sysIP').textContent = m.ip;
+    // Connection rail: "<ip> · <board>". window.__boardIdent populated
+    // by the /api/sys/board fetch on page load.
+    const rail = document.getElementById('sysRailIdent');
+    if (rail && m.ip) {
+      const ident = window.__boardIdent || 'plate';
+      rail.textContent = m.ip + ' · ' + ident;
+    }
     // Pretty uptime: minutes/hours when long.
     const upMs = m.uptime || 0;
     const sec = Math.floor(upMs / 1000);
@@ -4350,4 +4357,41 @@ showWorkspace(_curWs);
 fetch('/api/ota/info').then(r=>r.json()).then(j=>{
   const el = document.getElementById('fwFooter');
   if (el) el.textContent = 'FPV MultiTool ' + (j.fw_version || '?') + ' | heap ' + (j.app_size ? (j.app_size/1024/1024).toFixed(1)+'MB' : '?');
+}).catch(()=>{});
+
+// Fetch and render board-specific identity into the System tab. Same
+// shared sys.html serves both Waveshare and SC01 Plus -- the device
+// reports its own identity so the UI doesn't have to guess from the
+// codebase. Rows for absent peripherals (touch on Waveshare, IMU on
+// SC01 Plus, etc.) are collapsed.
+fetch('/api/sys/board').then(r=>r.json()).then(j=>{
+  const set = (id, val) => {
+    const e = document.getElementById(id);
+    if (e) e.textContent = (val == null || val === '') ? '—' : val;
+  };
+  // Plate card
+  set('sysBoardName', j.board);
+  set('sysBoardMcu',  j.mcu);
+  set('sysBoardMem',  j.memory);
+  set('sysBoardSdk',  j.sdk);
+  // On-board hardware -- hide rows where the device says null.
+  const showRow = (rowId, valId, val) => {
+    const row = document.getElementById(rowId);
+    if (row) row.style.display = (val == null || val === '') ? 'none' : '';
+    const v = document.getElementById(valId);
+    if (v && val) v.textContent = val;
+  };
+  showRow('sysHwDisplayRow', 'sysHwDisplay', j.display);
+  showRow('sysHwTouchRow',   'sysHwTouch',   j.touch);
+  showRow('sysHwImuRow',     'sysHwImu',     j.imu);
+  showRow('sysHwSdRow',      'sysHwSd',      j.sd);
+  showRow('sysHwRgbRow',     'sysHwRgb',     j.rgb_led);
+  showRow('sysHwBattRow',    'sysHwBatt',    j.battery_adc);
+  // Connection rail identity (e.g. "192.168.32.51 · WT32-SC01 Plus").
+  // IP comes in via the WS broadcast; here we just stash the board
+  // name so the WS handler can suffix it. Set a placeholder that
+  // gets overwritten when the first sys broadcast arrives.
+  window.__boardIdent = j.board || 'plate';
+  const r = document.getElementById('sysRailIdent');
+  if (r) r.textContent = window.__boardIdent;
 }).catch(()=>{});

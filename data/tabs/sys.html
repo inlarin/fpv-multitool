@@ -24,15 +24,15 @@
     </div>
   </div>
 
-  <!-- Plate info -->
+  <!-- Plate info -- populated from /api/sys/board on page load -->
   <div class="card">
     <div class="card-header">
       <span class="card-title">Plate</span>
     </div>
-    <div class="kv"><span class="kv-label">Board</span><span class="kv-value">Waveshare ESP32-S3-LCD-1.47B</span></div>
-    <div class="kv"><span class="kv-label">MCU</span><span class="kv-value mono">ESP32-S3R8 · 240 MHz</span></div>
-    <div class="kv"><span class="kv-label">Memory</span><span class="kv-value mono">512 KB SRAM · 8 MB PSRAM · 16 MB flash</span></div>
-    <div class="kv"><span class="kv-label">SDK</span><span class="kv-value mono">ESP-IDF v5.3.2</span></div>
+    <div class="kv"><span class="kv-label">Board</span><span class="kv-value" id="sysBoardName">—</span></div>
+    <div class="kv"><span class="kv-label">MCU</span><span class="kv-value mono" id="sysBoardMcu">—</span></div>
+    <div class="kv"><span class="kv-label">Memory</span><span class="kv-value mono" id="sysBoardMem">—</span></div>
+    <div class="kv"><span class="kv-label">SDK</span><span class="kv-value mono" id="sysBoardSdk">—</span></div>
     <div class="kv"><span class="kv-label">Firmware</span><span class="kv-value mono" id="sysFwVersion">—</span></div>
   </div>
 
@@ -49,16 +49,17 @@
     <div class="kv"><span class="kv-label">Gateway</span><span class="kv-value mono" id="sysWifiGw">—</span></div>
   </div>
 
-  <!-- Hardware status -->
+  <!-- Hardware status -- rows for absent peripherals are hidden by JS -->
   <div class="card">
     <div class="card-header">
       <span class="card-title">On-board hardware</span>
     </div>
-    <div class="kv"><span class="kv-label">Display</span><span class="kv-value">ST7789 172×320 IPS</span></div>
-    <div class="kv"><span class="kv-label">IMU</span><span class="kv-value mono">QMI8658 · 0x6B</span></div>
-    <div class="kv"><span class="kv-label">SD card</span><span class="kv-value mono" id="sysSdCard">SDMMC · 4-bit</span></div>
-    <div class="kv"><span class="kv-label">RGB LED</span><span class="kv-value mono">WS2812 · GPIO 38</span></div>
-    <div class="kv"><span class="kv-label">Battery ADC</span><span class="kv-value mono" id="sysBatteryAdc">GPIO 1</span></div>
+    <div class="kv" id="sysHwDisplayRow"><span class="kv-label">Display</span><span class="kv-value" id="sysHwDisplay">—</span></div>
+    <div class="kv" id="sysHwTouchRow"><span class="kv-label">Touch</span><span class="kv-value mono" id="sysHwTouch">—</span></div>
+    <div class="kv" id="sysHwImuRow"><span class="kv-label">IMU</span><span class="kv-value mono" id="sysHwImu">—</span></div>
+    <div class="kv" id="sysHwSdRow"><span class="kv-label">SD card</span><span class="kv-value mono" id="sysHwSd">—</span></div>
+    <div class="kv" id="sysHwRgbRow"><span class="kv-label">RGB LED</span><span class="kv-value mono" id="sysHwRgb">—</span></div>
+    <div class="kv" id="sysHwBattRow"><span class="kv-label">Battery ADC</span><span class="kv-value mono" id="sysHwBatt">—</span></div>
   </div>
 
   <!-- Advanced (collapsed by default) -->
@@ -139,7 +140,7 @@
   <div class="connection-rail col-span-full">
     <span class="dot on"></span>
     <span class="kv-label">Plate</span>
-    <span class="kv-value">192.168.32.50 · USB CDC</span>
+    <span class="kv-value mono" id="sysRailIdent">—</span>
     <span class="connection-rail-spacer"></span>
     <span class="connection-rail-action" id="sysRailDetails">—</span>
   </div>
