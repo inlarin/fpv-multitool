@@ -1,45 +1,50 @@
-﻿// ESP32-S3 FPV MultiTool
-// Main entry: menu + app switching
+// Waveshare ESP32-S3-LCD-1.47B boot.
+//
+// The Waveshare LCD is too small (172x320) to host a full interactive
+// UI, so this board is "headless" from the user's perspective: all
+// control happens via the web UI on whichever IP the status screen
+// reports. The local LCD is just a status indicator (WiFi/IP/uptime/
+// heap/USB mode/Port B mode/OTA state/version) -- conceptually the
+// same payload the SC01 Plus puts in its 24px status bar, just laid
+// out vertically because there's space.
+//
+// The BOOT button (GPIO 0) is mostly unused now -- a 3-second long
+// press triggers a soft reboot, useful when the network is wedged.
+//
+// Bridge modes (USB2TTL, USB2SMBus, CP2112) keep working without
+// any LCD presence: they're driven from main loop pumps in
+// core/usb_mode.cpp::pumpLoop(), battery/smbus_bridge.cpp::loop(),
+// and usb_emu/cp2112_emu.cpp's TinyUSB callbacks.
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
+
 #include "pin_config.h"
 #include "safety.h"
 #include "board_settings.h"
+
 #include "board/wsh_s3_lcd_147b/display.h"
 #include "board/wsh_s3_lcd_147b/button.h"
-#include "board/wsh_s3_lcd_147b/ui/menu.h"
 #include "board/wsh_s3_lcd_147b/status_led.h"
-#include "board/wsh_s3_lcd_147b/usb2ttl.h"
-#include "board/wsh_s3_lcd_147b/ui/servo_tester.h"
-#include "board/wsh_s3_lcd_147b/ui/motor_tester.h"
-#include "board/wsh_s3_lcd_147b/ui/battery_ui.h"
-#include "board/wsh_s3_lcd_147b/ui/wifi_app.h"
+#include "board/wsh_s3_lcd_147b/status_screen.h"
+
 #include "web/wifi_manager.h"
 #include "web/web_server.h"
 #include "web/web_state.h"
-#include "battery/dji_battery.h"
-#include "battery/autel_battery.h"
 #include "battery/smbus_bridge.h"
-#include "board/wsh_s3_lcd_147b/ui/smbus_bridge_ui.h"
 #include "core/usb_mode.h"
 #include "core/pin_port.h"
 #include "rc_sniffer/rc_sniffer.h"
-#include "usb_emu/cp2112_emu.h"
-#include "motor/dshot.h"
 #include "motor/motor_dispatch.h"
-#include "board/wsh_s3_lcd_147b/ui/crsf_tester.h"
 #include "fpv/esc_telem.h"
-#include "servo/servo_pwm.h"
 
-static AppId currentApp = APP_NONE;
+// Default AP credentials when STA fails / first boot. Same as before
+// the menu-stripping refactor.
+static constexpr const char *AP_SSID = "FPV-MultiTool";
+static constexpr const char *AP_PASS = "fpv12345";
 
-// Try STA from saved creds, otherwise start AP
 static void autoStartWifi() {
-    // Don't write creds to ESP-IDF WiFi NVS namespace on every begin() â€”
-    // we keep them in our own Preferences "wifi" store. Without this, each
-    // boot rewrites WiFi NVS and slows reconnect; without persistent=false
-    // there's also a benign warning about "saving WiFi config" every boot.
     WiFi.persistent(false);
     String ssid, pass;
     bool connected = false;
@@ -49,102 +54,75 @@ static void autoStartWifi() {
     }
     if (!connected) {
         Serial.println("[WiFi] Starting AP mode");
-        WifiManager::startAP("FPV-MultiTool", "fpv12345");
+        WifiManager::startAP(AP_SSID, AP_PASS);
     }
     WebServer::start();
-}
-
-// Background task: keep webserver alive and service motor/servo from web commands
-static void webBackgroundTask() {
-    WebServer::loop();
-    MotorDispatch::pump(/*inMotorApp=*/currentApp == APP_MOTOR);
 }
 
 void setup() {
     Serial.begin(115200);
 
     // Boot-loop guard + OTA rollback bookkeeping. Must run BEFORE any
-    // potentially-crashy subsystem init so the counter still increments
-    // if init crashes. Same pattern as on the SC01 Plus (main_sc01_plus.cpp).
+    // potentially-crashy init so the counter still increments if init
+    // panics. Same pattern as SC01 Plus (main_sc01_plus.cpp).
     Safety::earlyBootCheck();
 
-    // BoardSettings owns the "boardcfg" NVS namespace -- shared by both
-    // boards now (originally SC01-only, moved to src/core/ when the
-    // health-beacon settings became universal).
     BoardSettings::begin();
+    WebState::initMutex();
 
-    WebState::initMutex();  // Must be first â€” protects shared state
-
-    // Watchdog: 30s max task block, panic+reset on timeout
+    // 30s task watchdog, panic+reset on timeout.
     esp_task_wdt_config_t wdt_cfg = {
-        .timeout_ms = 30000,
+        .timeout_ms     = 30000,
         .idle_core_mask = 0,
-        .trigger_panic = true,
+        .trigger_panic  = true,
     };
     esp_task_wdt_reconfigure(&wdt_cfg);
-    esp_task_wdt_add(NULL);  // monitor main task
+    esp_task_wdt_add(NULL);
 
     Display::init();
     Button::init(BTN_BOOT);
     StatusLed::init();
 
     // Restore user-preferred Port B mode from NVS (IDLE by default).
-    // Feature consumers (DJIBattery/SMBusBridge/CRSF/...) will acquire Port B
-    // when their mode matches; otherwise they stay inactive until user
-    // switches modes via Web UI.
     PinPort::applyAtBoot();
 
-    // Auto-start WiFi + web server in background
     autoStartWifi();
-    DJIBattery::init(); // I2C for battery telemetry via web
-    AutelBattery::init(); // Autel read-only support (shares Wire1/Port B, 0x0B)
     SMBusBridge::begin();
-    UsbMode::applyAtBoot();   // attach HID/Vendor interfaces if enabled in NVS
+    UsbMode::applyAtBoot();   // attach HID/Vendor interfaces if NVS-selected
 
-    Menu::draw();
-    Serial.println("FPV MultiTool ready");
+    StatusScreen::init();     // draws static chrome, paints first values
+
+    Serial.println("FPV MultiTool ready (status-only LCD)");
 }
 
 void loop() {
-    esp_task_wdt_reset();  // feed watchdog
+    esp_task_wdt_reset();
 
-    // OTA rollback gate + network watchdog (cheap noops after first hit).
+    // Safety net ticks (cheap noops after their first effective hit).
     Safety::tickValidation();
     Safety::tickNetworkWatchdog();
     Safety::tickBeacon(BoardSettings::beaconUrl().c_str(),
                        BoardSettings::beaconIntervalMs());
 
     StatusLed::loop();
-    SMBusBridge::loop();    // serialâ†’SMBus proxy for PC-side tools
-    UsbMode::pumpLoop();    // USB2TTL transparent CDCâ†”UART1 bridge (no-op in other modes)
-    RCSniffer::loop();      // SBUS/iBus/PPM frame parser (no-op when not running)
-    ESCTelem::loop();       // KISS/BLHeli_32 ESC telemetry (no-op when not running)
+
+    // Always-on web server + dispatchers.
+    WebServer::loop();
+    MotorDispatch::pump(/*inMotorApp=*/false);   // no local motor app anymore
+    SMBusBridge::loop();         // serial -> SMBus proxy for PC tools
+    UsbMode::pumpLoop();         // USB2TTL transparent CDC <-> UART1
+    RCSniffer::loop();           // SBUS/iBus/PPM parser (no-op when stopped)
+    ESCTelem::loop();            // KISS / BLHeli_32 telem decoder
+
+    StatusScreen::tick();        // 1 Hz LCD refresh
+
+    // BOOT button: long-press (3 s) -> soft reboot. The button is
+    // otherwise unused -- there's no menu to navigate.
     ButtonEvent evt = Button::poll();
-
-    if (currentApp == APP_NONE) {
-        // Keep web server running in background while in menu
-        webBackgroundTask();
-
-        AppId selected = Menu::update(evt);
-        if (selected != APP_NONE) {
-            currentApp = selected;
-            Serial.printf("Launching app %d\n", currentApp);
-
-            switch (currentApp) {
-                case APP_USB2TTL:    runUSB2TTL(); break;
-                case APP_USB2SMBUS:  runUSB2SMBus(); break;
-                case APP_SERVO:      runServoTester(); break;
-                case APP_MOTOR:      runMotorTester(); break;
-                case APP_BATTERY:    runBatteryTool(); break;
-                case APP_WIFI:       runWifiApp(); break;
-                case APP_CRSF:       runCRSFTester(); break;
-                default: break;
-            }
-
-            currentApp = APP_NONE;
-            Menu::draw();
-            Serial.println("Back to menu");
-        }
+    if (evt == BTN_LONG_PRESS) {
+        Serial.println("[boot button] long-press -> reboot");
+        delay(50);
+        esp_restart();
     }
 
     delay(2);
