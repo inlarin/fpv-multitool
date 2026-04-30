@@ -37,6 +37,12 @@ static lv_obj_t *s_ch_vals[8]  = {nullptr};
 static lv_timer_t *s_tick      = nullptr;
 static bool       s_detect_failed = false;   // set by detectClicked, cleared on next start
 
+// Auto-detect state machine (lives below detectAdvance, declared up
+// here so sniffCleanup can null them on screen teardown).
+static lv_timer_t *s_detect_timer = nullptr;
+static int         s_detect_phase = -1;     // -1 idle, 0..2 = which proto
+static uint32_t    s_detect_start_frames = 0;
+
 // Channel ranges differ per protocol but they all settle close to
 // 988..2012 us (~SBUS spec); use that as the bar normaliser.
 static constexpr int CH_MIN_US = 988;
@@ -123,10 +129,16 @@ static void makeChannelRow(lv_obj_t *parent, int idx) {
     s_ch_vals[idx] = v;
 }
 
-// Fires when the panel is deleted on Back. Kills only OUR tick + nulls
-// our static widget pointers. LVGL's internal timers MUST not be touched.
+// Fires when the panel is deleted on Back. Kills only OUR tick + the
+// in-flight auto-detect timer (if any), nulls our static widget pointers.
+// LVGL's internal timers MUST not be touched.
 static void sniffCleanup(lv_event_t * /*e*/) {
     if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
+    if (s_detect_timer) {
+        lv_timer_delete(s_detect_timer);
+        s_detect_timer = nullptr;
+    }
+    s_detect_phase = -1;
     s_proto_lbl = s_state_lbl = s_rate_lbl = nullptr;
     s_frames_lbl = s_crc_lbl = s_flags_lbl = nullptr;
     s_detect_btn = s_detect_lbl = s_stop_btn = nullptr;
@@ -225,17 +237,74 @@ static void sniffTick(lv_timer_t * /*t*/) {
 
 // ---- Event handlers -------------------------------------------------------
 
+// RCSniffer::autoDetect() is a 1500 ms busy-wait blocker (3 protocols x
+// 500 ms each). Calling it inline from the click handler stalls
+// lv_timer_handler -- the status bar timer freezes, input feels dead,
+// and the AsyncTCP task hits its watchdog if a request arrives mid-detect.
+//
+// Replace with a state machine: each phase fires synchronously (just
+// stop+start the next protocol candidate, ~few ms), then schedules a
+// one-shot lv_timer 500 ms later to evaluate frame count and advance.
+// LVGL + main loop run normally between phases. RCSniffer::loop() is
+// already pumped from main_sc01_plus.cpp so frame parsing keeps going.
+//
+// The s_detect_* statics live up at the file scope so sniffCleanup
+// (which lives above this block) can null them.
+
+static const RCProto DETECT_ORDER[3] = {
+    RC_PROTO_SBUS, RC_PROTO_IBUS, RC_PROTO_PPM
+};
+
+static void detectFinish(bool ok) {
+    s_detect_phase = -1;
+    s_detect_failed = !ok;
+    Safety::logf("[sniff] auto-detect -> proto=%s",
+        RCSniffer::protoName(RCSniffer::state().proto));
+    sniffTick(nullptr);
+}
+
+static void detectAdvance(lv_timer_t * /*t*/) {
+    s_detect_timer = nullptr;   // one-shot fired; clear so cleanup is safe
+
+    // Did the previous phase pick up any frames?
+    if (s_detect_phase >= 0) {
+        if (RCSniffer::state().frameCount > s_detect_start_frames) {
+            // Locked on. Stop probing, leave the running session as-is.
+            detectFinish(true);
+            return;
+        }
+    }
+
+    s_detect_phase++;
+    if (s_detect_phase >= (int)(sizeof(DETECT_ORDER) / sizeof(DETECT_ORDER[0]))) {
+        // Exhausted all candidates -- nothing on the wire.
+        RCSniffer::stop();
+        detectFinish(false);
+        return;
+    }
+
+    // Switch to the next candidate. start() reconfigures Serial1, fast.
+    if (RCSniffer::isRunning()) RCSniffer::stop();
+    RCSniffer::start(DETECT_ORDER[s_detect_phase]);
+    s_detect_start_frames = RCSniffer::state().frameCount;
+    Safety::logf("[sniff] phase %d: trying %s",
+                 s_detect_phase, RCSniffer::protoName(DETECT_ORDER[s_detect_phase]));
+
+    // Schedule the next evaluation 500 ms from now.
+    s_detect_timer = lv_timer_create(detectAdvance, 500, nullptr);
+    lv_timer_set_repeat_count(s_detect_timer, 1);
+}
+
 static void detectClicked(lv_event_t * /*e*/) {
+    if (s_detect_phase >= 0) return;   // detection already running, ignore re-tap
+
     if (RCSniffer::isRunning()) RCSniffer::stop();
     if (s_detect_lbl) lv_label_set_text(s_detect_lbl, "Detecting...");
     Safety::logf("[sniff] auto-detect start");
     s_detect_failed = false;
-    RCSniffer::autoDetect();
-    bool ok = RCSniffer::isRunning();
-    Safety::logf("[sniff] auto-detect -> proto=%s",
-        RCSniffer::protoName(RCSniffer::state().proto));
-    s_detect_failed = !ok;
-    sniffTick(nullptr);
+
+    s_detect_phase = -1;   // detectAdvance will increment to 0 first
+    detectAdvance(nullptr);
 }
 
 static void stopClicked(lv_event_t * /*e*/) {
