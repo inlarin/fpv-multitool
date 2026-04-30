@@ -3,6 +3,14 @@
 ## Project Goal
 Build an application on ESP32-S3-LCD-1.47B for testing FPV drone servos and motors.
 
+> **Two-board project. Read [docs/dev/PARALLEL_BOARDS.md](docs/dev/PARALLEL_BOARDS.md) at the start of every session that touches code outside a single board's UI directory.** It defines:
+> - which directories are shared vs board-specific (`src/<feature>/` shared; `src/board/wt32_sc01_plus/` SC01-only; `src/main.cpp` + `src/ui/` Waveshare-only)
+> - the production envs (`esp32s3` and `wt32_sc01_plus`) — both must build cleanly before any commit
+> - the threading model (`BoardApp::lvLock` for AsyncTCP↔loopTask, `WebState::Lock` bounded 2s, per-screen `LV_EVENT_DELETE` cleanup)
+> - the LEDC channel reservation rule (LovyanGFX holds 7/timer-3; new PWM consumers pin to channel 0/timer-0 via `ledcAttachChannel`)
+> - the pre-flash MAC verification (`3C:DC:75:6E:CE:A8` Waveshare, `88:56:A6:80:EB:48` SC01 Plus — wrong env to wrong board = brick)
+> - the boards-feature parity matrix to keep neither side falling behind
+
 ## Board: Waveshare ESP32-S3-LCD-1.47B (diymore clone)
 - **MCU:** ESP32-S3R8, dual-core LX7 @ 240MHz
 - **Memory:** 512KB SRAM, 384KB ROM, 8MB PSRAM, 16MB Flash
