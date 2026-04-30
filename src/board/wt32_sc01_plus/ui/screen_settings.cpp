@@ -2,6 +2,7 @@
 //
 // Sections:
 //   Display  : rotation 0/1/2/3, brightness slider, touch recalibrate
+//   Port B   : current mode + owner, switch buttons, force-release
 //   WiFi     : current SSID + Edit button (modal w/ lv_keyboard for ssid/pass)
 //   Beacon   : current url + interval + Edit button (modal w/ keyboard)
 //   About    : fw / ip / uptime / heap / ota_state / boot_count + Reboot
@@ -23,12 +24,18 @@
 #include "board_display.h"
 #include "safety.h"
 #include "ui/board_app.h"
+#include "core/pin_port.h"
 
 namespace screens {
 
 // Fires when the panel is deleted on Back. Kills only OUR timer +
 // nulls static widget pointers. LVGL internal timers MUST be left alone.
 static void settingsCleanup(lv_event_t *e);
+
+// Defined further down (Port B section); aboutTick polls it once per
+// second so the Mode/Owner badge tracks external state changes (web
+// /api/port/preferred, another screen acquiring the port, etc.).
+static void portBRefresh();
 
 // ---- About section live-refresh -------------------------------------------
 
@@ -40,6 +47,13 @@ static lv_timer_t *s_about_timer = nullptr;
 
 static void aboutTick(lv_timer_t * /*t*/) {
     if (!s_about_uptime) return;   // section was rebuilt / left
+
+    // Piggyback the Port B card's live refresh on the same 1 Hz timer
+    // -- mode/owner can change from web (POST /api/port/preferred) or
+    // from another LVGL screen acquiring the port, so we re-poll here
+    // rather than only on user taps.
+    portBRefresh();
+
     char buf[40];
 
     uint32_t s = millis() / 1000;
@@ -349,6 +363,132 @@ static void buildWifiSection(lv_obj_t *parent) {
     lv_obj_center(lbl);
 }
 
+// ---- Port B section -------------------------------------------------------
+//
+// User-facing knob for the Port B mode mux. Tap a mode button to release
+// whatever currently holds Port B and re-acquire it in the chosen mode,
+// persisting the choice to NVS as the new "preferred" boot mode. "Force
+// Release" leaves Port B in IDLE without touching the preferred-mode
+// pref -- useful when a screen got stuck holding the port.
+
+static lv_obj_t *s_portb_state_lbl = nullptr;
+static lv_obj_t *s_portb_pref_lbl  = nullptr;
+static lv_obj_t *s_portb_pins_lbl  = nullptr;
+
+// Order matches the on-screen button row.
+static const PortMode PORTB_MODES[5] = {
+    PORT_IDLE, PORT_I2C, PORT_UART, PORT_PWM, PORT_GPIO,
+};
+static const char *PORTB_LABELS[5] = { "OFF", "I2C", "UART", "PWM", "GPIO" };
+static lv_obj_t *s_portb_btns[5] = { nullptr };
+
+static void portBRefresh() {
+    if (!s_portb_state_lbl) return;
+
+    PortMode cur   = PinPort::currentMode(PinPort::PORT_B);
+    PortMode pref  = PinPort::preferredMode(PinPort::PORT_B);
+    const char *owner = PinPort::currentOwner(PinPort::PORT_B);
+
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%s%s%s",
+             PinPort::modeName(cur),
+             (owner && *owner) ? " / " : "",
+             (owner && *owner) ? owner : "");
+    lv_label_set_text(s_portb_state_lbl, buf);
+    lv_obj_set_style_text_color(s_portb_state_lbl,
+        lv_color_hex(cur == PORT_IDLE ? 0xa0a0a0 : 0x06A77D), 0);
+
+    lv_label_set_text(s_portb_pref_lbl, PinPort::modeName(pref));
+
+    snprintf(buf, sizeof(buf), "SDA/TX=%d  SCL/RX=%d",
+             PinPort::tx_pin(PinPort::PORT_B),
+             PinPort::rx_pin(PinPort::PORT_B));
+    lv_label_set_text(s_portb_pins_lbl, buf);
+
+    // Highlight the button matching the current mode.
+    for (int i = 0; i < 5; i++) {
+        if (!s_portb_btns[i]) continue;
+        bool active = (PORTB_MODES[i] == cur);
+        lv_obj_set_style_bg_color(s_portb_btns[i],
+            lv_color_hex(active ? 0x06A77D : 0x394150), LV_PART_MAIN);
+    }
+}
+
+static void portBModeClicked(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= 5) return;
+    PortMode want = PORTB_MODES[idx];
+
+    // Apply both runtime and preferred-on-boot. Release first because
+    // the previous owner might be in a different mode (acquire would
+    // reject otherwise).
+    PinPort::release(PinPort::PORT_B);
+    if (want != PORT_IDLE) {
+        if (!PinPort::acquire(PinPort::PORT_B, want, "settings_ui")) {
+            Safety::logf("[settings] portB acquire(%s) FAILED",
+                         PinPort::modeName(want));
+            // Fall through and still save preferred -- next boot will retry.
+        }
+    }
+    PinPort::setPreferredMode(PinPort::PORT_B, want);
+    Safety::logf("[settings] Port B -> %s (preferred saved)",
+                 PinPort::modeName(want));
+    portBRefresh();
+}
+
+static void portBReleaseClicked(lv_event_t * /*e*/) {
+    PinPort::release(PinPort::PORT_B);
+    Safety::logf("[settings] Port B force-released");
+    portBRefresh();
+}
+
+static void buildPortBSection(lv_obj_t *parent) {
+    lv_obj_t *card = makeCard(parent, "Port B");
+
+    s_portb_state_lbl = makeKvRow(card, "Mode");
+    s_portb_pref_lbl  = makeKvRow(card, "Preferred");
+    s_portb_pins_lbl  = makeKvRow(card, "Pins");
+
+    // Mode-switch buttons, single row with flex_grow.
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, 44);
+    lv_obj_set_layout(row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(row, 4, LV_PART_MAIN);
+
+    for (int i = 0; i < 5; i++) {
+        lv_obj_t *btn = lv_button_create(row);
+        lv_obj_set_flex_grow(btn, 1);
+        lv_obj_set_height(btn, 40);
+        lv_obj_set_style_radius(btn, 6, LV_PART_MAIN);
+        lv_obj_add_event_cb(btn, portBModeClicked, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, PORTB_LABELS[i]);
+        lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_center(lbl);
+        s_portb_btns[i] = btn;
+    }
+
+    // Force-release button (red).
+    lv_obj_t *rel = lv_button_create(card);
+    lv_obj_set_width(rel, lv_pct(100));
+    lv_obj_set_height(rel, 36);
+    lv_obj_set_style_bg_color(rel, lv_color_hex(0xE63946), LV_PART_MAIN);
+    lv_obj_set_style_radius(rel, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(rel, portBReleaseClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *rl = lv_label_create(rel);
+    lv_label_set_text(rl, "Force release (-> IDLE)");
+    lv_obj_set_style_text_color(rl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(rl, &lv_font_montserrat_14, 0);
+    lv_obj_center(rl);
+
+    portBRefresh();
+}
+
 // ---- About section --------------------------------------------------------
 
 static void rebootClicked(lv_event_t * /*e*/) {
@@ -388,6 +528,9 @@ static void settingsCleanup(lv_event_t * /*e*/) {
     // WiFi modal widgets if open get deleted with the panel anyway.
     s_wifi_modal = s_wifi_ta_ssid = s_wifi_ta_pass = nullptr;
     s_wifi_ssid_lbl = s_wifi_keyboard = nullptr;
+    // Port B card statics.
+    s_portb_state_lbl = s_portb_pref_lbl = s_portb_pins_lbl = nullptr;
+    for (int i = 0; i < 5; i++) s_portb_btns[i] = nullptr;
 }
 
 void buildSettings(lv_obj_t *panel) {
@@ -399,6 +542,7 @@ void buildSettings(lv_obj_t *panel) {
     lv_obj_add_event_cb(panel, settingsCleanup, LV_EVENT_DELETE, nullptr);
 
     buildDisplaySection(panel);
+    buildPortBSection(panel);
     buildWifiSection(panel);
     buildAboutSection(panel);
 
