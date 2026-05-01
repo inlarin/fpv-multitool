@@ -437,8 +437,33 @@ BatteryInfo DJIBattery::readAll() {
     uint8_t sec = (info.operationStatus >> 8) & 0x03;
     info.sealed = (sec == 0x03);
 
-    info.hasPF = (info.pfStatus != 0 && info.pfStatus != 0xFFFFFFFF) ||
-                 (info.djiPF2 != 0 && info.djiPF2 != 0xFFFFFFFF);
+    // Validity flags -- treat 0xFFFFFFFF / 0xFFFF as NACK sentinel (read failed)
+    // rather than as a real value. CRITICAL safety: hasPF must use these,
+    // otherwise a battery whose PFStatus read NACKed will be reported as
+    // "no PF" when in reality we don't know its state.
+    info.pfStatusKnown     = (info.pfStatus     != 0xFFFFFFFF);
+    info.safetyStatusKnown = (info.safetyStatus != 0xFFFFFFFF);
+    info.opStatusKnown     = (info.operationStatus != 0xFFFFFFFF);
+    info.mfgStatusKnown    = (info.manufacturingStatus != 0xFFFFFFFF);
+    info.djiPF2Known       = (info.djiPF2       != 0xFFFFFFFF);
+    info.sohKnown          = (info.stateOfHealth != 0xFFFF && info.stateOfHealth != 0);
+    info.chargingRecKnown  = (info.chargingVoltage_mV != 0 && info.chargingVoltage_mV != 0xFFFF);
+    info.dasMacKnown       = (info.chipType != 0);
+
+    // hasPF is "true if we KNOW there's a PF". If status reads NACKed, hasPF
+    // stays false but pfStatusKnown=false signals to UI that we don't actually
+    // know -- so UI can show "?" instead of "clean".
+    info.hasPF = (info.pfStatusKnown && info.pfStatus != 0) ||
+                 (info.djiPF2Known   && info.djiPF2   != 0);
+
+    // Pack-type detection (run after all reads populated)
+    info.cellsSynthesised  = detectSynthesisedCells(info);
+    info.isLiHV            = detectLiHV(info);
+    info.isCustomCapacity  = detectCustomCapacity(info);
+    info.fwVariant         = detectFirmwareVariant(info);
+    info.mfrDateDecoded    = decodeMfrDate(info.manufactureDate);
+    info.fingerprint       = computeFingerprint(info);
+    info.bmsLockoutDetected = isUnsealLockedOut();
 
     return info;
 }
@@ -1050,4 +1075,229 @@ String DJIBattery::decodeManufacturingStatus(uint32_t ms) {
     if (ms & (1 << 9)) r += "SLEEP ";
     if (ms & (1 << 10)) r += "SHTDN ";
     return r.length() ? r : "(default)";
+}
+
+// =====================================================================
+// Pack identification helpers (added 2026-05-01)
+// =====================================================================
+
+String DJIBattery::decodeMfrDate(uint16_t raw) {
+    if (!raw || raw == 0xFFFF) return "?";
+    uint16_t year = ((raw >> 9) & 0x7F) + 1980;
+    uint8_t  month = (raw >> 5) & 0x0F;
+    uint8_t  day = raw & 0x1F;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return "?";
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%04u-%02u-%02u", year, month, day);
+    return String(buf);
+}
+
+String DJIBattery::computeFingerprint(const BatteryInfo &info) {
+    // 64-bit FNV-1a over (djiSerial + serial + mfrDate + fullCap + cycleCount).
+    // Distinguishes PTL clones that share SBS serial number.
+    uint64_t h = 0xcbf29ce484222325ULL;
+    auto mix = [&h](const uint8_t *p, size_t n) {
+        for (size_t i = 0; i < n; ++i) {
+            h ^= p[i];
+            h *= 0x100000001b3ULL;
+        }
+    };
+    if (info.djiSerial.length() > 0) {
+        mix(reinterpret_cast<const uint8_t*>(info.djiSerial.c_str()), info.djiSerial.length());
+    }
+    uint16_t s = info.serialNumber;       mix((uint8_t*)&s, 2);
+    uint16_t d = info.manufactureDate;    mix((uint8_t*)&d, 2);
+    uint16_t f = info.fullCapacity_mAh;   mix((uint8_t*)&f, 2);
+    uint16_t c = info.cycleCount;         mix((uint8_t*)&c, 2);
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%016llX", (unsigned long long)h);
+    return String(buf);
+}
+
+bool DJIBattery::detectSynthesisedCells(const BatteryInfo &info) {
+    // Newer PTL firmware (2024 batch) returns pack/N for every cell read while
+    // sealed. Detect by: all cells equal to within 2 mV AND sum within 2 mV
+    // of pack voltage. Real measurements always have some per-cell variance.
+    if (info.cellCount < 2) return false;
+    int n = info.cellCount > 4 ? 4 : info.cellCount;
+    uint16_t mn = info.cellVoltage[0], mx = info.cellVoltage[0];
+    uint32_t sum = 0;
+    for (int i = 0; i < n; ++i) {
+        uint16_t v = info.cellVoltage[i];
+        if (v < 1000 || v > 5000) return false;  // out-of-range
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+        sum += v;
+    }
+    if ((mx - mn) > 2) return false;  // any spread = real cells
+    int32_t diff = (int32_t)sum - (int32_t)info.voltage_mV;
+    if (diff < 0) diff = -diff;
+    return diff < 4;  // sum matches pack within 4 mV -> synthesised
+}
+
+bool DJIBattery::detectLiHV(const BatteryInfo &info) {
+    // LiHV cells charge to 4.35-4.40V vs standard Li-ion 4.20V.
+    // chargingVoltage_mV / cellCount > 4300 -> LiHV
+    if (!info.chargingRecKnown || info.cellCount == 0) return false;
+    uint16_t per_cell = info.chargingVoltage_mV / info.cellCount;
+    return per_cell > 4300;
+}
+
+bool DJIBattery::detectCustomCapacity(const BatteryInfo &info) {
+    // Stock capacities for known DJI models (mAh):
+    //   Mavic 3       5000
+    //   Mavic Air 2   3500
+    //   Mini 2/3      2250
+    //   Spark         1480
+    // If designCap > 1.5x the stock for the detected model, it's custom.
+    if (info.designCapacity_mAh == 0 || info.designCapacity_mAh == 0xFFFF) return false;
+    uint16_t stock = 0;
+    switch (info.model) {
+        case MODEL_MAVIC_3:  stock = 5000; break;
+        case MODEL_MAVIC_4:  stock = 7388; break;  // Mavic 4 Pro stock
+        case MODEL_MAVIC_AIR2:
+        case MODEL_MAVIC_AIR2S: stock = 3500; break;
+        case MODEL_MINI_2:
+        case MODEL_MINI_3:   stock = 2250; break;
+        case MODEL_SPARK:    stock = 1480; break;
+        case MODEL_MAVIC_PRO:
+        case MODEL_MAVIC_AIR:stock = 3830; break;
+        default: return false;
+    }
+    return info.designCapacity_mAh > (stock * 3) / 2;
+}
+
+BatteryInfo::FirmwareVariant DJIBattery::detectFirmwareVariant(const BatteryInfo &info) {
+    if (!info.connected || info.deviceType == DEV_NONE) return BatteryInfo::FW_VARIANT_UNKNOWN;
+    // Generic SBS pack -> not a DJI variant
+    if (info.deviceType == DEV_GENERIC_SBS) return BatteryInfo::FW_VARIANT_UNKNOWN;
+
+    // PTL_NEW (2024 batch): synthesised cells AND ChipType MAC works
+    if (info.cellsSynthesised && info.dasMacKnown) return BatteryInfo::FW_VARIANT_PTL_NEW;
+    // PTL_OLD (2021/2025 batch): real cells AND ChipType NACK
+    if (!info.cellsSynthesised && !info.dasMacKnown) return BatteryInfo::FW_VARIANT_PTL_OLD;
+    // Mixed (genuine DJI?): real cells AND MAC works
+    if (!info.cellsSynthesised && info.dasMacKnown)  return BatteryInfo::FW_VARIANT_GENUINE_DJI;
+    return BatteryInfo::FW_VARIANT_UNKNOWN;
+}
+
+// =====================================================================
+// Unseal lockout protection (added 2026-05-01 from Stage-1 testing)
+// =====================================================================
+// BQ40Z80 enters cooldown after 5 failed unseal attempts in 60 s. Hammering
+// the BMS may also trigger a permanent block. We keep timestamps of the
+// last 8 attempts and refuse further attempts at >4 within 60 s.
+
+static constexpr int  UNSEAL_HISTORY = 8;
+static uint32_t       s_unseal_attempts[UNSEAL_HISTORY] = {0};
+static int            s_unseal_idx = 0;
+static int            s_unseal_failures_in_window = 0;
+
+bool DJIBattery::isUnsealLockedOut() {
+    return unsealCooldownRemainingMs() > 0;
+}
+
+uint32_t DJIBattery::unsealCooldownRemainingMs() {
+    uint32_t now = millis();
+    int recent_failures = 0;
+    uint32_t oldest_in_window = 0;
+    for (int i = 0; i < UNSEAL_HISTORY; ++i) {
+        uint32_t t = s_unseal_attempts[i];
+        if (t == 0) continue;
+        if ((now - t) < 60000) {
+            recent_failures++;
+            if (oldest_in_window == 0 || t < oldest_in_window) oldest_in_window = t;
+        }
+    }
+    if (recent_failures >= 4) {
+        // Cooldown for 35 s from oldest attempt in window
+        uint32_t expire = oldest_in_window + 35000;
+        if (now < expire) return expire - now;
+    }
+    return 0;
+}
+
+void DJIBattery::recordUnsealAttempt(bool ok) {
+    if (!ok) {
+        s_unseal_attempts[s_unseal_idx] = millis();
+        s_unseal_idx = (s_unseal_idx + 1) % UNSEAL_HISTORY;
+        s_unseal_failures_in_window++;
+    } else {
+        // Successful unseal -- clear the history
+        clearUnsealHistory();
+    }
+}
+
+void DJIBattery::clearUnsealHistory() {
+    for (int i = 0; i < UNSEAL_HISTORY; ++i) s_unseal_attempts[i] = 0;
+    s_unseal_idx = 0;
+    s_unseal_failures_in_window = 0;
+}
+
+// =====================================================================
+// Bulk key-trial (try a catalog of known unseal keys with rate-limit)
+// =====================================================================
+struct CatalogKey {
+    uint16_t w1;
+    uint16_t w2;
+    const char *desc;
+};
+static const CatalogKey UNSEAL_CATALOG[] = {
+    // Order: most-likely-to-work first
+    {0x7EE0, 0xCCDF, "RUS_MAV / commercial-tool Mavic 3"},
+    {0xCCDF, 0x7EE0, "RUS_MAV reversed"},
+    {0xBF17, 0xE0BC, "FAS keys (rare match for unseal)"},
+    {0xE0BC, 0xBF17, "FAS reversed"},
+    {0x0414, 0x3672, "TI default (BQ30Z55 family)"},
+    {0x3672, 0x0414, "TI default reversed"},
+    {0x4DF6, 0x9F44, "DJI Battery Killer"},
+    {0x9F44, 0x4DF6, "DJI BK reversed"},
+    // Add more as discovered
+};
+static constexpr int UNSEAL_CATALOG_LEN = sizeof(UNSEAL_CATALOG) / sizeof(UNSEAL_CATALOG[0]);
+
+DJIBattery::KeyTrialResult DJIBattery::tryAllKnownKeys() {
+    KeyTrialResult res = {};
+    res.attempts = 0;
+    if (isUnsealLockedOut()) {
+        res.lockedOut = true;
+        return res;
+    }
+    for (int i = 0; i < UNSEAL_CATALOG_LEN; ++i) {
+        if (isUnsealLockedOut()) {
+            res.lockedOut = true;
+            return res;
+        }
+        const CatalogKey &k = UNSEAL_CATALOG[i];
+        uint32_t combined = ((uint32_t)k.w2 << 16) | k.w1;
+        UnsealResult r = unsealWithKey(combined);
+        res.attempts++;
+        recordUnsealAttempt(r == UNSEAL_OK);
+        if (r == UNSEAL_OK) {
+            res.ok = true;
+            res.w1 = k.w1;
+            res.w2 = k.w2;
+            res.description = k.desc;
+            return res;
+        }
+        // Brief delay to give BMS time to reset its state machine
+        delay(150);
+    }
+    return res;  // ok=false, no key matched
+}
+
+// =====================================================================
+// Force-acquire Port B as I2C
+// =====================================================================
+bool DJIBattery::forceAcquirePortB() {
+    PortMode cur = PinPort::currentMode(PinPort::PORT_B);
+    if (cur != PORT_IDLE && cur != PORT_I2C) {
+        // Release whoever holds it
+        PinPort::release(PinPort::PORT_B);
+        delay(50);
+    }
+    if (!PinPort::acquire(PinPort::PORT_B, PORT_I2C, "battery-force")) return false;
+    SMBus::init(PinPort::sda_pin(PinPort::PORT_B),
+                PinPort::scl_pin(PinPort::PORT_B));
+    return true;
 }

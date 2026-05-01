@@ -100,8 +100,43 @@ struct BatteryInfo {
     // Detection
     BatteryModel model;
     bool sealed;                    // decoded from operationStatus SEC bits
-    bool hasPF;                     // PFStatus != 0 or PF2 != 0
+    bool hasPF;                     // PFStatus != 0 or PF2 != 0 (only true if KNOWN)
     bool supportedForService;       // unseal keys available for this model
+
+    // ── Read-validity flags (true = read returned valid data; false = NACK
+    //    sentinel 0xFFFFFFFF or 0xFFFF). Important for safety: code that
+    //    decides "battery is clean" must check the *Known flag, not just
+    //    the value, because a NACKed read returns 0xFFFFFFFF which used to
+    //    be treated as "no PF" by old code.  Exposed in snapshot JSON as
+    //    `pfStatusKnown`, `safetyStatusKnown`, etc. ──
+    bool pfStatusKnown;
+    bool safetyStatusKnown;
+    bool opStatusKnown;
+    bool mfgStatusKnown;
+    bool djiPF2Known;
+    bool sohKnown;                  // stateOfHealth read OK
+    bool chargingRecKnown;          // chargingVoltage/Current populated
+    bool dasMacKnown;               // ChipType MAC read OK (sealed-NACK on 2021/2025 batches)
+
+    // ── Derived state / pack-type detection (added 2026-05-01 from real-pack
+    //    testing with PTL clones).  See research/dji_battery_tool/TEST_LOG.md ──
+    enum FirmwareVariant {
+        FW_VARIANT_UNKNOWN,
+        FW_VARIANT_PTL_OLD,         // 2021/2025 batches: sealed-NACK MAC reads, real cells
+        FW_VARIANT_PTL_NEW,         // 2024 batch: MAC reads work, synthesised cells
+        FW_VARIANT_GENUINE_DJI,     // unconfirmed -- need a real DJI pack
+    };
+    FirmwareVariant fwVariant;
+
+    bool isLiHV;                    // chargingV / cellCount > 4.30 V
+    bool isCustomCapacity;          // designCap > 1.5x stock for model
+    bool cellsSynthesised;          // all cells equal AND sum matches pack within 2 mV
+
+    String mfrDateDecoded;          // "YYYY-MM-DD" from packed SBS reg 0x1B
+    String fingerprint;             // 64-bit hex hash of (serial, mfrDate, fullCap, cycles)
+                                    // -- distinguishes identical-serial PTL packs
+
+    bool bmsLockoutDetected;        // True if recent unseal attempts triggered cooldown
 };
 
 // =====================================================================
@@ -247,6 +282,63 @@ bool flashFirmwareFromBuffer(const uint8_t *patch_data, uint32_t patch_size,
 
 bool seal();
 bool softReset();
+
+// ============= Pack identification helpers =============
+
+// SBS Manufacture Date (reg 0x1B): 16-bit packed (year - 1980) << 9 | month << 5 | day.
+// Returns "YYYY-MM-DD" or "?" if zero/invalid.
+String decodeMfrDate(uint16_t raw);
+
+// 64-bit FNV-1a fingerprint of (djiSerial, serialNumber, manufactureDate,
+// fullCapacity_mAh, cycleCount). Distinguishes PTL clones that share the
+// same SBS serial number (= 58 across all 2021-09-25 packs).
+// Returns 16-char hex string.
+String computeFingerprint(const BatteryInfo &info);
+
+// Detect that the BMS is reporting per-cell voltages as pack/N (synthesised),
+// not real measurements. Triggered when all cells are within 2 mV of each
+// other AND sum is within 2 mV of pack voltage. Newer PTL firmware does this
+// while sealed.
+bool detectSynthesisedCells(const BatteryInfo &info);
+
+// Detect LiHV chemistry from chargingVoltage_mV / cellCount > 4.30 V.
+bool detectLiHV(const BatteryInfo &info);
+
+// Detect custom-capacity pack (> 1.5x stock model capacity).
+bool detectCustomCapacity(const BatteryInfo &info);
+
+// Classify firmware variant by which fields read successfully.
+BatteryInfo::FirmwareVariant detectFirmwareVariant(const BatteryInfo &info);
+
+// ============= BMS unseal lockout protection =============
+// BQ40Z80 has a built-in lockout: 5 failed unseal attempts in 60 s ->
+// BMS goes into cooldown (~30 s). Hammering the BMS with bad keys will
+// trigger this. We track timestamps of recent attempts in static state
+// and refuse to attempt more than 4 in any 60 s window.
+
+bool isUnsealLockedOut();           // true if we should refuse next attempt
+uint32_t unsealCooldownRemainingMs();// ms until safe to retry, 0 if safe now
+void recordUnsealAttempt(bool ok);  // call after each unseal attempt
+void clearUnsealHistory();          // for testing
+
+// ============= Bulk key-trial =============
+// Iterates a catalog of known unseal key pairs, trying each with rate-limit.
+// On success returns the key that worked; on full failure returns 0,0.
+struct KeyTrialResult {
+    bool ok;
+    uint16_t w1;
+    uint16_t w2;
+    const char *description;
+    int attempts;
+    bool lockedOut;
+};
+KeyTrialResult tryAllKnownKeys();
+
+// ============= Port management =============
+// Force-acquire Port B as I2C, releasing whoever holds it. Returns true on
+// success. Used by /api/batt/acquire so external clients don't have to know
+// about /api/port/release first.
+bool forceAcquirePortB();
 
 // ============= Status decoding =============
 String decodeOperationStatus(uint32_t st);

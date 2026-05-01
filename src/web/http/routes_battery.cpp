@@ -319,13 +319,134 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
         d["safetyStatus"]   = String("0x") + String(info.safetyStatus, HEX);
         d["pfStatus"]       = String("0x") + String(info.pfStatus, HEX);
         d["mfgStatus"]      = String("0x") + String(info.manufacturingStatus, HEX);
+        // Status decoders (added 2026-05-01 -- TEST_LOG note #2)
+        d["opStatusDecoded"]     = info.opStatusKnown
+            ? DJIBattery::decodeOperationStatus(info.operationStatus) : "?";
+        d["pfStatusDecoded"]     = info.pfStatusKnown
+            ? DJIBattery::decodePFStatus(info.pfStatus)              : "?";
+        d["safetyStatusDecoded"] = info.safetyStatusKnown
+            ? DJIBattery::decodeSafetyStatus(info.safetyStatus)      : "?";
+        d["mfgStatusDecoded"]    = info.mfgStatusKnown
+            ? DJIBattery::decodeManufacturingStatus(info.manufacturingStatus) : "?";
+        // Read-validity flags -- distinguish "really 0" from "NACK sentinel"
+        d["pfStatusKnown"]      = info.pfStatusKnown;
+        d["safetyStatusKnown"]  = info.safetyStatusKnown;
+        d["opStatusKnown"]      = info.opStatusKnown;
+        d["mfgStatusKnown"]     = info.mfgStatusKnown;
+        d["djiPF2Known"]        = info.djiPF2Known;
+        d["sohKnown"]           = info.sohKnown;
+        d["chargingRecKnown"]   = info.chargingRecKnown;
+        d["dasMacKnown"]        = info.dasMacKnown;
+        // Pack-type detection (TEST_LOG notes #9, #10, #20, #21)
+        const char *fwVarStr = "unknown";
+        switch (info.fwVariant) {
+            case BatteryInfo::FW_VARIANT_PTL_OLD:     fwVarStr = "PTL-OLD (2021/2025 batch)"; break;
+            case BatteryInfo::FW_VARIANT_PTL_NEW:     fwVarStr = "PTL-NEW (2024 batch)"; break;
+            case BatteryInfo::FW_VARIANT_GENUINE_DJI: fwVarStr = "Genuine DJI (unconfirmed)"; break;
+            default: break;
+        }
+        d["fwVariant"]          = fwVarStr;
+        d["isLiHV"]             = info.isLiHV;
+        d["isCustomCapacity"]   = info.isCustomCapacity;
+        d["cellsSynthesised"]   = info.cellsSynthesised;
+        // Pack identification (TEST_LOG notes #11, #12, #13)
+        d["mfrDateDecoded"]     = info.mfrDateDecoded;
+        d["fingerprint"]        = info.fingerprint;
+        // Lockout state (TEST_LOG note #26)
+        d["bmsLockoutDetected"] = info.bmsLockoutDetected;
+        d["unsealCooldownMs"]   = DJIBattery::unsealCooldownRemainingMs();
         // DJI-specific
         if (info.deviceType == DEV_DJI_BATTERY) {
-            if (info.djiSerial.length() > 0) d["djiSerialNumber"] = info.djiSerial;
-            d["djiPF2"] = String("0x") + String(info.djiPF2, HEX);
+            // Always include djiSerial -- empty string if pack didn't return one
+            d["djiSerial"]      = info.djiSerial;
+            d["djiPF2"]         = String("0x") + String(info.djiPF2, HEX);
         }
+        // Long-name aliases (TEST_LOG note #1) -- legacy clients
+        d["manufacturerName"]   = info.manufacturerName;
+        d["firmwareVersion"]    = info.firmwareVersion;
+        d["hardwareVersion"]    = info.hardwareVersion;
+        d["stateOfCharge"]      = info.stateOfCharge;
+        d["fullCapacity_mAh"]   = info.fullCapacity_mAh;
+        d["designCapacity_mAh"] = info.designCapacity_mAh;
+        d["remainCapacity_mAh"] = info.remainCapacity_mAh;
+        d["operationStatus"]    = String("0x") + String(info.operationStatus, HEX);
+        d["manufacturingStatus"]= String("0x") + String(info.manufacturingStatus, HEX);
         String out; serializeJson(d, out);
         req->send(200, "application/json", out);
+    });
+
+    // ===== New service endpoints (added 2026-05-01) =====
+
+    // Force-acquire Port B as I2C, releasing whoever holds it. Use this
+    // before /api/batt/snapshot if Port B might be in UART/PWM/GPIO mode.
+    s_server->on("/api/batt/acquire", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool ok = DJIBattery::forceAcquirePortB();
+        JsonDocument d;
+        d["ok"] = ok;
+        d["connected"] = DJIBattery::isConnected();
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+
+    // Try every key in our internal catalog. Honors the rate-limit and
+    // returns lockout state. On success, reports which key worked.
+    s_server->on("/api/batt/mavic3/try_keys", HTTP_POST, [](AsyncWebServerRequest *req) {
+        DJIBattery::KeyTrialResult r = DJIBattery::tryAllKnownKeys();
+        JsonDocument d;
+        d["ok"]         = r.ok;
+        d["attempts"]   = r.attempts;
+        d["lockedOut"]  = r.lockedOut;
+        d["cooldownMs"] = DJIBattery::unsealCooldownRemainingMs();
+        if (r.ok) {
+            d["w1"]         = String("0x") + String(r.w1, HEX);
+            d["w2"]         = String("0x") + String(r.w2, HEX);
+            d["description"]= r.description;
+        }
+        // Read SEC bits to confirm transition
+        uint32_t op = DJIBattery::readOperationStatus();
+        uint8_t sec = (op >> 8) & 0x03;
+        d["operationStatus"] = String("0x") + String(op, HEX);
+        d["sec"]    = sec;
+        d["state"]  = sec == 0x00 ? "FullAccess" : sec == 0x02 ? "Unsealed" : "Sealed";
+        String out; serializeJson(d, out);
+        req->send(r.ok ? 200 : 500, "application/json", out);
+    });
+
+    // HMAC-SHA1 challenge-response unseal. Caller provides 32-byte key as
+    // ?key=64-hex-chars. The implementation requests a 20-byte challenge from
+    // the BMS, computes HMAC-SHA1(key, challenge), writes the digest, and
+    // checks SEC bits.
+    s_server->on("/api/batt/mavic3/unseal_hmac", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("key")) {
+            req->send(400, "text/plain", "need ?key=<64-hex-char-32-byte-key>");
+            return;
+        }
+        String hex = req->getParam("key")->value();
+        if (hex.length() != 64) {
+            req->send(400, "text/plain", "key must be exactly 64 hex chars (32 bytes)");
+            return;
+        }
+        uint8_t key[32];
+        for (int i = 0; i < 32; ++i) {
+            char buf[3] = { hex.charAt(i*2), hex.charAt(i*2+1), 0 };
+            key[i] = (uint8_t)strtoul(buf, nullptr, 16);
+        }
+        uint8_t challenge[20] = {0};
+        UnsealResult r = DJIBattery::unsealHmac(key, challenge);
+        DJIBattery::recordUnsealAttempt(r == UNSEAL_OK);
+        JsonDocument d;
+        d["result"] = r == UNSEAL_OK ? "OK" : r == UNSEAL_REJECTED_SEALED ? "still sealed" :
+                      r == UNSEAL_NO_RESPONSE ? "no i2c" : "unsupported";
+        // Show the challenge so user can compute HMAC offline if needed
+        String chHex; for (int i = 0; i < 20; ++i) {
+            char b[3]; snprintf(b, 3, "%02X", challenge[i]); chHex += b;
+        }
+        d["challenge"] = chHex;
+        uint32_t op = DJIBattery::readOperationStatus();
+        d["operationStatus"] = String("0x") + String(op, HEX);
+        d["sec"] = (op >> 8) & 0x03;
+        String out; serializeJson(d, out);
+        req->send(r == UNSEAL_OK ? 200 : 500, "application/json", out);
     });
 
     // ===== Data Flash editor (must be before /api/batt catch-all) =====
