@@ -25,6 +25,7 @@
 #include "safety.h"
 #include "ui/board_app.h"
 #include "core/pin_port.h"
+#include "core/usb_mode.h"
 
 namespace screens {
 
@@ -221,6 +222,169 @@ static void buildDisplaySection(lv_obj_t *parent) {
     lv_obj_set_style_text_color(rl, lv_color_white(), 0);
     lv_obj_set_style_text_font(rl, &lv_font_montserrat_14, 0);
     lv_obj_center(rl);
+}
+
+// ---- USB descriptor mode section ------------------------------------------
+//
+// USB descriptor is fixed at enumeration time, so changing modes
+// requires a reboot. The card shows what's running now (active) +
+// what's saved as preferred (next boot). Tapping a mode pops a small
+// confirm modal -- on Reboot the new mode is saved to NVS and
+// esp_restart() fires.
+
+static lv_obj_t *s_usb_active_lbl    = nullptr;
+static lv_obj_t *s_usb_pref_lbl      = nullptr;
+static lv_obj_t *s_usb_btns[3]       = { nullptr, nullptr, nullptr };
+static lv_obj_t *s_usb_confirm_modal = nullptr;
+static UsbDescriptorMode s_usb_pending = USB_MODE_CDC;
+
+static const UsbDescriptorMode USB_MODES[3] = {
+    USB_MODE_CDC, USB_MODE_USB2TTL, USB_MODE_USB2I2C,
+};
+static const char *USB_LABELS[3] = { "CDC", "USB2TTL", "USB2I2C" };
+
+static void usbRefresh() {
+    if (!s_usb_active_lbl) return;
+    UsbDescriptorMode active = UsbMode::active();
+    UsbDescriptorMode pref   = UsbMode::load();
+    lv_label_set_text(s_usb_active_lbl, UsbMode::name(active));
+    lv_label_set_text(s_usb_pref_lbl,   UsbMode::name(pref));
+    // Highlight the button matching the *preferred* (next-boot) mode.
+    for (int i = 0; i < 3; i++) {
+        if (!s_usb_btns[i]) continue;
+        bool active_btn = (USB_MODES[i] == pref);
+        lv_obj_set_style_bg_color(s_usb_btns[i],
+            lv_color_hex(active_btn ? 0x06A77D : 0x394150), LV_PART_MAIN);
+    }
+}
+
+static void usbConfirmClose() {
+    if (s_usb_confirm_modal) {
+        lv_obj_delete(s_usb_confirm_modal);
+        s_usb_confirm_modal = nullptr;
+    }
+}
+
+static void usbConfirmReboot(lv_event_t * /*e*/) {
+    Safety::logf("[settings] USB mode -> %s, rebooting",
+                 UsbMode::name(s_usb_pending));
+    UsbMode::switchAndReboot(s_usb_pending);   // saves NVS + esp_restart
+}
+
+static void usbConfirmCancel(lv_event_t * /*e*/) {
+    usbConfirmClose();
+}
+
+static void usbModeClicked(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= 3) return;
+    UsbDescriptorMode want = USB_MODES[idx];
+
+    if (want == UsbMode::load() && want == UsbMode::active()) {
+        // Already there both at runtime AND in NVS, nothing to do.
+        return;
+    }
+
+    s_usb_pending = want;
+    if (s_usb_confirm_modal) return;   // already open
+
+    s_usb_confirm_modal = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_usb_confirm_modal, 320, 480 - 24);
+    lv_obj_set_pos(s_usb_confirm_modal, 0, 24);
+    lv_obj_set_style_bg_color(s_usb_confirm_modal, lv_color_hex(0x101418), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_usb_confirm_modal, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_usb_confirm_modal, 16, LV_PART_MAIN);
+    lv_obj_set_layout(s_usb_confirm_modal, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_usb_confirm_modal, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(s_usb_confirm_modal, 12, LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(s_usb_confirm_modal);
+    lv_label_set_text(title, "Switch USB mode");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xE6A23C), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+
+    lv_obj_t *msg = lv_label_create(s_usb_confirm_modal);
+    lv_obj_set_width(msg, lv_pct(100));
+    lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(msg, lv_color_hex(0xE0E0E0), 0);
+    lv_obj_set_style_text_font(msg, &lv_font_montserrat_14, 0);
+    char buf[180];
+    snprintf(buf, sizeof(buf),
+             "USB descriptor is fixed at enumeration. To switch from %s "
+             "to %s the board must reboot. WiFi will reconnect in ~5 s. "
+             "Continue?",
+             UsbMode::name(UsbMode::active()), UsbMode::name(want));
+    lv_label_set_text(msg, buf);
+
+    lv_obj_t *spacer = lv_obj_create(s_usb_confirm_modal);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_flex_grow(spacer, 1);
+    lv_obj_set_size(spacer, 0, 1);
+
+    lv_obj_t *btn_row = lv_obj_create(s_usb_confirm_modal);
+    lv_obj_remove_style_all(btn_row);
+    lv_obj_set_width(btn_row, lv_pct(100));
+    lv_obj_set_height(btn_row, 56);
+    lv_obj_set_layout(btn_row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(btn_row, 8, LV_PART_MAIN);
+
+    lv_obj_t *cancel = lv_button_create(btn_row);
+    lv_obj_set_flex_grow(cancel, 1);
+    lv_obj_set_height(cancel, 52);
+    lv_obj_set_style_bg_color(cancel, lv_color_hex(0x394150), LV_PART_MAIN);
+    lv_obj_set_style_radius(cancel, 8, LV_PART_MAIN);
+    lv_obj_add_event_cb(cancel, usbConfirmCancel, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, "Cancel");
+    lv_obj_set_style_text_color(cl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(cl, &lv_font_montserrat_18, 0);
+    lv_obj_center(cl);
+
+    lv_obj_t *go = lv_button_create(btn_row);
+    lv_obj_set_flex_grow(go, 1);
+    lv_obj_set_height(go, 52);
+    lv_obj_set_style_bg_color(go, lv_color_hex(0xE63946), LV_PART_MAIN);   // red -- destructive (reboot)
+    lv_obj_set_style_radius(go, 8, LV_PART_MAIN);
+    lv_obj_add_event_cb(go, usbConfirmReboot, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *gl = lv_label_create(go);
+    lv_label_set_text(gl, "Reboot");
+    lv_obj_set_style_text_color(gl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(gl, &lv_font_montserrat_18, 0);
+    lv_obj_center(gl);
+}
+
+static void buildUsbSection(lv_obj_t *parent) {
+    lv_obj_t *card = makeCard(parent, "USB");
+
+    s_usb_active_lbl = makeKvRow(card, "Active");
+    s_usb_pref_lbl   = makeKvRow(card, "Preferred");
+
+    // Mode buttons in a single row (3 modes).
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, 44);
+    lv_obj_set_layout(row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(row, 4, LV_PART_MAIN);
+
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *b = lv_button_create(row);
+        lv_obj_set_flex_grow(b, 1);
+        lv_obj_set_height(b, 40);
+        lv_obj_set_style_radius(b, 6, LV_PART_MAIN);
+        lv_obj_add_event_cb(b, usbModeClicked, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        lv_obj_t *lbl = lv_label_create(b);
+        lv_label_set_text(lbl, USB_LABELS[i]);
+        lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_center(lbl);
+        s_usb_btns[i] = b;
+    }
+
+    usbRefresh();
 }
 
 // ---- WiFi section ---------------------------------------------------------
@@ -729,6 +893,10 @@ static void settingsCleanup(lv_event_t * /*e*/) {
     // Port B card statics.
     s_portb_state_lbl = s_portb_pref_lbl = s_portb_pins_lbl = nullptr;
     for (int i = 0; i < 5; i++) s_portb_btns[i] = nullptr;
+    // USB card statics.
+    s_usb_active_lbl = s_usb_pref_lbl = nullptr;
+    for (int i = 0; i < 3; i++) s_usb_btns[i] = nullptr;
+    s_usb_confirm_modal = nullptr;   // deleted with the panel
 }
 
 void buildSettings(lv_obj_t *panel) {
@@ -741,6 +909,7 @@ void buildSettings(lv_obj_t *panel) {
 
     buildDisplaySection(panel);
     buildPortBSection(panel);
+    buildUsbSection(panel);
     buildWifiSection(panel);
     buildAboutSection(panel);
 
