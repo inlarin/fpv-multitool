@@ -485,12 +485,12 @@ static void calibrateClicked(lv_event_t * /*e*/) {
 }
 
 static void blackboxClicked(lv_event_t * /*e*/) {
-    bool a = DJIBattery::clearBlackBox();
+    // BlackBox clear no longer supported (MAC 0x0030 = SEAL on PTL packs,
+    // not BB-clear -- TEST_LOG note #29). Now does only LifetimeData reset.
     bool b = DJIBattery::resetLifetimeData();
-    char buf[64];
-    snprintf(buf, sizeof(buf), "BB clear=%s, Lifetime reset=%s",
-             a ? "OK" : "FAIL", b ? "OK" : "FAIL");
-    serviceShow(buf, (a && b) ? 0x06A77D : 0xE6A23C);
+    serviceShow(b ? "Lifetime reset OK (BB-clear unavailable)"
+                  : "Lifetime reset FAIL",
+                b ? 0x06A77D : 0xE63946);
 }
 
 static lv_obj_t *makeSvcButton(lv_obj_t *parent, const char *label,

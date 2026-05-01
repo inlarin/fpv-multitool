@@ -128,11 +128,17 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
         req->send(ok ? 200 : 500, "application/json", out);
     });
     s_server->on("/api/batt/mavic3/clear_blackbox", HTTP_POST, [](AsyncWebServerRequest *req) {
-        bool a = DJIBattery::clearBlackBox();
+        // ⚠ TEST_LOG note #29: clearBlackBox() is now no-op (MAC 0x0030 was
+        // actually SEAL, not BB-clear). This endpoint now does ONLY
+        // LifetimeData reset (MAC 0x0060). Kept the URL for backward compat.
         bool b = DJIBattery::resetLifetimeData();
-        JsonDocument d; d["blackBoxOk"] = a; d["lifetimeOk"] = b; d["ok"] = a && b;
+        JsonDocument d;
+        d["blackBoxOk"] = false;     // explicitly false -- BB-clear not supported
+        d["blackBoxNote"] = "MAC 0x0030 is SEAL on PTL 2024; no BQ40Z80 MAC clears event log";
+        d["lifetimeOk"] = b;
+        d["ok"] = b;                 // success if at least lifetime reset worked
         String out; serializeJson(d, out);
-        req->send((a && b) ? 200 : 500, "application/json", out);
+        req->send(b ? 200 : 500, "application/json", out);
     });
     s_server->on("/api/batt/mavic3/capacity", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (!req->hasParam("mah")) { req->send(400, "text/plain", "need ?mah=NNNN"); return; }

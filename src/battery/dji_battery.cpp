@@ -269,9 +269,16 @@ BatteryDeviceType DJIBattery::detectDeviceType() {
     if (!isConnected()) return DEV_NONE;
     String mfr = SMBus::readString(BATT_ADDR, REG_MANUFACTURER_NAME);
     mfr.toUpperCase();
-    if (mfr.indexOf("DJI") >= 0 || mfr.indexOf("TEXAS") >= 0 || mfr.length() == 0) {
-        // "Texas Instruments" is used by TI BQ gauge ICs inside DJI batteries.
-        // Empty name also likely DJI (some sealed chips return empty).
+    // Recognised DJI / DJI-clone manufacturer strings:
+    //   - "DJI"          -- genuine DJI packs
+    //   - "TEXAS ..."    -- TI BQ gauge ICs report this when sealed
+    //   - "PTL"          -- Pacific Tech Logistics, major DJI clone OEM
+    //                      (TEST_LOG note #28: 5/6 of our test packs are PTL)
+    //   - "PACIFIC TECH" -- alt PTL string
+    //   - empty          -- some sealed chips return nothing; assume DJI
+    if (mfr.indexOf("DJI") >= 0 || mfr.indexOf("TEXAS") >= 0 ||
+        mfr.indexOf("PTL") >= 0 || mfr.indexOf("PACIFIC TECH") >= 0 ||
+        mfr.length() == 0) {
         return DEV_DJI_BATTERY;
     }
     return DEV_GENERIC_SBS;
@@ -692,8 +699,23 @@ bool DJIBattery::unlockForServiceOps() {
 }
 
 bool DJIBattery::clearBlackBox() {
-    // MAC subcommand 0x0030 via ManufacturerBlockAccess
-    return SMBus::macCommand(BATT_ADDR, 0x0030);
+    // ⚠ DEPRECATED / NO-OP since 2026-05-01 (TEST_LOG note #29).
+    //
+    // Earlier commit thought MAC 0x0030 was Black Box clear (based on its
+    // appearance in the commercial-tool's PF clear ritual). Live test on
+    // PTL 2024 batch (Battery #2) revealed MAC 0x0030 is actually SEAL --
+    // sending it AT MID-OPERATION re-seals the pack and aborts the
+    // remaining steps.
+    //
+    // BQ40Z80 has no dedicated Black Box clear MAC subcommand. The on-chip
+    // event log gets cleared as part of MAC 0x0029 PFEnable (which we
+    // already send in clearPFProper).
+    //
+    // This function now does nothing -- kept for API compatibility so
+    // existing callers don't break. Will be removed in a future commit
+    // once we confirm no clients rely on it.
+    Serial.println("[Battery] clearBlackBox() is now a no-op -- BQ40Z80 has no dedicated BB-clear MAC");
+    return true;
 }
 
 bool DJIBattery::resetLifetimeData() {
@@ -767,11 +789,11 @@ bool DJIBattery::clearPFProper() {
     SMBus::macCommand(BATT_ADDR, 0x0000);
     delay(50);
 
-    // 13. Black Box clear
-    clearBlackBox();
-    delay(50);
+    // 13. (REMOVED -- was "Black Box clear" via MAC 0x0030, but that's actually
+    //     SEAL on PTL 2024 firmware. The on-chip event log is cleared by the
+    //     PFEnable in step 9 above.)
 
-    // 14. LifetimeData reset
+    // 14. LifetimeData reset (MAC 0x0060 + 4-byte zero arg)
     resetLifetimeData();
     delay(500);
 
@@ -800,10 +822,8 @@ bool DJIBattery::resetCycles() {
     SMBus::macCommand(BATT_ADDR, 0x9013);
     delay(500);
 
-    // Also clear the Black Box so accumulated discharge events don't keep
-    // pinning the wear estimate above zero.
-    clearBlackBox();
-    delay(200);
+    // (Black Box clear was removed -- MAC 0x0030 is actually SEAL,
+    //  not BB-clear, per TEST_LOG note #29.)
 
     // Soft reset for the BMS to re-read its parameter store
     SMBus::macCommand(BATT_ADDR, MAC_DEVICE_RESET);
@@ -1241,20 +1261,33 @@ struct CatalogKey {
     uint16_t w1;
     uint16_t w2;
     const char *desc;
+    // Bitmask of fwVariants this key is KNOWN to work on. 0 = unknown, try always.
+    // Bit 0 = PTL_OLD (2021/2025), Bit 1 = PTL_NEW (2024), Bit 2 = GENUINE_DJI
+    uint8_t known_variants;
 };
 static const CatalogKey UNSEAL_CATALOG[] = {
-    // Order: most-likely-to-work first
-    {0x7EE0, 0xCCDF, "RUS_MAV / commercial-tool Mavic 3"},
-    {0xCCDF, 0x7EE0, "RUS_MAV reversed"},
-    {0xBF17, 0xE0BC, "FAS keys (rare match for unseal)"},
-    {0xE0BC, 0xBF17, "FAS reversed"},
-    {0x0414, 0x3672, "TI default (BQ30Z55 family)"},
-    {0x3672, 0x0414, "TI default reversed"},
-    {0x4DF6, 0x9F44, "DJI Battery Killer"},
-    {0x9F44, 0x4DF6, "DJI BK reversed"},
-    // Add more as discovered
+    // Order: most-likely-to-work first. known_variants flags from real-pack
+    // testing (TEST_LOG / observation history).
+    {0x7EE0, 0xCCDF, "RUS_MAV / commercial-tool Mavic 3", 0x02},  // confirmed PTL_NEW
+    {0xCCDF, 0x7EE0, "RUS_MAV reversed",                  0x00},
+    {0xBF17, 0xE0BC, "FAS keys (rare match for unseal)",  0x00},
+    {0xE0BC, 0xBF17, "FAS reversed",                      0x00},
+    {0x0414, 0x3672, "TI default (BQ30Z55 family)",       0x00},
+    {0x3672, 0x0414, "TI default reversed",               0x00},
+    {0x4DF6, 0x9F44, "DJI Battery Killer",                0x00},
+    {0x9F44, 0x4DF6, "DJI BK reversed",                   0x00},
+    // Add more as discovered (PTL_OLD keys still pending discovery)
 };
 static constexpr int UNSEAL_CATALOG_LEN = sizeof(UNSEAL_CATALOG) / sizeof(UNSEAL_CATALOG[0]);
+
+static uint8_t variantBit(BatteryInfo::FirmwareVariant v) {
+    switch (v) {
+        case BatteryInfo::FW_VARIANT_PTL_OLD:     return 0x01;
+        case BatteryInfo::FW_VARIANT_PTL_NEW:     return 0x02;
+        case BatteryInfo::FW_VARIANT_GENUINE_DJI: return 0x04;
+        default: return 0;
+    }
+}
 
 DJIBattery::KeyTrialResult DJIBattery::tryAllKnownKeys() {
     KeyTrialResult res = {};
@@ -1263,26 +1296,70 @@ DJIBattery::KeyTrialResult DJIBattery::tryAllKnownKeys() {
         res.lockedOut = true;
         return res;
     }
-    for (int i = 0; i < UNSEAL_CATALOG_LEN; ++i) {
+
+    // Detect the pack's firmware variant to prioritize matching keys first
+    // (TEST_LOG note #30: PTL 2021 and 2024 use different keys -- avoid wasting
+    // attempts on known-wrong keys).
+    BatteryInfo info = readAll();
+    uint8_t myBit = variantBit(info.fwVariant);
+
+    // Two-pass try: first the keys flagged for this variant, then the rest.
+    // Skip already-tried keys via a bitmap.
+    bool tried[UNSEAL_CATALOG_LEN] = {0};
+
+    auto trySlot = [&](int i) -> bool {
+        if (tried[i]) return false;
         if (isUnsealLockedOut()) {
             res.lockedOut = true;
-            return res;
+            return true;  // bail out of caller loops
         }
         const CatalogKey &k = UNSEAL_CATALOG[i];
         uint32_t combined = ((uint32_t)k.w2 << 16) | k.w1;
         UnsealResult r = unsealWithKey(combined);
         res.attempts++;
+        tried[i] = true;
         recordUnsealAttempt(r == UNSEAL_OK);
         if (r == UNSEAL_OK) {
             res.ok = true;
             res.w1 = k.w1;
             res.w2 = k.w2;
             res.description = k.desc;
-            return res;
+            return true;
         }
-        // Brief delay to give BMS time to reset its state machine
         delay(150);
+        return false;
+    };
+
+    // Pass 1: ALL keys with any known-variant flag set (highest priority).
+    // We try every variant-tagged key first, regardless of which variant we
+    // currently think we're talking to -- variant detection is brittle (a
+    // single transient ChipType NACK flips PTL_NEW -> PTL_OLD), so risking
+    // a missed key trial because of variant misclassification is worse
+    // than spending 1 extra attempt. Variant-matched keys go FIRST within
+    // this pass.
+    auto tryFlagged = [&](bool only_my_variant) -> bool {
+        for (int i = 0; i < UNSEAL_CATALOG_LEN; ++i) {
+            if (UNSEAL_CATALOG[i].known_variants == 0) continue;
+            if (only_my_variant && myBit && !(UNSEAL_CATALOG[i].known_variants & myBit)) continue;
+            if (trySlot(i)) return true;
+        }
+        return false;
+    };
+
+    // Pass 1a: variant-matched + flagged (may match nothing if myBit==0)
+    if (myBit && tryFlagged(true)) return res;
+
+    // Pass 1b: ALL flagged keys (catches missed variants from misclassification)
+    if (tryFlagged(false)) return res;
+
+    // Pass 2: untagged keys (we don't know which variant they fit -- try
+    // anyway, may discover a new working key).
+    for (int i = 0; i < UNSEAL_CATALOG_LEN; ++i) {
+        if (UNSEAL_CATALOG[i].known_variants == 0) {
+            if (trySlot(i)) return res;
+        }
     }
+
     return res;  // ok=false, no key matched
 }
 
