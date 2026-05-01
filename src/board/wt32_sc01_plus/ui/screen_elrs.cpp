@@ -21,6 +21,7 @@
 #include "crsf/crsf_service.h"
 #include "crsf/crsf_config.h"
 #include "web/web_state.h"
+#include "port_modal.h"
 #include "safety.h"
 
 namespace screens {
@@ -136,6 +137,7 @@ static void makeChannelRow(lv_obj_t *parent, int idx) {
 // our static widget pointers. LVGL's internal timers MUST not be touched.
 static void elrsCleanup(lv_event_t * /*e*/) {
     if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
+    PortModal::close();
     s_state_lbl = s_rssi_lbl = s_lq_lbl = s_snr_lbl = nullptr;
     s_frames_lbl = s_rf_lbl = nullptr;
     s_start_btn = s_start_lbl = s_bind_btn = nullptr;
@@ -214,6 +216,22 @@ static void elrsTick(lv_timer_t * /*t*/) {
 
 // ---- Event handlers -------------------------------------------------------
 
+// Actual CRSF-start sequence -- runs once Port B is confirmed in
+// UART mode (synchronously if already UART, or after the user
+// accepts the PortModal switch prompt).
+static void elrsStartImpl() {
+    CRSFService::begin(&Serial1,
+                       PinPort::rx_pin(PinPort::PORT_B),
+                       PinPort::tx_pin(PinPort::PORT_B),
+                       420000, false);
+    CRSFConfig::init();
+    WebState::crsf.markStarted(false);
+    Safety::logf("[elrs] CRSF started (rx=%d tx=%d)",
+        PinPort::rx_pin(PinPort::PORT_B),
+        PinPort::tx_pin(PinPort::PORT_B));
+    elrsTick(nullptr);
+}
+
 static void startStopClicked(lv_event_t * /*e*/) {
     if (CRSFService::isRunning()) {
         CRSFService::end();
@@ -221,30 +239,11 @@ static void startStopClicked(lv_event_t * /*e*/) {
         WebState::crsf.markStopped();
         PinPort::release(PinPort::PORT_B);
         Safety::logf("[elrs] CRSF stopped");
-    } else {
-        if (!PinPort::acquire(PinPort::PORT_B, PORT_UART, "elrs_ui")) {
-            const char *mode  = PinPort::modeName(PinPort::currentMode(PinPort::PORT_B));
-            const char *owner = PinPort::currentOwner(PinPort::PORT_B);
-            Safety::logf("[elrs] Port B busy (mode=%s owner=%s)", mode, owner);
-            if (s_state_lbl) {
-                char buf[48];
-                snprintf(buf, sizeof(buf), "Port B busy: %s", mode);
-                lv_label_set_text(s_state_lbl, buf);
-                lv_obj_set_style_text_color(s_state_lbl, lv_color_hex(0xE63946), 0);
-            }
-            return;
-        }
-        CRSFService::begin(&Serial1,
-                           PinPort::rx_pin(PinPort::PORT_B),
-                           PinPort::tx_pin(PinPort::PORT_B),
-                           420000, false);
-        CRSFConfig::init();
-        WebState::crsf.markStarted(false);
-        Safety::logf("[elrs] CRSF started (rx=%d tx=%d)",
-            PinPort::rx_pin(PinPort::PORT_B),
-            PinPort::tx_pin(PinPort::PORT_B));
+        elrsTick(nullptr);
+        return;
     }
-    elrsTick(nullptr);   // refresh immediately so the button label flips
+    // Start path -- ensure UART via the shared modal, then run elrsStartImpl.
+    PortModal::ensureMode(PORT_UART, "elrs_ui", elrsStartImpl);
 }
 
 static void bindClicked(lv_event_t * /*e*/) {

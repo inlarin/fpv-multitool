@@ -19,6 +19,7 @@
 #include "core/pin_port.h"
 #include "servo/servo_pwm.h"
 #include "web/web_state.h"
+#include "port_modal.h"
 #include "safety.h"
 
 namespace screens {
@@ -107,48 +108,44 @@ static void freqClicked(lv_event_t *e) {
     refreshFreqButtons();
 }
 
+// Actual servo-start sequence -- runs once Port B is confirmed in PWM
+// mode (synchronously if already PWM, or after the user accepts the
+// PortModal switch prompt). State (freq, pulseUs) read from WebState.
+static void servoStartImpl() {
+    int hz, us;
+    {
+        WebState::Lock lk;
+        hz = WebState::servo.freq;
+        us = WebState::servo.pulseUs;
+    }
+    if (!ServoPWM::start(SIGNAL_OUT, hz)) {
+        Safety::logf("[servo] ServoPWM::start FAILED (try Settings -> Reboot)");
+        return;
+    }
+    ServoPWM::setPulse(us);
+    {
+        WebState::Lock lk;
+        WebState::servo.active = true;
+    }
+    Safety::logf("[servo] START hz=%d pulse=%d", hz, us);
+    refreshStartButton();
+}
+
 static void startClicked(lv_event_t * /*e*/) {
-    bool active = ServoPWM::isActive();
-    if (active) {
+    if (ServoPWM::isActive()) {
         ServoPWM::stop();
         {
             WebState::Lock lk;
             WebState::servo.active = false;
         }
         Safety::logf("[servo] STOP");
-    } else {
-        int hz, us;
-        {
-            WebState::Lock lk;
-            hz = WebState::servo.freq;
-            us = WebState::servo.pulseUs;
-        }
-        // Release Port B if a prior owner (battery I2C, ELRS UART) holds it
-        // -- ServoPWM::start does PinPort::acquire(PWM) and silently fails
-        // otherwise. Note: even after a clean release, ledcAttach can
-        // still fail on the same GPIO right after a recent Wire1.end()
-        // tear-down (LEDC peripheral seems to need a fuller GPIO reset
-        // we don't do today). When that happens the Start button just
-        // doesn't latch -- workaround for the user is a soft-reboot from
-        // Settings, which is annoying but safe.
-        PortMode pm = PinPort::currentMode(PinPort::PORT_B);
-        if (pm != PORT_IDLE && pm != PORT_PWM) {
-            Safety::logf("[servo] releasing Port B (was %s) before start",
-                         PinPort::modeName(pm));
-            PinPort::release(PinPort::PORT_B);
-        }
-        if (!ServoPWM::start(SIGNAL_OUT, hz)) {
-            Safety::logf("[servo] ServoPWM::start FAILED (try Settings -> Reboot)");
-            return;
-        }
-        ServoPWM::setPulse(us);
-        {
-            WebState::Lock lk;
-            WebState::servo.active = true;
-        }
-        Safety::logf("[servo] START hz=%d pulse=%d", hz, us);
+        refreshStartButton();
+        return;
     }
-    refreshStartButton();
+    // Start path -- ensure PWM via the shared modal, which calls
+    // servoStartImpl either immediately (port already PWM) or after
+    // the user taps "Switch to PWM".
+    PortModal::ensureMode(PORT_PWM, "servo", servoStartImpl);
 }
 
 // Fires when the section panel is destroyed (Back tap). Kills our
@@ -160,6 +157,7 @@ static void servoCleanup(lv_event_t * /*e*/) {
         lv_timer_delete(s_tick);
         s_tick = nullptr;
     }
+    PortModal::close();
     s_pulse_lbl  = nullptr;
     s_slider     = nullptr;
     s_start_btn  = nullptr;

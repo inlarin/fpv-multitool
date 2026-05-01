@@ -26,6 +26,7 @@
 
 #include "core/pin_port.h"
 #include "web/web_state.h"
+#include "port_modal.h"
 #include "safety.h"
 
 namespace screens {
@@ -111,6 +112,7 @@ static lv_obj_t *makeKvRow(lv_obj_t *parent, const char *key) {
 // our static widget pointers. LVGL's internal timers MUST not be touched.
 static void motorCleanup(lv_event_t * /*e*/) {
     if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
+    PortModal::close();
     s_state_lbl = s_speed_lbl = s_throttle_lbl = nullptr;
     s_hero_lbl = s_slider = nullptr;
     s_arm_btn = s_arm_lbl = s_beep_btn = nullptr;
@@ -168,6 +170,16 @@ static void sliderChanged(lv_event_t *e) {
     applyThrottle(lv_slider_get_value(sl));
 }
 
+// Actual arm-request -- runs once Port B is confirmed in PWM mode
+// (synchronously if already PWM, or after the user accepts the
+// PortModal switch prompt).
+static void motorArmImpl() {
+    WebState::Lock lk;
+    WebState::motor.throttle = 0;     // safety: ESC arm sequence wants 0
+    WebState::motor.armRequest = true;
+    Safety::logf("[motor] ARM requested (dshot=%d)", WebState::motor.dshotSpeed);
+}
+
 static void armToggleClicked(lv_event_t * /*e*/) {
     bool armed;
     {
@@ -178,29 +190,21 @@ static void armToggleClicked(lv_event_t * /*e*/) {
         // DISARM: set request, MotorDispatch sends 0 throttle and stops DShot.
         // Reset throttle to 0 in our snapshot so the slider doesn't jump back
         // to a non-zero value on the next arm.
-        WebState::Lock lk;
-        WebState::motor.disarmRequest = true;
-        WebState::motor.throttle = 0;
-        Safety::logf("[motor] DISARM requested");
-    } else {
-        // ARM: throttle must be 0 for the DShot arm sequence. Clamp here so
-        // a stale slider value can't kick the ESC into a fresh spin.
-        // Release Port B first so DShot::init (called by MotorDispatch on
-        // the next pump) can re-acquire it in PWM mode -- otherwise a
-        // prior I2C/UART owner (battery, ELRS) silently blocks the arm.
-        PortMode pm = PinPort::currentMode(PinPort::PORT_B);
-        if (pm != PORT_IDLE && pm != PORT_PWM) {
-            Safety::logf("[motor] releasing Port B (was %s) before arm",
-                         PinPort::modeName(pm));
-            PinPort::release(PinPort::PORT_B);
+        {
+            WebState::Lock lk;
+            WebState::motor.disarmRequest = true;
+            WebState::motor.throttle = 0;
         }
-        WebState::Lock lk;
-        WebState::motor.throttle = 0;
-        WebState::motor.armRequest = true;
-        Safety::logf("[motor] ARM requested (dshot=%d)", WebState::motor.dshotSpeed);
+        Safety::logf("[motor] DISARM requested");
+        if (s_slider) lv_slider_set_value(s_slider, 0, LV_ANIM_ON);
+        if (s_hero_lbl) lv_label_set_text(s_hero_lbl, "0");
+        motorTick(nullptr);
+        return;
     }
+    // Arm path: ensure PWM via the shared modal, then run motorArmImpl.
     if (s_slider) lv_slider_set_value(s_slider, 0, LV_ANIM_ON);
     if (s_hero_lbl) lv_label_set_text(s_hero_lbl, "0");
+    PortModal::ensureMode(PORT_PWM, "motor", motorArmImpl);
     motorTick(nullptr);
 }
 

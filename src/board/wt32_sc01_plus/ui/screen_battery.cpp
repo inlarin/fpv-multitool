@@ -26,6 +26,7 @@
 #include "core/pin_port.h"
 #include "battery/dji_battery.h"
 #include "battery/smbus.h"   // SMBus::macCommand for DJI cycle-reset subcommands
+#include "port_modal.h"
 #include "safety.h"
 
 namespace screens {
@@ -52,9 +53,6 @@ static lv_obj_t *s_svc_btn_unseal  = nullptr;
 static lv_obj_t *s_svc_btn_clearpf = nullptr;
 static lv_obj_t *s_svc_btn_cycle   = nullptr;
 static lv_obj_t *s_svc_btn_seal    = nullptr;
-
-// Port-mismatch modal (shown on entry if Port B is in UART/PWM/GPIO).
-static lv_obj_t *s_port_modal = nullptr;
 
 // ---- Card / row builders --------------------------------------------------
 
@@ -105,10 +103,7 @@ static lv_obj_t *makeKvRow(lv_obj_t *parent, const char *key) {
 // our static widget pointers. LVGL's internal timers MUST not be touched.
 static void batteryCleanup(lv_event_t * /*e*/) {
     if (s_tick) { lv_timer_delete(s_tick); s_tick = nullptr; }
-    if (s_port_modal) {
-        lv_obj_delete(s_port_modal);
-        s_port_modal = nullptr;
-    }
+    PortModal::close();
     s_state_lbl = s_mfr_lbl = s_dev_lbl = s_cycle_lbl = s_soh_lbl = nullptr;
     s_volt_lbl = s_curr_lbl = s_temp_lbl = s_soc_lbl = s_cap_lbl = nullptr;
     for (int i = 0; i < 4; i++) s_cell_lbls[i] = nullptr;
@@ -387,113 +382,6 @@ static lv_obj_t *makeSvcButton(lv_obj_t *parent, const char *label,
     return b;
 }
 
-// ---- Port-mismatch modal --------------------------------------------------
-//
-// On Battery screen entry, if Port B is held by a non-I2C consumer
-// (UART for ELRS, PWM for servo / motor), the SBS reads will all NACK.
-// Pop a modal that lets the user one-tap-switch to I2C without diving
-// into Settings.
-
-static void portModalClose() {
-    if (s_port_modal) {
-        lv_obj_delete(s_port_modal);
-        s_port_modal = nullptr;
-    }
-}
-
-static void portModalSwitchClicked(lv_event_t * /*e*/) {
-    Safety::logf("[battery] modal switch -> I2C");
-    PinPort::release(PinPort::PORT_B);
-    PinPort::acquire(PinPort::PORT_B, PORT_I2C, "battery");
-    PinPort::setPreferredMode(PinPort::PORT_B, PORT_I2C);
-    DJIBattery::init();    // (re)acquire SMBus with the new pins
-    portModalClose();
-}
-
-static void portModalCancelClicked(lv_event_t * /*e*/) {
-    portModalClose();
-}
-
-static void showPortMismatchModal(PortMode cur, const char *owner) {
-    if (s_port_modal) return;   // already open
-
-    s_port_modal = lv_obj_create(lv_screen_active());
-    // Sit BELOW the 24 px status bar -- same convention as the WiFi
-    // edit modal in Settings, so the network state badge stays visible.
-    lv_obj_set_size(s_port_modal, 320, 480 - 24);
-    lv_obj_set_pos(s_port_modal, 0, 24);
-    lv_obj_set_style_bg_color(s_port_modal, lv_color_hex(0x101418), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_port_modal, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_port_modal, 16, LV_PART_MAIN);
-    lv_obj_set_layout(s_port_modal, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(s_port_modal, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_gap(s_port_modal, 12, LV_PART_MAIN);
-
-    lv_obj_t *title = lv_label_create(s_port_modal);
-    lv_label_set_text(title, "Port B not in I2C");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xE6A23C), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-
-    lv_obj_t *msg = lv_label_create(s_port_modal);
-    lv_obj_set_width(msg, lv_pct(100));
-    lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(msg, lv_color_hex(0xE0E0E0), 0);
-    lv_obj_set_style_text_font(msg, &lv_font_montserrat_14, 0);
-    char buf[160];
-    if (owner && *owner) {
-        snprintf(buf, sizeof(buf),
-                 "The battery bus needs Port B in I2C, but it is currently "
-                 "in %s mode (held by '%s'). Switch to I2C now? "
-                 "Whatever owns the port will be released.",
-                 PinPort::modeName(cur), owner);
-    } else {
-        snprintf(buf, sizeof(buf),
-                 "The battery bus needs Port B in I2C, but it is currently "
-                 "in %s mode. Switch to I2C now?",
-                 PinPort::modeName(cur));
-    }
-    lv_label_set_text(msg, buf);
-
-    // Spacer so buttons sit at the bottom of the modal regardless of
-    // message length.
-    lv_obj_t *spacer = lv_obj_create(s_port_modal);
-    lv_obj_remove_style_all(spacer);
-    lv_obj_set_flex_grow(spacer, 1);
-    lv_obj_set_size(spacer, 0, 1);
-
-    lv_obj_t *btn_row = lv_obj_create(s_port_modal);
-    lv_obj_remove_style_all(btn_row);
-    lv_obj_set_width(btn_row, lv_pct(100));
-    lv_obj_set_height(btn_row, 56);
-    lv_obj_set_layout(btn_row, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_gap(btn_row, 8, LV_PART_MAIN);
-
-    lv_obj_t *cancel = lv_button_create(btn_row);
-    lv_obj_set_flex_grow(cancel, 1);
-    lv_obj_set_height(cancel, 52);
-    lv_obj_set_style_bg_color(cancel, lv_color_hex(0x394150), LV_PART_MAIN);
-    lv_obj_set_style_radius(cancel, 8, LV_PART_MAIN);
-    lv_obj_add_event_cb(cancel, portModalCancelClicked, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *cl = lv_label_create(cancel);
-    lv_label_set_text(cl, "Cancel");
-    lv_obj_set_style_text_color(cl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(cl, &lv_font_montserrat_18, 0);
-    lv_obj_center(cl);
-
-    lv_obj_t *sw = lv_button_create(btn_row);
-    lv_obj_set_flex_grow(sw, 1);
-    lv_obj_set_height(sw, 52);
-    lv_obj_set_style_bg_color(sw, lv_color_hex(0x06A77D), LV_PART_MAIN);
-    lv_obj_set_style_radius(sw, 8, LV_PART_MAIN);
-    lv_obj_add_event_cb(sw, portModalSwitchClicked, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *swl = lv_label_create(sw);
-    lv_label_set_text(swl, "Switch to I2C");
-    lv_obj_set_style_text_color(swl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(swl, &lv_font_montserrat_18, 0);
-    lv_obj_center(swl);
-}
-
 static void buildServiceCard(lv_obj_t *parent) {
     lv_obj_t *card = makeCard(parent, "Service");
 
@@ -553,11 +441,11 @@ void buildBattery(lv_obj_t *panel) {
 
     // If init couldn't get the port into I2C, prompt. Done after building
     // the cards so the modal sits on top of a populated screen rather
-    // than a blank one if the user cancels.
-    PortMode pm = PinPort::currentMode(PinPort::PORT_B);
-    if (pm != PORT_I2C) {
-        showPortMismatchModal(pm, PinPort::currentOwner(PinPort::PORT_B));
-    }
+    // than a blank one if the user cancels. Continuation re-runs init
+    // with the new pins after the user accepts the switch.
+    PortModal::ensureMode(PORT_I2C, "battery", []() {
+        DJIBattery::init();
+    });
 
     batteryTick(nullptr);   // populate once immediately
 
