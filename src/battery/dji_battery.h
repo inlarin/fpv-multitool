@@ -161,8 +161,90 @@ UnsealResult unsealWithKey(uint32_t key_combined);
 // If challenge_out != nullptr, captures the 20B challenge for debugging.
 UnsealResult unsealHmac(const uint8_t key[32], uint8_t challenge_out[20] = nullptr);
 
-bool clearPFProper();               // standard PF (0x29 + 0x54 + 0x41)
-bool clearDJIPF2();                 // DJI custom PF2 at 0x4062
+// Mavic-3 Full Access State (Unsealed -> FullAccess). Required after
+// unseal() before destructive ops -- without FAS the BMS silently
+// rejects PF clear / cycle reset / DataFlash writes. Keys 0xBF17/0xE0BC
+// recovered from the commercial battery-service tool firmware
+// (research/dji_battery_tool/FULL_REVERSE_REPORT.md).
+//
+// Returns true if BMS reports SEC=00 (FullAccess) after the writes.
+bool enterFullAccess();
+
+// DJI auth-bypass packet (MAC 0x4062 + magic 0x67452301 = MD5 IV[0]).
+// Mavic-3 firmware gates destructive operations behind this packet --
+// without it, cycle reset / capacity write / black-box clear silently
+// fail. Send between FAS and the destructive MAC subcommand.
+bool sendAuthBypass();
+
+// Composite "do everything required to unlock destructive ops" --
+// unseal + FAS + auth-bypass with retries and verification at each step.
+// Returns true only if all three succeed and BMS reports SEC=00.
+bool unlockForServiceOps();
+
+// Permanent Failure clear -- full 14-step ritual reverse-engineered from
+// the commercial tool's function 0x42002670. Includes Unseal+FAS x2
+// (redundancy), PFEnable, the inline 0x7F write, auth-bypass,
+// MA readback, Black Box clear, and LifetimeData reset. Replaces the
+// older 3-step (0x29 + 0x54 + 0x41) which only worked on pre-Mavic-3
+// packs.
+bool clearPFProper();
+bool clearDJIPF2();                 // legacy DJI custom PF2 at 0x4062
+
+// Black Box (event log) clear -- MAC subcommand 0x0030. Wipes the BMS's
+// on-chip event log so accumulated trip records don't keep flagging the
+// pack as "service required" on a host that reads it.
+bool clearBlackBox();
+
+// LifetimeData reset -- MAC subcommand 0x0060 with 4-byte zero argument.
+// Resets the running cumulative counters (total mAh charged/discharged,
+// max temp seen, etc) that some hosts read out for warranty checks.
+bool resetLifetimeData();
+
+// Cycle Count + chemical-capacity reset. Issues MAC 0x9013 ResetLearnedData
+// after auth-bypass. Returns true if CycleCount reads 0 afterwards.
+// This is the "make the pack look new" operation -- DJI hosts use cycles
+// as one input to their "this pack is worn" decision.
+bool resetCycles();
+
+// DataFlash write primitive: writes a 16-bit value at (subclass, offset).
+// Subclass 0x52 = GasGauging on BQ40Z80. Implements the standard TI
+// DF write protocol: REG_DFCLASS -> REG_DFBLOCK -> read existing 32B ->
+// patch the byte -> write back -> compute checksum -> write to BLOCKCHKSUM.
+bool writeDataFlashU16(uint8_t subclass, uint8_t offset, uint16_t value);
+
+// Mavic-3 Design-Capacity edit: writes new nominal mAh into the pack's
+// GasGauging DataFlash subclass. Updates DesignCapacity (mAh + cWh) and
+// per-cell Q Max (4 cells). Triggers MAC 0x0021 LearnCycle so the BMS
+// re-reads its DataFlash. Range 5000-15000 mAh, 1000-step (commercial
+// tool's UI constraint -- the BMS itself accepts arbitrary values but
+// out-of-range may cause Impedance Track to fail).
+bool writeCapacity(uint16_t new_mah);
+
+// Trigger active cell balancing for the cells in cellMask (bit 0 = cell1
+// ... bit 3 = cell4). MAC subcommand 0x002A + 1-byte mask. Pack must be
+// unsealed; balancing runs autonomously after.
+bool startBalancing(uint8_t cellMask);
+
+// Trigger Impedance Track learning cycle. MAC subcommand 0x0021. Pack
+// must then go through a full charge -> rest -> discharge -> rest -> charge
+// sequence (user-driven) for the BMS to capture chemistry parameters.
+bool startCalibration();
+
+// BQ40Z80 firmware (Patch.bin) flash via ROM bootloader mode.
+//   1. Unseal + FAS + auth-bypass
+//   2. MAC 0x0F00 -> chip restarts in ROM mode at I2C address 0x0B
+//   3. Stream the patch file content with per-record verify
+//   4. MAC 0x0F01 (or restart) -> chip exits ROM mode
+//
+// Container format inferred from research/dji_battery_tool/REPRODUCIBLE_ALGORITHMS.md.
+// Best-effort reconstruction -- verify with logic-analyser before flashing
+// a real Mavic-3 pack.
+//
+// `progress` callback is invoked every 4 KB with (bytes_done, total_bytes).
+typedef bool (*FlashProgressCb)(uint32_t bytes_done, uint32_t total_bytes);
+bool flashFirmwareFromBuffer(const uint8_t *patch_data, uint32_t patch_size,
+                             FlashProgressCb progress);
+
 bool seal();
 bool softReset();
 

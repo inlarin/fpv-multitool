@@ -108,6 +108,72 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
         req->send(400, "text/plain", "use ?mac= or ?sbs= or ?unseal=");
     });
 
+    // === Mavic-3 service ops (recovered from commercial-tool reverse) ====
+    // Each is a single endpoint that runs the unlock+op chain server-side and
+    // returns a small JSON status. UI just POSTs to these; no params for the
+    // simple ones; capacity takes ?mah=NNNN.
+    s_server->on("/api/batt/mavic3/clear_pf", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool ok = DJIBattery::clearPFProper();
+        JsonDocument d; d["ok"] = ok;
+        d["pfStatus"] = String("0x") + String(DJIBattery::readPFStatus(), HEX);
+        d["pf2"]      = String("0x") + String(DJIBattery::readDJIPF2(), HEX);
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+    s_server->on("/api/batt/mavic3/reset_cycles", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool ok = DJIBattery::resetCycles();
+        JsonDocument d; d["ok"] = ok;
+        d["cycleCount"] = SMBus::readWord(0x0B, 0x17);
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+    s_server->on("/api/batt/mavic3/clear_blackbox", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool a = DJIBattery::clearBlackBox();
+        bool b = DJIBattery::resetLifetimeData();
+        JsonDocument d; d["blackBoxOk"] = a; d["lifetimeOk"] = b; d["ok"] = a && b;
+        String out; serializeJson(d, out);
+        req->send((a && b) ? 200 : 500, "application/json", out);
+    });
+    s_server->on("/api/batt/mavic3/capacity", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (!req->hasParam("mah")) { req->send(400, "text/plain", "need ?mah=NNNN"); return; }
+        uint16_t mah = (uint16_t)strtoul(req->getParam("mah")->value().c_str(), nullptr, 0);
+        bool ok = DJIBattery::writeCapacity(mah);
+        JsonDocument d;
+        d["ok"] = ok; d["requested_mah"] = mah;
+        d["readback_full_cap_mah"] = SMBus::readWord(0x0B, 0x10);
+        d["readback_design_cap_mah"] = SMBus::readWord(0x0B, 0x18);
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+    s_server->on("/api/batt/mavic3/balance", HTTP_POST, [](AsyncWebServerRequest *req) {
+        uint8_t mask = req->hasParam("mask")
+            ? (uint8_t)strtoul(req->getParam("mask")->value().c_str(), nullptr, 0)
+            : 0x0F;  // default: all 4 cells
+        bool ok = DJIBattery::startBalancing(mask);
+        JsonDocument d; d["ok"] = ok; d["mask"] = String("0x") + String(mask, HEX);
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+    s_server->on("/api/batt/mavic3/calibrate", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool ok = DJIBattery::startCalibration();
+        JsonDocument d; d["ok"] = ok;
+        d["instructions"] = "charge full -> rest 30-60min -> discharge full -> rest -> charge full";
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+    s_server->on("/api/batt/mavic3/unlock", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool ok = DJIBattery::unlockForServiceOps();
+        uint32_t op = DJIBattery::readOperationStatus();
+        uint8_t sec = (op >> 8) & 0x03;
+        JsonDocument d;
+        d["ok"] = ok;
+        d["operationStatus"] = String("0x") + String(op, HEX);
+        d["sec"] = sec;
+        d["state"] = sec == 0x00 ? "FullAccess" : sec == 0x02 ? "Unsealed" : "Sealed";
+        String out; serializeJson(d, out);
+        req->send(ok ? 200 : 500, "application/json", out);
+    });
+
     // MAC command catalog
     s_server->on("/api/batt/mac_catalog", HTTP_GET, [](AsyncWebServerRequest *req) {
         AsyncResponseStream *r = req->beginResponseStream("application/json");

@@ -53,6 +53,15 @@ static lv_obj_t *s_svc_btn_unseal  = nullptr;
 static lv_obj_t *s_svc_btn_clearpf = nullptr;
 static lv_obj_t *s_svc_btn_cycle   = nullptr;
 static lv_obj_t *s_svc_btn_seal    = nullptr;
+// Mavic-3 service ops (added 2026-05-01 from commercial-tool reverse).
+static lv_obj_t *s_svc_btn_capacity = nullptr;
+static lv_obj_t *s_svc_btn_balance  = nullptr;
+static lv_obj_t *s_svc_btn_calibr   = nullptr;
+static lv_obj_t *s_svc_btn_blackbox = nullptr;
+// Capacity-edit modal -- file-static so the LV_EVENT_DELETE lambda can null
+// it out without a capture (capture-less lambdas can't access function-local
+// statics).
+static lv_obj_t *s_capacity_modal = nullptr;
 
 // ---- Card / row builders --------------------------------------------------
 
@@ -110,6 +119,8 @@ static void batteryCleanup(lv_event_t * /*e*/) {
     s_svc_seal_lbl = s_svc_result = nullptr;
     s_svc_btn_unseal = s_svc_btn_clearpf = nullptr;
     s_svc_btn_cycle  = s_svc_btn_seal    = nullptr;
+    s_svc_btn_capacity = s_svc_btn_balance = nullptr;
+    s_svc_btn_calibr   = s_svc_btn_blackbox = nullptr;
 }
 
 // Forward decl -- defined down in the Service section block.
@@ -136,6 +147,10 @@ static void serviceRefresh(const BatteryInfo &info) {
         setBtnEnabled(s_svc_btn_clearpf, false);
         setBtnEnabled(s_svc_btn_cycle,   false);
         setBtnEnabled(s_svc_btn_seal,    false);
+        setBtnEnabled(s_svc_btn_capacity, false);
+        setBtnEnabled(s_svc_btn_balance,  false);
+        setBtnEnabled(s_svc_btn_calibr,   false);
+        setBtnEnabled(s_svc_btn_blackbox, false);
     } else {
         lv_label_set_text(s_svc_seal_lbl, "UNSEALED");
         lv_obj_set_style_text_color(s_svc_seal_lbl, lv_color_hex(0x06A77D), 0);
@@ -143,6 +158,10 @@ static void serviceRefresh(const BatteryInfo &info) {
         setBtnEnabled(s_svc_btn_clearpf, true);
         setBtnEnabled(s_svc_btn_cycle,   true);
         setBtnEnabled(s_svc_btn_seal,    true);
+        setBtnEnabled(s_svc_btn_capacity, true);
+        setBtnEnabled(s_svc_btn_balance,  true);
+        setBtnEnabled(s_svc_btn_calibr,   true);
+        setBtnEnabled(s_svc_btn_blackbox, true);
     }
 }
 
@@ -343,27 +362,135 @@ static void clearPfClicked(lv_event_t * /*e*/) {
 }
 
 static void cycleResetClicked(lv_event_t * /*e*/) {
-    // DJI-specific 2-step ManufacturerAccess sequence. Verified on
-    // Mavic Air 2 / Mavic 2 packs. Pack must be unsealed; if either
-    // write NACKs the pack is either sealed, sealed-different, or
-    // not a DJI BMS at all.
-    constexpr uint8_t  ADDR = 0x0B;
-    constexpr uint16_t SUB1 = 0x6A28;
-    constexpr uint16_t SUB2 = 0x6A2A;
-    bool a = SMBus::macCommand(ADDR, SUB1);
-    bool b = a && SMBus::macCommand(ADDR, SUB2);
-    if (a && b) {
-        serviceShow("Cycle reset SENT", 0x06A77D);
-    } else {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "Cycle reset: step%d failed", a ? 2 : 1);
-        serviceShow(buf, 0xE63946);
-    }
+    // Mavic-3 cycle reset: full unseal + FAS + auth-bypass + MAC 0x9013
+    // ResetLearnedData. Reverse-engineered from commercial battery-service
+    // tool (research/dji_battery_tool/). Older 2-step (0x6A28/0x6A2A)
+    // path is gone -- the new resetCycles() does the right thing for
+    // every model in DJIBattery::UNSEAL_KEYS.
+    serviceShow("Resetting cycles...", 0xa0a0a0);
+    bool ok = DJIBattery::resetCycles();
+    serviceShow(ok ? "Cycle reset OK" : "Cycle reset FAIL",
+                ok ? 0x06A77D : 0xE63946);
 }
 
 static void sealClicked(lv_event_t * /*e*/) {
     bool ok = DJIBattery::seal();
     serviceShow(ok ? "Sealed" : "Seal failed", ok ? 0x06A77D : 0xE63946);
+}
+
+// ---- New Mavic-3 service ops (recovered 2026-05-01) ----------------------
+
+static void capacityClicked(lv_event_t * /*e*/) {
+    // Capacity-edit picker: 5000 / 8000 / 10000 / 12000 / 15000 mAh.
+    // Modal is built lazily; on Confirm calls DJIBattery::writeCapacity().
+    if (s_capacity_modal) return;  // already open
+    lv_obj_t *modal = lv_obj_create(lv_screen_active());
+    s_capacity_modal = modal;
+    lv_obj_set_size(modal, 360, 240);
+    lv_obj_center(modal);
+    lv_obj_set_style_bg_color(modal, lv_color_hex(0x1a1f24), LV_PART_MAIN);
+    lv_obj_set_style_border_color(modal, lv_color_hex(0x2E86AB), LV_PART_MAIN);
+    lv_obj_set_style_border_width(modal, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(modal, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(modal, 12, LV_PART_MAIN);
+    lv_obj_set_layout(modal, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(modal, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(modal, 8, LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(modal);
+    lv_label_set_text(title, "Set DesignCapacity (mAh)");
+    lv_obj_set_style_text_color(title, lv_color_hex(0x2E86AB), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+
+    lv_obj_t *warn = lv_label_create(modal);
+    lv_label_set_text(warn, "Writes BQ40Z80 DataFlash. Irreversible.");
+    lv_obj_set_style_text_color(warn, lv_color_hex(0xE6A23C), 0);
+    lv_obj_set_style_text_font(warn, &lv_font_montserrat_14, 0);
+
+    lv_obj_t *grid = lv_obj_create(modal);
+    lv_obj_remove_style_all(grid);
+    lv_obj_set_width(grid, lv_pct(100));
+    lv_obj_set_height(grid, 50);
+    lv_obj_set_layout(grid, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(grid, 6, LV_PART_MAIN);
+
+    static const uint16_t CHOICES[] = { 5000, 8000, 10000, 12000, 15000 };
+    for (uint16_t mah : CHOICES) {
+        lv_obj_t *b = lv_button_create(grid);
+        lv_obj_set_flex_grow(b, 1);
+        lv_obj_set_height(b, 44);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x394150), LV_PART_MAIN);
+        lv_obj_set_style_radius(b, 6, LV_PART_MAIN);
+        lv_obj_t *l = lv_label_create(b);
+        char buf[8]; snprintf(buf, sizeof(buf), "%u", mah);
+        lv_label_set_text(l, buf);
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_center(l);
+        // store the chosen value as user_data so the cb can retrieve it
+        lv_obj_add_event_cb(b, [](lv_event_t *e) {
+            uint16_t mah = (uint16_t)(uintptr_t)lv_event_get_user_data(e);
+            serviceShow("Writing capacity...", 0xa0a0a0);
+            bool ok = DJIBattery::writeCapacity(mah);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Capacity %u mAh: %s", mah, ok ? "OK" : "FAIL");
+            serviceShow(buf, ok ? 0x06A77D : 0xE63946);
+            // close modal
+            lv_obj_t *m = lv_obj_get_parent(lv_obj_get_parent(lv_event_get_target_obj(e)));
+            lv_obj_delete(m);
+        }, LV_EVENT_CLICKED, (void*)(uintptr_t)mah);
+    }
+
+    lv_obj_t *cancel = lv_button_create(modal);
+    lv_obj_set_width(cancel, lv_pct(100));
+    lv_obj_set_height(cancel, 36);
+    lv_obj_set_style_bg_color(cancel, lv_color_hex(0x252a31), LV_PART_MAIN);
+    lv_obj_set_style_radius(cancel, 6, LV_PART_MAIN);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, "Cancel");
+    lv_obj_set_style_text_color(cl, lv_color_hex(0xa0a0a0), 0);
+    lv_obj_set_style_text_font(cl, &lv_font_montserrat_14, 0);
+    lv_obj_center(cl);
+    lv_obj_add_event_cb(cancel, [](lv_event_t *e) {
+        lv_obj_t *m = lv_obj_get_parent(lv_event_get_target_obj(e));
+        lv_obj_delete(m);
+    }, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_add_event_cb(modal, [](lv_event_t * /*e*/) {
+        // null the file-static pointer when the modal is destroyed
+        s_capacity_modal = nullptr;
+    }, LV_EVENT_DELETE, nullptr);
+}
+
+static void balanceClicked(lv_event_t * /*e*/) {
+    // Trigger balancing on all 4 cells (mask 0x0F). The BMS will only
+    // actually balance cells whose voltage differs from min by > the
+    // configured CellBalanceThreshold (DataFlash GasGauging param).
+    serviceShow("Starting cell balance...", 0xa0a0a0);
+    bool ok = DJIBattery::startBalancing(0x0F);
+    serviceShow(ok ? "Balance started (4 cells)" : "Balance FAIL",
+                ok ? 0x06A77D : 0xE63946);
+}
+
+static void calibrateClicked(lv_event_t * /*e*/) {
+    serviceShow("Calibration started", 0x2E86AB);
+    bool ok = DJIBattery::startCalibration();
+    if (ok) {
+        serviceShow("CALIB: charge full -> rest 30m -> dischg full -> rest -> chg",
+                    0x2E86AB);
+    } else {
+        serviceShow("Calibration trigger FAIL", 0xE63946);
+    }
+}
+
+static void blackboxClicked(lv_event_t * /*e*/) {
+    bool a = DJIBattery::clearBlackBox();
+    bool b = DJIBattery::resetLifetimeData();
+    char buf[64];
+    snprintf(buf, sizeof(buf), "BB clear=%s, Lifetime reset=%s",
+             a ? "OK" : "FAIL", b ? "OK" : "FAIL");
+    serviceShow(buf, (a && b) ? 0x06A77D : 0xE6A23C);
 }
 
 static lv_obj_t *makeSvcButton(lv_obj_t *parent, const char *label,
@@ -382,34 +509,43 @@ static lv_obj_t *makeSvcButton(lv_obj_t *parent, const char *label,
     return b;
 }
 
+static lv_obj_t *makeRow(lv_obj_t *card) {
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, lv_pct(100));
+    lv_obj_set_height(row, 44);
+    lv_obj_set_layout(row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(row, 6, LV_PART_MAIN);
+    return row;
+}
+
 static void buildServiceCard(lv_obj_t *parent) {
     lv_obj_t *card = makeCard(parent, "Service");
 
     s_svc_seal_lbl = makeKvRow(card, "State");
     lv_label_set_text(s_svc_seal_lbl, "...");
 
-    // 2x2 button grid (two flex rows).
-    lv_obj_t *row1 = lv_obj_create(card);
-    lv_obj_remove_style_all(row1);
-    lv_obj_set_width(row1, lv_pct(100));
-    lv_obj_set_height(row1, 44);
-    lv_obj_set_layout(row1, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_gap(row1, 6, LV_PART_MAIN);
+    // 4x2 button grid -- 8 service ops (recovered 2026-05-01).
+    // Row 1: identity ops (Unseal / Seal)
+    lv_obj_t *row1 = makeRow(card);
+    s_svc_btn_unseal = makeSvcButton(row1, "Unseal",  unsealClicked);
+    s_svc_btn_seal   = makeSvcButton(row1, "Seal",    sealClicked);
 
-    s_svc_btn_unseal  = makeSvcButton(row1, "Unseal",   unsealClicked);
-    s_svc_btn_clearpf = makeSvcButton(row1, "Clear PF", clearPfClicked);
+    // Row 2: clearing ops (PF / BlackBox+Lifetime)
+    lv_obj_t *row2 = makeRow(card);
+    s_svc_btn_clearpf  = makeSvcButton(row2, "Clear PF",   clearPfClicked);
+    s_svc_btn_blackbox = makeSvcButton(row2, "Clear BB+LT", blackboxClicked);
 
-    lv_obj_t *row2 = lv_obj_create(card);
-    lv_obj_remove_style_all(row2);
-    lv_obj_set_width(row2, lv_pct(100));
-    lv_obj_set_height(row2, 44);
-    lv_obj_set_layout(row2, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_gap(row2, 6, LV_PART_MAIN);
+    // Row 3: counter resets (Cycle / Capacity)
+    lv_obj_t *row3 = makeRow(card);
+    s_svc_btn_cycle    = makeSvcButton(row3, "Cycle reset", cycleResetClicked);
+    s_svc_btn_capacity = makeSvcButton(row3, "Capacity",    capacityClicked);
 
-    s_svc_btn_cycle = makeSvcButton(row2, "Cycle reset", cycleResetClicked);
-    s_svc_btn_seal  = makeSvcButton(row2, "Seal",        sealClicked);
+    // Row 4: chemistry ops (Balance / Calibrate)
+    lv_obj_t *row4 = makeRow(card);
+    s_svc_btn_balance = makeSvcButton(row4, "Balance",   balanceClicked);
+    s_svc_btn_calibr  = makeSvcButton(row4, "Calibrate", calibrateClicked);
 
     s_svc_result = lv_label_create(card);
     lv_obj_set_width(s_svc_result, lv_pct(100));

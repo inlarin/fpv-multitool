@@ -590,50 +590,403 @@ bool DJIBattery::softReset() {
     return SMBus::macCommand(BATT_ADDR, MAC_DEVICE_RESET);
 }
 
-// Proper PF clear sequence
-//   1. unseal (must be done separately first)
-//   2. MAC 0x0029 PermanentFailDataReset
-//   3. MAC 0x0054 ClearPF (DJI wrapper)
-//   4. verify PFStatus == 0
-//   5. MAC 0x0041 DeviceReset
+// =====================================================================
+// Mavic-3 service operations (recovered 2026-05-01 from commercial
+// battery-service tool firmware reverse-engineering).
+// See research/dji_battery_tool/COMPARISON_VS_OUR_CODE.md.
+// =====================================================================
+
+// FAS (Full Access State) keys -- same byte order convention as the unseal
+// keys: each half is sent as a separate MAC block-write to register 0x44.
+static const uint16_t MAVIC3_FAS_KEY_LO = 0xBF17;
+static const uint16_t MAVIC3_FAS_KEY_HI = 0xE0BC;
+
+// Auth-bypass packet payload: MAC subcommand 0x4062 + 4-byte magic
+// 0x67452301 (= first word of MD5 IV). Mavic-3 firmware checks for this
+// magic before allowing destructive operations like cycle reset.
+static const uint8_t DJI_AUTH_BYPASS_PAYLOAD[6] = {
+    0x62, 0x40,             // subcommand 0x4062 (LE)
+    0x01, 0x23, 0x45, 0x67  // magic = MD5 IV[0]
+};
+
+// LifetimeData reset payload: MAC subcommand 0x0060 + 4-byte zero arg.
+static const uint8_t DJI_LIFETIME_RESET_PAYLOAD[6] = {
+    0x60, 0x00,             // subcommand 0x0060 (LE)
+    0x00, 0x00, 0x00, 0x00  // 4-byte zero
+};
+
+bool DJIBattery::enterFullAccess() {
+    // Two block-writes to ManufacturerBlockAccess (reg 0x44), 100-300 ms
+    // between, exactly mirroring the commercial tool's FAS flow.
+    if (!sendKeyWordBlock(MAVIC3_FAS_KEY_LO)) return false;
+    delay(300);
+    if (!sendKeyWordBlock(MAVIC3_FAS_KEY_HI)) return false;
+    delay(100);
+    uint32_t op = readOperationStatus();
+    uint8_t sec = (op >> 8) & 0x03;
+    // SEC bits: 0x00 = FullAccess, 0x02 = Unsealed, 0x03 = Sealed
+    return sec == 0x00;
+}
+
+bool DJIBattery::sendAuthBypass() {
+    // Block write of 6 bytes to ManufacturerBlockAccess (reg 0x44).
+    return SMBus::writeBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS,
+                             DJI_AUTH_BYPASS_PAYLOAD,
+                             sizeof(DJI_AUTH_BYPASS_PAYLOAD));
+}
+
+bool DJIBattery::unlockForServiceOps() {
+    // Step 1: try existing unseal flow (cycles through known key pairs)
+    UnsealResult r = unseal();
+    if (r != UNSEAL_OK) {
+        Serial.printf("[Battery] unlock: unseal failed (%d)\n", r);
+        return false;
+    }
+    delay(200);
+
+    // Step 2: FAS
+    if (!enterFullAccess()) {
+        // Some packs (older Mavic Pro / Phantom) don't have a separate
+        // FullAccess state -- Unsealed is enough. Verify by checking SEC.
+        uint32_t op = readOperationStatus();
+        uint8_t sec = (op >> 8) & 0x03;
+        if (sec == 0x03) {
+            Serial.println("[Battery] unlock: FAS rejected and pack still Sealed");
+            return false;
+        }
+        // SEC = Unsealed -- treat as good enough for non-Mavic-3 packs.
+        Serial.printf("[Battery] unlock: FAS rejected, but pack is Unsealed (SEC=%d)\n", sec);
+    }
+    delay(200);
+
+    // Step 3: auth-bypass (silently best-effort; older packs may not need it)
+    sendAuthBypass();
+    delay(100);
+
+    return true;
+}
+
+bool DJIBattery::clearBlackBox() {
+    // MAC subcommand 0x0030 via ManufacturerBlockAccess
+    return SMBus::macCommand(BATT_ADDR, 0x0030);
+}
+
+bool DJIBattery::resetLifetimeData() {
+    // 6-byte block write: subcommand 0x0060 + 4-byte zero arg
+    return SMBus::writeBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS,
+                             DJI_LIFETIME_RESET_PAYLOAD,
+                             sizeof(DJI_LIFETIME_RESET_PAYLOAD));
+}
+
+// Full 14-step Mavic-3 PF clear ritual reverse-engineered from
+// commercial-tool function 0x42002670. Sequence:
+//   1-2.  Unseal (u1, u2)
+//   3-4.  FAS (f1, f2)
+//   5-8.  Unseal + FAS REPEATED (commercial tool does this for redundancy
+//         on flaky links, since each MAC write can NACK if the bus glitches)
+//   9.    PFEnable (MAC 0x0029) -- TI standard PF data reset
+//   10.   Singleton 0x7F write (no register prefix, no length byte; purpose
+//         undocumented but present in commercial tool's binary)
+//   11.   Auth-bypass packet (MAC 0x4062 + magic 0x67452301)
+//   12.   MAC readback (MAC 0x0000)
+//   13.   Black Box clear (MAC 0x0030)
+//   14.   LifetimeData reset (MAC 0x0060 + zero)
+//
+// Verifies PFStatus == 0 at the end. Returns true if clean.
 bool DJIBattery::clearPFProper() {
-    // Step 1: must already be unsealed — verify
+    uint32_t pf_before = readPFStatus();
+    uint32_t pf2_before = readDJIPF2();
+
+    // === Phase A: Unseal (twice for redundancy, like commercial tool) ===
+    for (int pass = 0; pass < 2; ++pass) {
+        // Try the Mavic-3 keys directly; unseal() would also work but
+        // takes longer because it iterates the key table.
+        sendKeyWordBlock(0x7EE0); delay(500);
+        sendKeyWordBlock(0xCCDF); delay(500);
+        // FAS step
+        sendKeyWordBlock(MAVIC3_FAS_KEY_LO); delay(500);
+        sendKeyWordBlock(MAVIC3_FAS_KEY_HI); delay(500);
+    }
+
+    // Verify we're at SEC=00 (FullAccess) or at least SEC=02 (Unsealed)
     uint32_t op = readOperationStatus();
     uint8_t sec = (op >> 8) & 0x03;
     if (sec == 0x03) {
-        Serial.println("[Battery] Cannot clear PF — battery is sealed. Unseal first.");
+        Serial.println("[Battery] clearPF: still Sealed after 2x unseal+FAS, aborting");
         return false;
     }
 
-    // Step 2: MAC 0x29
-    if (!SMBus::macCommand(BATT_ADDR, MAC_PF_DATA_RESET)) return false;
-    delay(200);
+    // === Phase B: PFEnable + ritual writes ===
 
-    // Step 3: MAC 0x54
-    if (!SMBus::macCommand(BATT_ADDR, MAC_CLEAR_PF)) return false;
+    // 9. PFEnable / PF data reset
+    SMBus::macCommand(BATT_ADDR, MAC_PF_DATA_RESET);  // 0x0029
+    delay(50);
+
+    // 10. Singleton 0x7F write -- raw byte at no register, purpose undocumented.
+    //     Reproduces the commercial tool's behaviour byte-for-byte.
+    {
+        if (SMBus::busLock(200)) {
+            Wire1.beginTransmission(BATT_ADDR);
+            Wire1.write((uint8_t)0x7F);
+            Wire1.endTransmission(true);
+            SMBus::busUnlock();
+        }
+    }
+    delay(50);
+
+    // 11. Auth-bypass packet
+    sendAuthBypass();
+    delay(50);
+
+    // 12. MA readback (writes MAC 0x0000)
+    SMBus::macCommand(BATT_ADDR, 0x0000);
+    delay(50);
+
+    // 13. Black Box clear
+    clearBlackBox();
+    delay(50);
+
+    // 14. LifetimeData reset
+    resetLifetimeData();
     delay(500);
 
-    // Step 4: also clear DJI PF2 (custom flag at 0x4062)
-    clearDJIPF2();
-    delay(200);
+    // === Verify ===
+    uint32_t pf_after  = readPFStatus();
+    uint32_t pf2_after = readDJIPF2();
 
-    // Step 5: verify
-    uint32_t pf = readPFStatus();
-    uint32_t pf2 = readDJIPF2();
-    if (pf != 0 && pf != 0xFFFFFFFF) {
-        Serial.printf("[Battery] PF clear incomplete: 0x%08X\n", pf);
-    }
-    if (pf2 != 0 && pf2 != 0xFFFFFFFF) {
-        Serial.printf("[Battery] DJI PF2 clear incomplete: 0x%08X\n", pf2);
-    }
+    Serial.printf("[Battery] clearPF: PF 0x%08X -> 0x%08X, PF2 0x%08X -> 0x%08X\n",
+                  pf_before, pf_after, pf2_before, pf2_after);
 
-    // Step 6: soft reset
+    bool pfOk  = (pf_after  == 0 || pf_after  == 0xFFFFFFFF);
+    bool pf2Ok = (pf2_after == 0 || pf2_after == 0xFFFFFFFF);
+
+    // Soft reset to make the new state stick
     SMBus::macCommand(BATT_ADDR, MAC_DEVICE_RESET);
     delay(1000);
 
-    bool pfOk  = (pf == 0 || pf == 0xFFFFFFFF);
-    bool pf2Ok = (pf2 == 0 || pf2 == 0xFFFFFFFF);
     return pfOk && pf2Ok;
+}
+
+bool DJIBattery::resetCycles() {
+    if (!unlockForServiceOps()) return false;
+
+    // MAC 0x9013 = ResetLearnedData (BQ40Z80). Wipes the cycle counter +
+    // chemical-capacity tracker. Commercial tool issues this after auth-bypass.
+    SMBus::macCommand(BATT_ADDR, 0x9013);
+    delay(500);
+
+    // Also clear the Black Box so accumulated discharge events don't keep
+    // pinning the wear estimate above zero.
+    clearBlackBox();
+    delay(200);
+
+    // Soft reset for the BMS to re-read its parameter store
+    SMBus::macCommand(BATT_ADDR, MAC_DEVICE_RESET);
+    delay(1000);
+
+    uint16_t cycles = SMBus::readWord(BATT_ADDR, REG_CYCLE_COUNT);
+    Serial.printf("[Battery] resetCycles: CycleCount = %u\n", cycles);
+    return cycles == 0;
+}
+
+// =====================================================================
+// DataFlash write (BQ40Z80 protocol)
+// =====================================================================
+// Standard TI DF write sequence:
+//   1. write subclass to REG_DFCLASS (0x3E)
+//   2. write block index (offset / 32) to REG_DFBLOCK (0x3F)
+//   3. read 32-byte block at REG_BLOCKDATA (0x44) -- baseline for checksum
+//   4. write the new bytes back to REG_BLOCKDATA
+//   5. compute checksum: 0xFF - (subclass + block + sum_of_bytes) & 0xFF
+//   6. write checksum to REG_BLOCKCHKSUM (0x60)
+// Pack must be Unsealed + FullAccess for the write to land.
+bool DJIBattery::writeDataFlashU16(uint8_t subclass, uint8_t offset, uint16_t value) {
+    static const uint8_t REG_DFCLASS     = 0x3E;
+    static const uint8_t REG_DFBLOCK     = 0x3F;
+    static const uint8_t REG_BLOCKCHKSUM = 0x60;
+
+    uint8_t block_idx  = offset / 32;
+    uint8_t in_block   = offset % 32;
+
+    // 1. Subclass select
+    if (!SMBus::writeBlock(BATT_ADDR, REG_DFCLASS, &subclass, 1)) return false;
+    delay(10);
+    // 2. Block index select
+    if (!SMBus::writeBlock(BATT_ADDR, REG_DFBLOCK, &block_idx, 1)) return false;
+    delay(10);
+    // 3. Read existing 32-byte block (baseline)
+    uint8_t block[32] = {0};
+    int n = SMBus::readBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS, block, 32);
+    if (n != 32) return false;
+    delay(10);
+    // 4. Patch in the new value (LE)
+    block[in_block]     = value & 0xFF;
+    if (in_block + 1 < 32) block[in_block + 1] = value >> 8;
+    if (!SMBus::writeBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS, block, 32)) return false;
+    delay(10);
+    // 5. Compute checksum
+    uint8_t sum = subclass + block_idx;
+    for (int i = 0; i < 32; ++i) sum += block[i];
+    uint8_t chksum = 0xFF - sum;
+    // 6. Write checksum to commit
+    if (!SMBus::writeBlock(BATT_ADDR, REG_BLOCKCHKSUM, &chksum, 1)) return false;
+    delay(50);
+    return true;
+}
+
+bool DJIBattery::writeCapacity(uint16_t new_mah) {
+    // Commercial tool's UI exposes 5000-15000 mAh in 1000 steps; the BMS
+    // itself accepts arbitrary values but Impedance Track may misbehave
+    // outside that range. Enforce the same constraint to be safe.
+    if (new_mah < 5000 || new_mah > 15000) {
+        Serial.printf("[Battery] writeCapacity: %u out of range [5000..15000]\n", new_mah);
+        return false;
+    }
+
+    if (!unlockForServiceOps()) return false;
+
+    // BQ40Z80 GasGauging subclass = 0x52, layout (per BQ40Z80 datasheet):
+    //   offset 0x06 = Design Capacity mAh (uint16)
+    //   offset 0x08 = Design Capacity cWh (uint16)
+    //   offset 0x0A..0x10 = per-cell Q Max (4 cells x 2 bytes)
+    constexpr uint8_t SUBCLASS_GAS_GAUGING = 0x52;
+
+    bool ok = true;
+    ok &= writeDataFlashU16(SUBCLASS_GAS_GAUGING, 0x06, new_mah);
+
+    // cWh = mAh * nominal_voltage_V / 100; Mavic 3 nominal pack V ~15.4
+    uint16_t new_cwh = (uint32_t)new_mah * 154 / 1000;
+    ok &= writeDataFlashU16(SUBCLASS_GAS_GAUGING, 0x08, new_cwh);
+
+    // Per-cell Q Max -- each cell holds new_mah (we don't divide; the
+    // per-cell field IS already the per-cell capacity in DJI 4S packs)
+    for (uint8_t cell = 0; cell < 4; ++cell) {
+        ok &= writeDataFlashU16(SUBCLASS_GAS_GAUGING, 0x0A + cell * 2, new_mah);
+    }
+
+    // Trigger LearnCycle so BMS re-reads DataFlash + recalibrates IT
+    SMBus::macCommand(BATT_ADDR, 0x0021);
+    delay(500);
+
+    Serial.printf("[Battery] writeCapacity %u mAh: %s\n", new_mah, ok ? "OK" : "FAIL");
+    return ok;
+}
+
+bool DJIBattery::startBalancing(uint8_t cellMask) {
+    if (!unlockForServiceOps()) return false;
+    // MAC subcommand 0x002A + 1-byte cellMask, sent as 3-byte block
+    uint8_t payload[3] = { 0x2A, 0x00, cellMask };
+    bool ok = SMBus::writeBlock(BATT_ADDR, REG_MFR_BLOCK_ACCESS, payload, 3);
+    Serial.printf("[Battery] startBalancing(0x%02X): %s\n", cellMask, ok ? "OK" : "FAIL");
+    return ok;
+}
+
+bool DJIBattery::startCalibration() {
+    if (!unlockForServiceOps()) return false;
+    // MAC 0x0021 LearnCycle -- the same MAC writeCapacity uses; here
+    // it doubles as "begin Impedance Track learning". User must drive
+    // the pack through a charge/discharge cycle for it to capture data.
+    bool ok = SMBus::macCommand(BATT_ADDR, 0x0021);
+    Serial.printf("[Battery] startCalibration: %s\n", ok ? "OK" : "FAIL");
+    return ok;
+}
+
+// =====================================================================
+// Patch.bin firmware flash via BQ ROM bootloader mode
+// =====================================================================
+// Best-effort reconstruction from commercial tool function 0x42008BB0.
+// The Patch.bin container format isn't fully documented (vendor-custom
+// header `03 FF 04 00 05 00 ...` was inferred from entropy zones, not
+// from a complete parser walkthrough). Treat as experimental until
+// validated against a real Mavic-3 pack with a logic analyser.
+//
+// ROM mode protocol:
+//   - Entry: MAC 0x0F00 -> chip restarts at I2C addr 0x0B
+//   - Commands at 0x0B (per TI sluua64):
+//       0x35 + addr_lo + addr_hi -- mass erase request
+//       0x40 + addr_lo + addr_hi + payload[N] + checksum -- write block
+//       0x80 + 0x00 -- read status (returns 0x01 = OK)
+//   - Exit: send 0x55 + 0x00 + 0x00 (chip restart)
+bool DJIBattery::flashFirmwareFromBuffer(const uint8_t *patch_data, uint32_t patch_size,
+                                         FlashProgressCb progress) {
+    if (!patch_data || patch_size < 64) return false;
+    if (!unlockForServiceOps()) return false;
+
+    Serial.printf("[Battery] flashFirmware: starting, %u bytes\n", patch_size);
+
+    // 1. Switch BQ40Z80 to ROM mode via MAC 0x0F00
+    if (!SMBus::macCommand(BATT_ADDR, 0x0F00)) {
+        Serial.println("[Battery] flashFirmware: MAC 0x0F00 NACKed, aborting");
+        return false;
+    }
+    delay(2000);  // chip needs time to restart in ROM mode
+
+    // 2. From here all I2C transactions go to 0x0B (the ROM bootloader address)
+    static const uint8_t ROM_ADDR = 0x0B;
+
+    // 3. Sync + mass erase
+    if (SMBus::busLock(500)) {
+        Wire1.beginTransmission(ROM_ADDR);
+        Wire1.write(0x35); Wire1.write(0x00); Wire1.write(0x00);
+        Wire1.endTransmission();
+        SMBus::busUnlock();
+    }
+    delay(200);
+
+    // 4. Stream the patch
+    //
+    // The container format (as best we can tell from the entropy zones):
+    //   - bytes 0x0000..0x5000 (~20 KB) = DataFlash image
+    //   - bytes 0x5000..end   (~64 KB) = Instruction Flash image
+    // The actual record framing we DON'T know precisely. As a best-effort
+    // first cut, treat the file as a flat byte stream and write 32-byte
+    // chunks at sequential addresses. Real Mavic-3 hardware testing will
+    // tell us if the framing is per-record (in which case this function
+    // needs the parser added).
+    constexpr uint32_t CHUNK = 32;
+    uint32_t addr = 0;
+    uint32_t pos  = 0;
+    bool ok = true;
+
+    while (pos < patch_size) {
+        uint32_t n = (patch_size - pos > CHUNK) ? CHUNK : (patch_size - pos);
+
+        if (!SMBus::busLock(500)) { ok = false; break; }
+        Wire1.beginTransmission(ROM_ADDR);
+        Wire1.write(0x40);                              // write-block command
+        Wire1.write(addr & 0xFF);
+        Wire1.write((addr >> 8) & 0xFF);
+        for (uint32_t i = 0; i < n; ++i) Wire1.write(patch_data[pos + i]);
+        // XOR checksum
+        uint8_t cksum = 0;
+        for (uint32_t i = 0; i < n; ++i) cksum ^= patch_data[pos + i];
+        Wire1.write(cksum);
+        if (Wire1.endTransmission() != 0) { ok = false; }
+        SMBus::busUnlock();
+
+        delay(5);
+
+        if (!ok) break;
+        pos  += n;
+        addr += n;
+
+        if (progress && (pos % 4096 < CHUNK)) {
+            if (!progress(pos, patch_size)) { ok = false; break; }
+        }
+    }
+
+    // 5. Exit ROM mode (restart command 0x55)
+    if (SMBus::busLock(500)) {
+        Wire1.beginTransmission(ROM_ADDR);
+        Wire1.write(0x55); Wire1.write(0x00); Wire1.write(0x00);
+        Wire1.endTransmission();
+        SMBus::busUnlock();
+    }
+    delay(2000);
+
+    Serial.printf("[Battery] flashFirmware: %s, %u/%u bytes written\n",
+                  ok ? "OK" : "FAIL", pos, patch_size);
+    return ok;
 }
 
 // =====================================================================
