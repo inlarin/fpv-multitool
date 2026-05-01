@@ -561,19 +561,32 @@ UnsealResult DJIBattery::unseal() {
 //
 // This is separate from the static 2x16-bit key unseal (unsealWithKey).
 // DJI firmware may use either flow depending on chip/firmware version.
-UnsealResult DJIBattery::unsealHmac(const uint8_t key[32], uint8_t challenge_out[20]) {
+UnsealResult DJIBattery::unsealHmac(const uint8_t key[32], uint8_t challenge_out[20],
+                                    uint16_t challenge_mac) {
     if (!key) return UNSEAL_NO_RESPONSE;
 
-    // Step 1: request challenge — write 0x0000 to MAC, then block-read to get random
+    // Step 1: request challenge from BMS via the configurable MAC subcommand.
+    // TEST_LOG note #41: PTL 2021 doesn't return a 20-byte challenge via
+    // MAC 0x0000 (which is just MA readback = 2 bytes). The actual TI BQ40Z80
+    // challenge subcommands are chip-specific:
+    //   0x0000 = MA readback (DJI/PTL all 4 batches respond, but only 2 bytes)
+    //   0x002C = SECURITY_KEYS_HASH (hash-protected challenge -- BQ40Z50 default)
+    //   0x002D = AUTHENTICATION_KEY (write-only, but some chips still return
+    //            challenge on read after pre-trigger)
+    //   0x002A = chip-variant; on some BQ40Z80 it's CellBalanceCmd (not auth)
+    //   0x0006 = STATIC_CHEM_DF_SIGNATURE (returns 32 bytes, not 20)
+    // Caller passes which one to try.
     uint8_t challenge[20] = {0};
-    int n = SMBus::macBlockRead(BATT_ADDR, 0x0000, challenge, sizeof(challenge));
+    int n = SMBus::macBlockRead(BATT_ADDR, challenge_mac, challenge, sizeof(challenge));
     if (n < 20) {
-        Serial.printf("[Battery] HMAC: failed to get challenge (len=%d)\n", n);
+        Serial.printf("[Battery] HMAC: challenge_mac=0x%04X returned len=%d, want 20\n",
+                      challenge_mac, n);
+        if (challenge_out && n > 0) memcpy(challenge_out, challenge, n);
         return UNSEAL_NO_RESPONSE;
     }
     if (challenge_out) memcpy(challenge_out, challenge, 20);
 
-    Serial.print("[Battery] HMAC challenge: ");
+    Serial.printf("[Battery] HMAC challenge_mac=0x%04X: ", challenge_mac);
     for (int i = 0; i < 20; i++) Serial.printf("%02X", challenge[i]);
     Serial.println();
 
@@ -594,9 +607,12 @@ UnsealResult DJIBattery::unsealHmac(const uint8_t key[32], uint8_t challenge_out
     for (int i = 0; i < 20; i++) Serial.printf("%02X", digest[i]);
     Serial.println();
 
-    // Step 3: write digest as 20-byte block to MAC 0x44 (ManufacturerBlockAccess)
-    // The subcommand prefix (0x0000) goes first, then the 20-byte HMAC response.
-    uint8_t payload[22] = {0x00, 0x00};
+    // Step 3: write digest as 22-byte block to MAC 0x44 (ManufacturerBlockAccess).
+    // Prefix is the SAME challenge_mac subcommand we used to request -- so the
+    // BMS knows this is the response to that auth challenge.
+    uint8_t payload[22];
+    payload[0] = challenge_mac & 0xFF;
+    payload[1] = challenge_mac >> 8;
     memcpy(payload + 2, digest, 20);
     if (!SMBus::writeBlock(BATT_ADDR, 0x44, payload, 22)) {
         return UNSEAL_NO_RESPONSE;
@@ -608,7 +624,8 @@ UnsealResult DJIBattery::unsealHmac(const uint8_t key[32], uint8_t challenge_out
     uint32_t op = readOperationStatus();
     uint8_t sec = (op >> 8) & 0x03;
     if (sec != 0x03) {
-        Serial.printf("[Battery] HMAC unseal OK (SEC=%d)\n", sec);
+        Serial.printf("[Battery] HMAC unseal OK (challenge_mac=0x%04X, SEC=%d)\n",
+                      challenge_mac, sec);
         return UNSEAL_OK;
     }
     return UNSEAL_REJECTED_SEALED;

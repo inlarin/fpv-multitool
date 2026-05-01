@@ -199,7 +199,8 @@ UnsealResult unsealWithKey(uint32_t key_combined);
 // Flow: host sends 2 challenge requests, device replies with 20B random data;
 // host computes HMAC-SHA1(key, challenge) and writes 20B response.
 // If challenge_out != nullptr, captures the 20B challenge for debugging.
-UnsealResult unsealHmac(const uint8_t key[32], uint8_t challenge_out[20] = nullptr);
+UnsealResult unsealHmac(const uint8_t key[32], uint8_t challenge_out[20] = nullptr,
+                        uint16_t challenge_mac = 0x0000);
 
 // Mavic-3 Full Access State (Unsealed -> FullAccess). Required after
 // unseal() before destructive ops -- without FAS the BMS silently

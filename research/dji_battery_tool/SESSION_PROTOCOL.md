@@ -161,3 +161,69 @@ Pending firmware fix: #41 (HMAC challenge subcommand fallback).
 4. If #41: edit `dji_battery.cpp::unsealHmac()` to take an additional
    `challenge_mac` arg (default 0x0000), update HTTP wrapper to accept
    `?challenge_mac=` param, rebuild, flash, retest A1 with subcmd 0x002C.
+
+---
+
+## A1 round 2 (post-#41 implementation)
+
+#41 implemented: `unsealHmac()` now takes `uint16_t challenge_mac` arg
+(default 0x0000) and HTTP endpoint accepts `?challenge_mac=0xNNNN`. Also
+added `?probe=1` mode that just reads the challenge without computing
+HMAC -- doesn't burn rate-limit attempts. Both committed at the
+checkpoint below.
+
+### Probe results on Battery #1 (still PTL 2021, sealed)
+
+`POST /api/batt/mavic3/unseal_hmac?probe=1&challenge_mac=0xNNNN`
+
+via STANDARD path (`writeBlock 0x44 + readBlock 0x44`): all returned
+`len=-1` (NACK). PTL 2021 doesn't expose any 20-byte challenge via the
+ManufacturerBlockAccess block-read protocol that BQ40Z80 uses.
+
+via LEGACY path (`writeWord 0x00 + readBlock 0x00`): SUCCEEDED with
+varying response sizes per subcommand:
+
+| Subcmd | len | First 4 bytes |
+|---|---|---|
+| 0x0001 DeviceType | 1 | `00` |
+| 0x0002 FwVersion | 2 | `00 E7` |
+| 0x0003 HwVersion | 3 | `00 F2 FF` |
+| 0x0006 ChemSig | 6 | `00 B3 FF FF` |
+| 0x0007 ChemID | 7 | `00 A6 FF FF` |
+| 0x0021 LearnCycle | 32 | `00 76 FF FF` (rest FF) |
+| 0x002A | 32 | `00 E1 FF FF` (rest FF) |
+| 0x002C SecKeysHash | 32 | `00 9F FF FF` (rest FF) |
+| 0x002D AuthKey | 32 | `00 8A FF FF` (rest FF) |
+| 0x4062 DJI authBp | 32 | `40 D5 FF FF` (rest FF) |
+
+Pattern: byte 0 echoes subcommand HIGH byte (0x00 for all standard MAC,
+0x40 for 0x4062); byte 1 varies but is single-byte status, not random;
+bytes 2..N are `0xFF` padding.
+
+**PTL 2021 does NOT support HMAC-SHA1 challenge-response unseal.** The
+firmware doesn't generate or expose 20-byte random challenges via any
+of the tested MAC subcommands. PTL 2021 must use STATIC keys that we
+haven't yet found.
+
+### Verdict
+
+A1 is closed: HMAC route is a dead end on PTL 2021. The remaining paths
+to unlock the 4 PTL 2021 packs are:
+
+- **D1** (forum mining for PTL 2021 keys) — slow, language-bound research
+- **D2** (logic analyzer on commercial-tool unseal) — fast if we have a
+  spare SC01 to flash with the commercial firmware + a Saleae/DSLogic
+- **B2** (cell balancing on #1 in sealed state — try MAC `0x002A` write
+  even without unseal — may work since some BMS allow balance command
+  at sealed level)
+- **B3** (calibration on #1 in sealed state — try MAC `0x0021` write,
+  see if ImpedanceTrack starts learning)
+
+D1/D2 are the only paths to actual PTL 2021 unseal. B2/B3 are
+"work around the lock" paths.
+
+## State at session pause #2
+
+Battery #1 connected, sealed, untouched (probes don't change state).
+Latest commit pending: #41 implementation + probe diagnostics.
+

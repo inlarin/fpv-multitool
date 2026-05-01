@@ -420,12 +420,51 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
     });
 
     // HMAC-SHA1 challenge-response unseal. Caller provides 32-byte key as
-    // ?key=64-hex-chars. The implementation requests a 20-byte challenge from
-    // the BMS, computes HMAC-SHA1(key, challenge), writes the digest, and
-    // checks SEC bits.
+    // ?key=64-hex-chars + optional ?challenge_mac=0xNNNN to override the
+    // default MAC subcommand for requesting the BMS challenge.
+    //
+    // Default 0x0000 = MA readback (works on most TI BQ chips but PTL 2021
+    // returns only 2 bytes there). Try 0x002C (SECURITY_KEYS_HASH) or
+    // 0x002D / 0x002A as fallbacks (TEST_LOG note #41).
+    //
+    // Also exposes a "challenge-only" mode via ?probe=1 -- just reads the
+    // challenge buffer without computing/writing HMAC. Useful to scan
+    // multiple challenge_mac values without burning rate-limit attempts.
     s_server->on("/api/batt/mavic3/unseal_hmac", HTTP_POST, [](AsyncWebServerRequest *req) {
+        bool probe_only = req->hasParam("probe") &&
+                          req->getParam("probe")->value() != "0";
+        uint16_t challenge_mac = req->hasParam("challenge_mac")
+            ? (uint16_t)strtoul(req->getParam("challenge_mac")->value().c_str(), nullptr, 0)
+            : 0x0000;
+
+        if (probe_only) {
+            // Just read 20 bytes via macBlockRead -- no HMAC, no rate-limit.
+            uint8_t challenge[32] = {0};
+            int n = SMBus::macBlockRead(0x0B, challenge_mac, challenge, sizeof(challenge));
+            JsonDocument d;
+            d["challenge_mac"] = String("0x") + String(challenge_mac, HEX);
+            d["len"] = n;
+            String chHex; for (int i = 0; i < (n > 0 ? n : 0) && i < 32; ++i) {
+                char b[3]; snprintf(b, 3, "%02X", challenge[i]); chHex += b;
+            }
+            d["challenge_hex"] = chHex;
+            d["all_zero"] = (chHex.length() > 0) &&
+                            (chHex.indexOf('1') < 0 && chHex.indexOf('2') < 0 &&
+                             chHex.indexOf('3') < 0 && chHex.indexOf('4') < 0 &&
+                             chHex.indexOf('5') < 0 && chHex.indexOf('6') < 0 &&
+                             chHex.indexOf('7') < 0 && chHex.indexOf('8') < 0 &&
+                             chHex.indexOf('9') < 0 && chHex.indexOf('A') < 0 &&
+                             chHex.indexOf('B') < 0 && chHex.indexOf('C') < 0 &&
+                             chHex.indexOf('D') < 0 && chHex.indexOf('E') < 0 &&
+                             chHex.indexOf('F') < 0);
+            String out; serializeJson(d, out);
+            req->send(n >= 20 ? 200 : 500, "application/json", out);
+            return;
+        }
+
         if (!req->hasParam("key")) {
-            req->send(400, "text/plain", "need ?key=<64-hex-char-32-byte-key>");
+            req->send(400, "text/plain",
+                      "need ?key=<64-hex-char-32B>[&challenge_mac=0xNN][&probe=1]");
             return;
         }
         String hex = req->getParam("key")->value();
@@ -439,12 +478,12 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
             key[i] = (uint8_t)strtoul(buf, nullptr, 16);
         }
         uint8_t challenge[20] = {0};
-        UnsealResult r = DJIBattery::unsealHmac(key, challenge);
+        UnsealResult r = DJIBattery::unsealHmac(key, challenge, challenge_mac);
         DJIBattery::recordUnsealAttempt(r == UNSEAL_OK);
         JsonDocument d;
         d["result"] = r == UNSEAL_OK ? "OK" : r == UNSEAL_REJECTED_SEALED ? "still sealed" :
                       r == UNSEAL_NO_RESPONSE ? "no i2c" : "unsupported";
-        // Show the challenge so user can compute HMAC offline if needed
+        d["challenge_mac"] = String("0x") + String(challenge_mac, HEX);
         String chHex; for (int i = 0; i < 20; ++i) {
             char b[3]; snprintf(b, 3, "%02X", challenge[i]); chHex += b;
         }
