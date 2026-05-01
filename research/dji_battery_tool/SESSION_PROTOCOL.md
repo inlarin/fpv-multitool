@@ -264,4 +264,81 @@ fully locked until we obtain their unseal keys.
   PTL 2021 pack -- needs spare SC01 + Saleae/DSLogic
 - Patience: wait for someone to publish PTL 2021 keys publicly
 
+---
+
+## Round 3: standalone tests of commercial-firmware findings on PTL 2021 #1
+
+User reminded: did we try ALL distinctive findings from commercial
+firmware reverse? Specifically:
+- The **DJI auth-bypass packet** (MAC 0x4062 + magic 0x67452301)
+- The **5 fallback packets** (F0-F4) used in clearPF fallback path
+
+These had NEVER been tested standalone on PTL 2021. Tried each variation:
+
+### Auth-bypass alone
+
+```
+writeBlock 0x44 [0x62 0x40 0x01 0x23 0x45 0x67]   -> ACK, len=6
+opStatus low: 0x0307 -> 0x0704 (toggled)
+sec: 3 -> 3 (unchanged)
+Then RUS_MAV unseal: still sealed
+```
+
+Auth-bypass DID change opStatus low bits (something internal flipped),
+but didn't unseal. Subsequent unseal still rejected. So auth-bypass is
+NECESSARY in the main clearPF path BUT NOT SUFFICIENT for unlock.
+
+### 5 fallback packets sequence (F0-F4)
+
+```
+F0 MAC 0x0021 (LearnCycle)            -> ACK, sec stays 3
+F1 MAC 0x4971 + 0x07                  -> ACK, sec=1 ⚠ TRANSIENT!
+F2 MAC 0x4346 + 0x03                  -> ACK, sec=3 (back)
+F3 MAC 0x4347 + 0x00B4                -> ACK, sec=3
+F4 MAC 0x434B + 0x14                  -> ACK, sec=3
+```
+
+⚠ **F1 produced sec=1 once (opStatus low 0x0104)** — sec=1 isn't a
+documented BQ40Z80 state (3=Sealed, 2=Unsealed, 0=FullAccess). Was
+this a real transition or read glitch?
+
+Tried to reproduce:
+- F1 alone: no sec=1 transition
+- F0 then F1 explicitly: no sec=1 transition
+- Full blast F0-F4 without intermediate reads: sec stays 3
+
+Conclusion: sec=1 was a **non-reproducible read glitch** (likely race
+between BMS state machine settling and our readWord at 0x54).
+
+### Full attack: F0-F4 + auth-bypass + RUS_MAV unseal
+
+Sent all 5 fallback packets, then auth-bypass, then unseal RUS_MAV
+keys: still rejected ("still sealed").
+
+### Verdict (final)
+
+**Every distinctive finding from commercial firmware reverse has been
+tested as a standalone unlock vector on PTL 2021 — all rejected.**
+
+Tested combinations:
+- 8 static unseal key pairs (RUS_MAV, FAS, TI default, DJI BK + swaps)
+- 10 HMAC challenge_mac variants (probe via reg 0x44 and 0x00 paths)
+- Auth-bypass packet alone
+- 5 fallback packets standalone, F1 alone, F0+F1 sequence
+- Full blast: F0-F4 + auth-bypass + unseal
+
+PTL 2021 firmware refuses ALL software-only unseal attempts via the
+standard MA protocols. Either:
+1. Keys are unique per-batch / per-pack (derived from djiSerial?)
+2. There's a magic SBS register write outside the MA range we tested
+3. Unseal requires a specific TIMING / CHALLENGE beyond our probes
+
+Without access to:
+- A working commercial tool's I2C trace on a PTL 2021 pack (D2), OR
+- Public publication of PTL 2021 keys (D1), OR
+- Access to PTL firmware source / documentation
+
+We cannot software-unlock PTL 2021 packs. The 4 PTL 2021 packs
+(#1, #3, #4, #5) remain locked for any service operations.
+
 
