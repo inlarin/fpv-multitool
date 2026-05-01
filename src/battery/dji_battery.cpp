@@ -1300,8 +1300,43 @@ DJIBattery::KeyTrialResult DJIBattery::tryAllKnownKeys() {
     // Detect the pack's firmware variant to prioritize matching keys first
     // (TEST_LOG note #30: PTL 2021 and 2024 use different keys -- avoid wasting
     // attempts on known-wrong keys).
-    BatteryInfo info = readAll();
-    uint8_t myBit = variantBit(info.fwVariant);
+    //
+    // CRITICAL: do NOT call readAll() here -- it runs readDJIPF2() which writes
+    // MAC subcommand 0x4062 (the DJI auth-bypass subcommand) with no data, and
+    // PTL BMS interprets this as a MALFORMED auth-bypass packet and BLOCKS
+    // the next unseal attempt (TEST_LOG note #33). We use a minimal variant
+    // detection: just read ChipType MAC (which is harmless) + cell voltages
+    // (also harmless).
+    uint16_t chipType = readChipType();
+    bool dasMacWorks = (chipType != 0);
+
+    uint16_t cells[4] = {
+        SMBus::readWord(BATT_ADDR, REG_CELL1),
+        SMBus::readWord(BATT_ADDR, REG_CELL2),
+        SMBus::readWord(BATT_ADDR, REG_CELL3),
+        SMBus::readWord(BATT_ADDR, REG_CELL4),
+    };
+    uint16_t pack_v = SMBus::readWord(BATT_ADDR, REG_VOLTAGE);
+
+    bool cellsSynth = false;
+    if (cells[0] > 1000 && cells[0] < 5000) {
+        uint16_t mn = cells[0], mx = cells[0]; uint32_t sum = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (cells[i] < mn) mn = cells[i];
+            if (cells[i] > mx) mx = cells[i];
+            sum += cells[i];
+        }
+        int32_t diff = (int32_t)sum - (int32_t)pack_v;
+        if (diff < 0) diff = -diff;
+        cellsSynth = ((mx - mn) <= 2) && (diff < 4);
+    }
+
+    // Reproduce detectFirmwareVariant logic without triggering DJI-specific reads
+    BatteryInfo::FirmwareVariant fwVar = BatteryInfo::FW_VARIANT_UNKNOWN;
+    if (cellsSynth && dasMacWorks)        fwVar = BatteryInfo::FW_VARIANT_PTL_NEW;
+    else if (!cellsSynth && !dasMacWorks) fwVar = BatteryInfo::FW_VARIANT_PTL_OLD;
+    else if (!cellsSynth && dasMacWorks)  fwVar = BatteryInfo::FW_VARIANT_GENUINE_DJI;
+    uint8_t myBit = variantBit(fwVar);
 
     // Two-pass try: first the keys flagged for this variant, then the rest.
     // Skip already-tried keys via a bitmap.
