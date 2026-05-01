@@ -125,11 +125,26 @@ uint16_t SMBus::readWord(uint8_t addr, uint8_t reg) {
 }
 
 uint32_t SMBus::readDword(uint8_t addr, uint8_t reg) {
+    // Primary path: SMBus block read (TI standard for 32-bit status registers).
     uint8_t buf[8] = {0};
     int len = readBlock(addr, reg, buf, 8);
-    if (len < 4) return 0xFFFFFFFF;
-    return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
-           ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+    if (len >= 4) {
+        return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
+               ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+    }
+    // Fallback path: PTL 2025 firmware (and possibly other clones) reject
+    // block reads on status registers but ACCEPT single-word reads at the
+    // same address. The low 16 bits of TI 32-bit status registers contain
+    // all the commonly-decoded flags (PRES/DSG/PF/XCHG/SEC bits etc), so
+    // returning low_16 | (0 << 16) is enough for our decoders. We use 0
+    // (not 0xFFFF) for the high half so caller can distinguish "block read
+    // failed -> only got low 16" (high=0) from "fully NACK" (high=0xFFFF).
+    // TEST_LOG note #34, observed on Battery #6 PTL 2025-06.
+    uint16_t lo = readWord(addr, reg);
+    if (lo != 0xFFFF) {
+        return (uint32_t)lo;  // high half = 0 -> we know it's the partial-read path
+    }
+    return 0xFFFFFFFF;
 }
 
 int SMBus::readBlock(uint8_t addr, uint8_t reg, uint8_t *buf, uint8_t maxLen) {

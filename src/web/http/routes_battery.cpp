@@ -315,6 +315,7 @@ void registerRoutesBattery(AsyncWebServer *s_server) {
         }
         // Chip/model
         d["chipType"]       = String("0x") + String(info.chipType, HEX);
+        d["chipTypeName"]   = DJIBattery::chipTypeName(info.chipType);
         d["fwVersion"]      = info.firmwareVersion;
         d["hwVersion"]      = info.hardwareVersion;
         d["model"]          = DJIBattery::modelName(info.model);

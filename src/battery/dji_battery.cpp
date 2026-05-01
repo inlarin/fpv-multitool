@@ -615,7 +615,47 @@ UnsealResult DJIBattery::unsealHmac(const uint8_t key[32], uint8_t challenge_out
 }
 
 bool DJIBattery::seal() {
-    return SMBus::macCommand(BATT_ADDR, MAC_SEAL_DEVICE);
+    // Try MAC 0x0030 first (works on PTL 2024 batch).
+    // Then fall back to MAC 0x0020 (TI standard SEAL).
+    // Verify by reading opStatus SEC bits afterwards.
+    //
+    // PTL 2025-06 firmware doesn't support seal at all (TEST_LOG note #36) --
+    // packs designed for permanent FullAccess service work. In that case we
+    // log a warning and return false so UI can show "this pack can't be sealed".
+
+    // Read SEC bits before
+    uint32_t op_before = readOperationStatus();
+    uint8_t sec_before = (op_before >> 8) & 0x03;
+    if (sec_before == 0x03) {
+        // Already sealed -- nothing to do
+        return true;
+    }
+
+    // Attempt 1: MAC 0x0030 (DJI/PTL 2024 path)
+    SMBus::macCommand(BATT_ADDR, MAC_SEAL_DEVICE);  // 0x0030
+    delay(200);
+    uint32_t op_after = readOperationStatus();
+    uint8_t sec_after = (op_after >> 8) & 0x03;
+    if (sec_after == 0x03) {
+        Serial.println("[Battery] Sealed via MAC 0x0030");
+        return true;
+    }
+
+    // Attempt 2: MAC 0x0020 (TI standard)
+    SMBus::macCommand(BATT_ADDR, 0x0020);
+    delay(200);
+    op_after = readOperationStatus();
+    sec_after = (op_after >> 8) & 0x03;
+    if (sec_after == 0x03) {
+        Serial.println("[Battery] Sealed via MAC 0x0020 (TI standard)");
+        return true;
+    }
+
+    // Pack doesn't support seal -- common on PTL 2025 service-build firmware.
+    Serial.printf("[Battery] seal() FAILED: pack doesn't support seal (sec was %d, "
+                  "stayed %d). Likely a service-mode build. Pack stays in current state.\n",
+                  sec_before, sec_after);
+    return false;
 }
 
 bool DJIBattery::softReset() {
@@ -1100,6 +1140,22 @@ String DJIBattery::decodeManufacturingStatus(uint32_t ms) {
 // =====================================================================
 // Pack identification helpers (added 2026-05-01)
 // =====================================================================
+
+String DJIBattery::chipTypeName(uint16_t chipType) {
+    // TEST_LOG note #35: PTL clones use non-standard chip IDs not in TI's
+    // public table. Known mappings:
+    switch (chipType) {
+        case 0x0000: return "(NACK)";          // sealed-NACK on PTL 2021/2025
+        case 0x0550: return "BQ30Z55";         // legacy DJI Spark / Mavic Pro
+        case 0x4307: return "BQ40Z307 / BQ9003";// Mavic Air 2 / Mini 2 / Mavic 2
+        case 0x4800: return "BQ40Z80";          // Mavic 3 stock (genuine DJI)
+        case 0x340A: return "BQ34Z100";         // various
+        case 0x6496: return "PTL custom (0x6496)"; // PTL 2025 LiHV custom build
+    }
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Unknown (0x%04X)", chipType);
+    return String(buf);
+}
 
 String DJIBattery::decodeMfrDate(uint16_t raw) {
     if (!raw || raw == 0xFFFF) return "?";

@@ -181,6 +181,11 @@ uint16_t readChipType();            // MAC 0x0001
 uint16_t readFirmwareVer();         // MAC 0x0002
 uint16_t readHardwareVer();         // MAC 0x0003
 
+// Human-readable name for a ChipType MAC response. Recognises TI standard
+// IDs (BQ30Z55=0x0550, BQ40Z80=0x4800, BQ40Z307=0x4307, etc) plus known
+// non-TI clones (PTL custom 0x6496). Returns "Custom 0x%04X" for unknowns.
+String chipTypeName(uint16_t chipType);
+
 // DJI-specific reads
 String   readDJISerial();           // 0xD8
 uint32_t readDJIPF2();              // ManufacturerBlockAccess 0x4062
