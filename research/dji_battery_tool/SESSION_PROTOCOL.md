@@ -225,5 +225,43 @@ D1/D2 are the only paths to actual PTL 2021 unseal. B2/B3 are
 ## State at session pause #2
 
 Battery #1 connected, sealed, untouched (probes don't change state).
-Latest commit pending: #41 implementation + probe diagnostics.
+Latest commit: `4c13cc0` (#41 + diagnostics).
+
+---
+
+## B2 trial — cell balance trigger on Battery #1 in sealed state
+
+Pre-balance cells (3875/3850/3879/**3896** mV, spread 46 mV).
+Sent both protocol variants:
+- `writeBlock 0x44 [0x2A, 0x00, 0x08]` (balance cell 4 mask): ACK len=3
+- `writeWord 0x00 0x002A` (MA register write): ACK
+
+Polled cells every 30s for 2 minutes. Result: **NO change** — cells
+stable ±1 mV (measurement jitter only). Cell 4 still 3896 mV after
+2 minutes.
+
+**Conclusion**: PTL 2021 ACKs MAC writes in sealed state, but DOESN'T
+actually execute destructive commands (balance). The BMS gates MAC
+0x002A behind Unsealed state.
+
+By inference, B3 (calibration, MAC 0x0021 LearnCycle) is similarly
+gated and won't trigger learning in sealed state.
+
+**Verdict**: There is NO workaround to do service ops on PTL 2021
+without actual unseal. The 4 PTL 2021 packs (#1, #3, #4, #5) are
+fully locked until we obtain their unseal keys.
+
+## Closed paths
+
+- A1 HMAC challenge-response: PTL 2021 doesn't expose challenge buffer
+- B2 sealed-balance: PTL 2021 BMS doesn't act on MAC writes while sealed
+- B3 sealed-calibrate: same lock as B2 by inference
+
+## Remaining open paths for PTL 2021 unlock
+
+- **D1**: forum mining for PTL 2021 keys (Russian DJI service Telegram)
+- **D2**: logic analyzer trace of commercial-tool firmware unsealing a
+  PTL 2021 pack -- needs spare SC01 + Saleae/DSLogic
+- Patience: wait for someone to publish PTL 2021 keys publicly
+
 
