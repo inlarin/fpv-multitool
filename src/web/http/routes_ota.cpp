@@ -32,6 +32,16 @@
 #define GITHUB_REPO ""
 #endif
 
+// Per-board asset name. The two boards need different binaries (PSRAM
+// controller, USB mode, display lib), so a single 'firmware.bin' asset
+// per release can't serve both. Each env's build_flags sets this to
+// the asset name CI publishes for that board (e.g. firmware-esp32s3.bin
+// or firmware-wt32_sc01_plus.bin). Fallback for old single-asset
+// releases is plain 'firmware.bin'.
+#ifndef GITHUB_OTA_ASSET
+#define GITHUB_OTA_ASSET "firmware.bin"
+#endif
+
 namespace RoutesOta {
 
 // Background OTA-pull state used by the /api/ota/pull xTask to publish
@@ -104,12 +114,24 @@ void registerRoutesOta(AsyncWebServer *s_server) {
 
         s_latestVersion  = doc["tag_name"] | "";
         s_latestAssetUrl = "";
+        // Look for the per-board asset first (firmware-<env>.bin); fall
+        // back to plain firmware.bin so old single-asset releases still
+        // resolve (Waveshare-shaped binary, Waveshare-only).
+        const char *want_primary  = GITHUB_OTA_ASSET;
+        const char *want_fallback = "firmware.bin";
+        String fallback_url;
         for (JsonObject a : doc["assets"].as<JsonArray>()) {
             String name = a["name"] | "";
-            if (name == "firmware.bin") {
+            if (name == want_primary) {
                 s_latestAssetUrl = a["browser_download_url"].as<const char*>();
                 break;
             }
+            if (name == want_fallback) {
+                fallback_url = a["browser_download_url"].as<const char*>();
+            }
+        }
+        if (s_latestAssetUrl.isEmpty() && !fallback_url.isEmpty()) {
+            s_latestAssetUrl = fallback_url;
         }
         s_latestCheckedMs = millis();
 
