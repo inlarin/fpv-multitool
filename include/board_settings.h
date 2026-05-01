@@ -18,6 +18,12 @@ void    begin();                            // open Preferences, called once fro
 uint8_t rotation();                         // 0..3, default 0
 void    setRotation(uint8_t rot);           // persists immediately
 
+// LCD backlight brightness 0..255. Default 255 (full bright). Saved
+// at first call so a fresh board doesn't need to write to NVS just
+// to read the default.
+uint8_t brightness();
+void    setBrightness(uint8_t val);
+
 // Touch calibration: 8x uint16 produced by lgfx::LGFX_Device::calibrateTouch().
 // Returns true if NVS held a previously-saved set; false if first boot.
 bool    getTouchCalibrate(uint16_t out[8]);

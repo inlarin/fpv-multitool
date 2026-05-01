@@ -8,6 +8,7 @@ static bool        s_open = false;
 
 static constexpr const char *NS_NAME       = "boardcfg";
 static constexpr const char *KEY_ROTATION  = "rotation";
+static constexpr const char *KEY_BRIGHT    = "brightness";
 static constexpr const char *KEY_TOUCHCAL  = "touch_cal";   // bytes: uint16_t[8] = 16B
 static constexpr const char *KEY_WIFI_SSID = "wifi_ssid";
 static constexpr const char *KEY_WIFI_PASS = "wifi_pass";
@@ -31,6 +32,16 @@ void setRotation(uint8_t rot) {
     if (!s_open) return;
     if (rot > 3) rot = 0;
     s_prefs.putUChar(KEY_ROTATION, rot);
+}
+
+uint8_t brightness() {
+    if (!s_open) return 255;
+    return s_prefs.getUChar(KEY_BRIGHT, 255);
+}
+
+void setBrightness(uint8_t val) {
+    if (!s_open) return;
+    s_prefs.putUChar(KEY_BRIGHT, val);
 }
 
 bool getTouchCalibrate(uint16_t out[8]) {

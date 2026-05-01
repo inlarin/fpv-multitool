@@ -144,6 +144,11 @@ static void brightnessChanged(lv_event_t *e) {
     lv_obj_t *sl = (lv_obj_t *)lv_event_get_target(e);
     int v = lv_slider_get_value(sl);
     BoardApp::display().setBrightness((uint8_t)v);
+    // Persist to NVS so the level survives reboot. Cheap (single
+    // putUChar) but called on every slider tick -- LVGL slider
+    // throttles to ~10 events/s during a drag which the NVS layer
+    // handles fine.
+    BoardSettings::setBrightness((uint8_t)v);
 }
 
 static void recalibrateClicked(lv_event_t * /*e*/) {
@@ -201,7 +206,7 @@ static void buildDisplaySection(lv_obj_t *parent) {
     lv_obj_set_width(sl, lv_pct(100));
     lv_obj_set_height(sl, 28);
     lv_slider_set_range(sl, 32, 255);   // <32 makes the LCD hard to read
-    lv_slider_set_value(sl, 255, LV_ANIM_OFF);  // we don't store this in NVS yet
+    lv_slider_set_value(sl, BoardSettings::brightness(), LV_ANIM_OFF);
     lv_obj_add_event_cb(sl, brightnessChanged, LV_EVENT_VALUE_CHANGED, nullptr);
 
     // Recalibrate touch button.
@@ -232,12 +237,174 @@ static lv_obj_t *s_wifi_ta_ssid   = nullptr;
 static lv_obj_t *s_wifi_ta_pass   = nullptr;
 static lv_obj_t *s_wifi_ssid_lbl  = nullptr;
 static lv_obj_t *s_wifi_keyboard  = nullptr;
+static lv_obj_t *s_wifi_scan_btn  = nullptr;
+// Scan view (visible only while showing results, replaces the form):
+static lv_obj_t *s_wifi_scan_panel  = nullptr;   // holds list + back btn
+static lv_obj_t *s_wifi_scan_status = nullptr;
+static lv_obj_t *s_wifi_scan_list   = nullptr;
+static lv_timer_t *s_wifi_scan_tick = nullptr;
 
 static void wifiSaveClicked(lv_event_t * /*e*/);
 static void wifiCancelClicked(lv_event_t * /*e*/);
+static void wifiScanClicked(lv_event_t * /*e*/);
+static void wifiScanBackClicked(lv_event_t * /*e*/);
 static void wifiTextareaFocused(lv_event_t *e) {
     lv_obj_t *ta = (lv_obj_t *)lv_event_get_target(e);
     if (s_wifi_keyboard) lv_keyboard_set_textarea(s_wifi_keyboard, ta);
+}
+
+// Helpers to swap modal between credentials-form view and scan-results view.
+// We keep the form widgets alive in both states (just hide/show) so the
+// scan list tap can back-fill the SSID textarea cleanly.
+
+static void wifiShowForm() {
+    if (s_wifi_scan_panel) {
+        lv_obj_delete(s_wifi_scan_panel);
+        s_wifi_scan_panel = nullptr;
+        s_wifi_scan_status = nullptr;
+        s_wifi_scan_list = nullptr;
+    }
+    if (s_wifi_scan_tick) {
+        lv_timer_delete(s_wifi_scan_tick);
+        s_wifi_scan_tick = nullptr;
+    }
+    // Re-show the form widgets if they were hidden.
+    if (s_wifi_ta_ssid)  lv_obj_clear_flag(s_wifi_ta_ssid,  LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_ta_pass)  lv_obj_clear_flag(s_wifi_ta_pass,  LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_scan_btn) lv_obj_clear_flag(s_wifi_scan_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_keyboard) lv_obj_clear_flag(s_wifi_keyboard, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Tap on a scan result -> back-fill SSID and return to form view.
+static void wifiPickResult(lv_event_t *e) {
+    const char *ssid = (const char *)lv_event_get_user_data(e);
+    if (s_wifi_ta_ssid && ssid) {
+        lv_textarea_set_text(s_wifi_ta_ssid, ssid);
+    }
+    wifiShowForm();
+    // Focus the password textarea so the keyboard targets it next.
+    if (s_wifi_keyboard && s_wifi_ta_pass) {
+        lv_keyboard_set_textarea(s_wifi_keyboard, s_wifi_ta_pass);
+    }
+}
+
+static void wifiScanTick(lv_timer_t * /*t*/) {
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_RUNNING) return;        // -1, still scanning
+    // Either completed (n >= 0) or failed (n == -2). One-shot: stop polling.
+    if (s_wifi_scan_tick) {
+        lv_timer_delete(s_wifi_scan_tick);
+        s_wifi_scan_tick = nullptr;
+    }
+
+    if (!s_wifi_scan_status || !s_wifi_scan_list) return;
+
+    if (n < 0) {
+        lv_label_set_text(s_wifi_scan_status, "scan failed -- try again");
+        lv_obj_set_style_text_color(s_wifi_scan_status, lv_color_hex(0xE63946), 0);
+        return;
+    }
+    if (n == 0) {
+        lv_label_set_text(s_wifi_scan_status, "no networks found");
+        lv_obj_set_style_text_color(s_wifi_scan_status, lv_color_hex(0xE6A23C), 0);
+        return;
+    }
+
+    char hdr[40];
+    snprintf(hdr, sizeof(hdr), "found %d networks", n);
+    lv_label_set_text(s_wifi_scan_status, hdr);
+    lv_obj_set_style_text_color(s_wifi_scan_status, lv_color_hex(0x06A77D), 0);
+
+    // Build buttons. Strdup the SSID so the user_data outlives the
+    // WiFi.scanDelete() call below.
+    int show = n > 16 ? 16 : n;
+    for (int i = 0; i < show; i++) {
+        String ssid = WiFi.SSID(i);
+        int32_t rssi = WiFi.RSSI(i);
+        bool open  = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN);
+        if (ssid.length() == 0) ssid = "(hidden)";
+
+        char *ssid_owned = strdup(ssid.c_str());
+
+        lv_obj_t *row = lv_button_create(s_wifi_scan_list);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, 36);
+        lv_obj_set_style_bg_color(row, lv_color_hex(0x1a1f24), LV_PART_MAIN);
+        lv_obj_set_style_radius(row, 6, LV_PART_MAIN);
+        lv_obj_add_event_cb(row, wifiPickResult, LV_EVENT_CLICKED, ssid_owned);
+
+        char line[80];
+        snprintf(line, sizeof(line), "%s%s   %d dBm",
+                 ssid.c_str(), open ? " " : " *", (int)rssi);
+        lv_obj_t *l = lv_label_create(row);
+        lv_label_set_text(l, line);
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);
+    }
+
+    WiFi.scanDelete();
+}
+
+static void wifiScanClicked(lv_event_t * /*e*/) {
+    if (!s_wifi_modal) return;
+    Safety::logf("[settings] wifi scan requested");
+
+    // Hide form widgets while results are visible.
+    if (s_wifi_ta_ssid)  lv_obj_add_flag(s_wifi_ta_ssid,  LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_ta_pass)  lv_obj_add_flag(s_wifi_ta_pass,  LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_scan_btn) lv_obj_add_flag(s_wifi_scan_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_wifi_keyboard) lv_obj_add_flag(s_wifi_keyboard, LV_OBJ_FLAG_HIDDEN);
+
+    // Build scan view inside the modal.
+    s_wifi_scan_panel = lv_obj_create(s_wifi_modal);
+    lv_obj_set_width(s_wifi_scan_panel, lv_pct(100));
+    lv_obj_set_flex_grow(s_wifi_scan_panel, 1);
+    lv_obj_set_style_bg_opa(s_wifi_scan_panel, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(s_wifi_scan_panel, 0, 0);
+    lv_obj_set_style_border_width(s_wifi_scan_panel, 0, 0);
+    lv_obj_set_layout(s_wifi_scan_panel, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_wifi_scan_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(s_wifi_scan_panel, 4, 0);
+
+    s_wifi_scan_status = lv_label_create(s_wifi_scan_panel);
+    lv_label_set_text(s_wifi_scan_status, "Scanning...");
+    lv_obj_set_style_text_color(s_wifi_scan_status, lv_color_hex(0xa0a0a0), 0);
+    lv_obj_set_style_text_font(s_wifi_scan_status, &lv_font_montserrat_14, 0);
+
+    s_wifi_scan_list = lv_obj_create(s_wifi_scan_panel);
+    lv_obj_set_width(s_wifi_scan_list, lv_pct(100));
+    lv_obj_set_flex_grow(s_wifi_scan_list, 1);
+    lv_obj_set_style_bg_opa(s_wifi_scan_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(s_wifi_scan_list, 4, 0);
+    lv_obj_set_style_border_width(s_wifi_scan_list, 0, 0);
+    lv_obj_set_layout(s_wifi_scan_list, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_wifi_scan_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(s_wifi_scan_list, 3, 0);
+    lv_obj_set_scroll_dir(s_wifi_scan_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_wifi_scan_list, LV_SCROLLBAR_MODE_AUTO);
+
+    // Back button so user can abort scan and return to form.
+    lv_obj_t *back = lv_button_create(s_wifi_scan_panel);
+    lv_obj_set_width(back, lv_pct(100));
+    lv_obj_set_height(back, 40);
+    lv_obj_set_style_bg_color(back, lv_color_hex(0x394150), LV_PART_MAIN);
+    lv_obj_set_style_radius(back, 6, 0);
+    lv_obj_add_event_cb(back, wifiScanBackClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *bl = lv_label_create(back);
+    lv_label_set_text(bl, "< Back to form");
+    lv_obj_set_style_text_color(bl, lv_color_white(), 0);
+    lv_obj_center(bl);
+
+    // Kick off async scan + poll.
+    WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/false);
+    s_wifi_scan_tick = lv_timer_create(wifiScanTick, 500, nullptr);
+}
+
+static void wifiScanBackClicked(lv_event_t * /*e*/) {
+    // Abort an in-flight scan if any (scanComplete handles the delete).
+    if (WiFi.scanComplete() >= 0) WiFi.scanDelete();
+    wifiShowForm();
 }
 
 static void wifiEditClicked(lv_event_t * /*e*/) {
@@ -263,6 +430,22 @@ static void wifiEditClicked(lv_event_t * /*e*/) {
     lv_label_set_text(title, "WiFi");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+
+    // Scan button -- swaps modal into scan-results view; tap a network
+    // to back-fill the SSID textarea.
+    s_wifi_scan_btn = lv_button_create(s_wifi_modal);
+    lv_obj_set_width(s_wifi_scan_btn, lv_pct(100));
+    lv_obj_set_height(s_wifi_scan_btn, 36);
+    lv_obj_set_style_bg_color(s_wifi_scan_btn, lv_color_hex(0x394150), LV_PART_MAIN);
+    lv_obj_set_style_radius(s_wifi_scan_btn, 6, 0);
+    lv_obj_add_event_cb(s_wifi_scan_btn, wifiScanClicked, LV_EVENT_CLICKED, nullptr);
+    {
+        lv_obj_t *l = lv_label_create(s_wifi_scan_btn);
+        lv_label_set_text(l, "Scan networks");
+        lv_obj_set_style_text_color(l, lv_color_white(), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_center(l);
+    }
 
     s_wifi_ta_ssid = lv_textarea_create(s_wifi_modal);
     lv_obj_set_width(s_wifi_ta_ssid, lv_pct(100));
@@ -317,9 +500,18 @@ static void wifiEditClicked(lv_event_t * /*e*/) {
 }
 
 static void closeWifiModal() {
+    // Kill the scan poll timer + abort any running scan first.
+    if (s_wifi_scan_tick) {
+        lv_timer_delete(s_wifi_scan_tick);
+        s_wifi_scan_tick = nullptr;
+    }
+    if (WiFi.scanComplete() >= 0) WiFi.scanDelete();
+
     if (s_wifi_keyboard) { lv_obj_delete(s_wifi_keyboard); s_wifi_keyboard = nullptr; }
     if (s_wifi_modal)    { lv_obj_delete(s_wifi_modal);    s_wifi_modal = nullptr; }
     s_wifi_ta_ssid = s_wifi_ta_pass = nullptr;
+    s_wifi_scan_btn = s_wifi_scan_panel = nullptr;
+    s_wifi_scan_status = s_wifi_scan_list = nullptr;
 }
 
 static void wifiCancelClicked(lv_event_t * /*e*/) {
@@ -524,10 +716,16 @@ static void buildAboutSection(lv_obj_t *parent) {
 
 static void settingsCleanup(lv_event_t * /*e*/) {
     if (s_about_timer) { lv_timer_delete(s_about_timer); s_about_timer = nullptr; }
+    if (s_wifi_scan_tick) {
+        lv_timer_delete(s_wifi_scan_tick);
+        s_wifi_scan_tick = nullptr;
+    }
     s_about_uptime = s_about_heap = s_about_ip = s_about_ota = nullptr;
     // WiFi modal widgets if open get deleted with the panel anyway.
     s_wifi_modal = s_wifi_ta_ssid = s_wifi_ta_pass = nullptr;
     s_wifi_ssid_lbl = s_wifi_keyboard = nullptr;
+    s_wifi_scan_btn = s_wifi_scan_panel = nullptr;
+    s_wifi_scan_status = s_wifi_scan_list = nullptr;
     // Port B card statics.
     s_portb_state_lbl = s_portb_pref_lbl = s_portb_pins_lbl = nullptr;
     for (int i = 0; i < 5; i++) s_portb_btns[i] = nullptr;

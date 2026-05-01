@@ -90,6 +90,7 @@ void setup() {
     }
 
     s_display.begin();    // LCD + touch + NVS rotation/calibration
+    s_display.setBrightness(BoardSettings::brightness());   // restore saved level
     PinPort::applyAtBoot();
 
     // ---- LVGL UI (BoardApp manages display/indev/tick + tabview) ----
