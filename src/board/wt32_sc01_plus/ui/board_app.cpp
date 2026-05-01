@@ -48,7 +48,13 @@ void BoardApp::lvUnlock() {
     if (s_lv_mutex) xSemaphoreGiveRecursive(s_lv_mutex);
 }
 
-static constexpr size_t LV_BUF_PIXELS = 480 * 32;
+// 480x16 (was 480x32) -- the smaller stripe trades a couple of extra
+// flushes per full-screen redraw for ~15 KB of internal SRAM headroom.
+// Without this the TLS handshake to api.github.com fails (mbedtls needs
+// ~30 KB free heap and we only had ~47 KB before; 16 KB margin is too
+// tight). With the smaller buffer free_heap idles around 62-65 KB and
+// /api/ota/check / /api/ota/pull both succeed.
+static constexpr size_t LV_BUF_PIXELS = 480 * 16;
 static lv_color_t      *s_buf_a   = nullptr;
 static lv_display_t    *s_lv_disp  = nullptr;
 static lv_indev_t      *s_lv_indev = nullptr;

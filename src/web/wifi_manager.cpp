@@ -1,10 +1,10 @@
 #include "wifi_manager.h"
 #include <WiFi.h>
 #include <Preferences.h>
+#include "board_settings.h"
 
 static WifiManager::Mode s_mode = WifiManager::MODE_OFF;
 static String s_ssid;
-static Preferences s_prefs;
 
 bool WifiManager::startAP(const char* ssid, const char* pass) {
     stop();
@@ -70,24 +70,59 @@ int WifiManager::clientCount() {
     return (s_mode == MODE_AP) ? WiFi.softAPgetStationNum() : 0;
 }
 
+// Credentials live in BoardSettings (NVS namespace 'boardcfg', keys
+// 'wifi_ssid' / 'wifi_pass'). Both surfaces -- web /api/wifi/save
+// (calls WifiManager::saveCredentials) and SC01 LVGL Settings (calls
+// BoardSettings::setWifi directly) -- now write to the same place,
+// so a save from either side is honoured by the next boot's
+// autoStartWifi.
+//
+// One-shot migration handles devices that already had creds in the
+// legacy 'wifi' namespace from before this commit: on first
+// loadCredentials call we copy them into boardcfg + wipe the old
+// namespace.
+
+static void migrateLegacyCreds() {
+    // Already migrated? Skip.
+    if (BoardSettings::wifiSsid().length() > 0) return;
+
+    Preferences legacy;
+    if (!legacy.begin("wifi", true)) return;
+    String old_ssid = legacy.getString("ssid", "");
+    String old_pass = legacy.getString("pass", "");
+    legacy.end();
+    if (old_ssid.length() == 0) return;
+
+    Serial.printf("[WiFi] migrating legacy creds for SSID '%s' to boardcfg\n",
+                  old_ssid.c_str());
+    BoardSettings::setWifi(old_ssid, old_pass);
+
+    Preferences wipe;
+    if (wipe.begin("wifi", false)) {
+        wipe.clear();
+        wipe.end();
+    }
+}
+
 bool WifiManager::saveCredentials(const char* ssid, const char* pass) {
-    s_prefs.begin("wifi", false);
-    s_prefs.putString("ssid", ssid);
-    s_prefs.putString("pass", pass);
-    s_prefs.end();
+    BoardSettings::setWifi(String(ssid ? ssid : ""),
+                           String(pass ? pass : ""));
     return true;
 }
 
 bool WifiManager::loadCredentials(String &ssid, String &pass) {
-    s_prefs.begin("wifi", true);
-    ssid = s_prefs.getString("ssid", "");
-    pass = s_prefs.getString("pass", "");
-    s_prefs.end();
+    migrateLegacyCreds();
+    ssid = BoardSettings::wifiSsid();
+    pass = BoardSettings::wifiPass();
     return ssid.length() > 0;
 }
 
 void WifiManager::clearCredentials() {
-    s_prefs.begin("wifi", false);
-    s_prefs.clear();
-    s_prefs.end();
+    BoardSettings::setWifi(String(""), String(""));
+    // Also wipe the legacy namespace if it somehow still has values.
+    Preferences legacy;
+    if (legacy.begin("wifi", false)) {
+        legacy.clear();
+        legacy.end();
+    }
 }

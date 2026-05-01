@@ -21,6 +21,7 @@
 #include <WiFiClientSecure.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include "safety.h"
 
 #if __has_include("core/build_info.h")
   #include "core/build_info.h"
@@ -90,8 +91,18 @@ void registerRoutesOta(AsyncWebServer *s_server) {
             return;
         }
 
+        // SC01 Plus idles around 48 KB free internal heap (LVGL eats
+        // most of the rest). Default mbedtls TLS handshake needs ~30 KB
+        // and api.github.com fails with HTTPClient::GET()=-1 there.
+        // Diagnostic logging here helps tell apart heap-OOM (low free
+        // heap right before .GET) from a TCP/DNS issue (.GET takes
+        // seconds and returns -1).
+        Safety::logf("[ota/check] heap before TLS: free=%u min=%u",
+                     (unsigned)ESP.getFreeHeap(),
+                     (unsigned)ESP.getMinFreeHeap());
+
         WiFiClientSecure client;
-        client.setInsecure();  // GitHub has a valid cert chain; we skip pinning to keep flash small
+        client.setInsecure();
         HTTPClient https;
         https.setUserAgent("esp32-fpv-multitool");
         https.setTimeout(10000);
@@ -114,32 +125,55 @@ void registerRoutesOta(AsyncWebServer *s_server) {
 
         s_latestVersion  = doc["tag_name"] | "";
         s_latestAssetUrl = "";
-        // Look for the per-board asset first (firmware-<env>.bin); fall
-        // back to plain firmware.bin so old single-asset releases still
-        // resolve (Waveshare-shaped binary, Waveshare-only).
-        const char *want_primary  = GITHUB_OTA_ASSET;
-        const char *want_fallback = "firmware.bin";
-        String fallback_url;
+        // Strict per-board asset matching only -- no fallback to plain
+        // firmware.bin, because that's a Waveshare-shaped binary on
+        // legacy releases and pulling it on the SC01 Plus would brick
+        // the board (R2/QSPI PSRAM vs R8/OPI). Releases that only ship
+        // firmware.bin (= pre-v0.32.0) end up with an empty asset URL
+        // here; the UI shows that as "no asset for this board".
+        const char *want_primary = GITHUB_OTA_ASSET;
         for (JsonObject a : doc["assets"].as<JsonArray>()) {
             String name = a["name"] | "";
             if (name == want_primary) {
                 s_latestAssetUrl = a["browser_download_url"].as<const char*>();
                 break;
             }
-            if (name == want_fallback) {
-                fallback_url = a["browser_download_url"].as<const char*>();
-            }
-        }
-        if (s_latestAssetUrl.isEmpty() && !fallback_url.isEmpty()) {
-            s_latestAssetUrl = fallback_url;
         }
         s_latestCheckedMs = millis();
+
+        // Semver comparison: v0.X.Y. 'outdated' only true when the
+        // remote tag is strictly newer than what we are running. Plain
+        // string compare misfires (v0.33.0 != v0.28.6 -> "outdated"
+        // even though we are NEWER) and pretends downgrades are
+        // updates.
+        auto parseSemver = [](const String &tag, int &maj, int &min, int &pat) -> bool {
+            const char *p = tag.c_str();
+            if (*p == 'v' || *p == 'V') p++;
+            return sscanf(p, "%d.%d.%d", &maj, &min, &pat) == 3;
+        };
+        bool outdated = false;
+        if (s_latestVersion.length() > 0) {
+            int lm, ln, lp, cm, cn, cp;
+            String cur = String(FW_VERSION);
+            if (parseSemver(s_latestVersion, lm, ln, lp) &&
+                parseSemver(cur, cm, cn, cp)) {
+                outdated = (lm > cm) ||
+                           (lm == cm && ln > cn) ||
+                           (lm == cm && ln == cn && lp > cp);
+            } else {
+                // Couldn't parse one or both -- fall back to "different
+                // tag = outdated" so dev-<sha> builds still get a
+                // visible upgrade hint.
+                outdated = (s_latestVersion != cur);
+            }
+        }
 
         JsonDocument out;
         out["current"]  = FW_VERSION;
         out["latest"]   = s_latestVersion;
         out["asset"]    = s_latestAssetUrl;
-        out["outdated"] = (s_latestVersion.length() > 0 && s_latestVersion != String(FW_VERSION));
+        out["outdated"] = outdated;
+        out["asset_missing"] = s_latestAssetUrl.isEmpty();
         String outs; serializeJson(out, outs);
         req->send(200, "application/json", outs);
     });
