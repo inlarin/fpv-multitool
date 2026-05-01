@@ -9,9 +9,15 @@
 //   Status card  : State / Manufacturer / Device name / Cycles / SoH
 //   Pack card    : Voltage (large hero) / Current / Temperature
 //   Charge card  : SoC% / Remaining capacity / Cells 1-4 voltages
+//   Service card : Sealed/Unsealed badge + Unseal / Clear PF /
+//                  Cycle reset / Seal buttons + last-result line
 //
 // 2 Hz tick refreshes the labels; readAll() is ~50ms per call so
 // faster polling would steal too much from the LVGL render budget.
+//
+// Service ops modify the battery's BMS persistently. They're behind
+// the explicit unseal step (BMS rejects clearPF/cycle-reset/seal
+// while sealed), so accidental damage is bounded.
 
 #include "screens.h"
 
@@ -19,6 +25,7 @@
 
 #include "core/pin_port.h"
 #include "battery/dji_battery.h"
+#include "battery/smbus.h"   // SMBus::macCommand for DJI cycle-reset subcommands
 #include "safety.h"
 
 namespace screens {
@@ -37,6 +44,14 @@ static lv_obj_t *s_soc_lbl     = nullptr;
 static lv_obj_t *s_cap_lbl     = nullptr;
 static lv_obj_t *s_cell_lbls[4] = {nullptr};
 static lv_timer_t *s_tick      = nullptr;
+
+// Service card live state.
+static lv_obj_t *s_svc_seal_lbl = nullptr;     // "SEALED" / "UNSEALED"
+static lv_obj_t *s_svc_result   = nullptr;     // last-op feedback
+static lv_obj_t *s_svc_btn_unseal  = nullptr;
+static lv_obj_t *s_svc_btn_clearpf = nullptr;
+static lv_obj_t *s_svc_btn_cycle   = nullptr;
+static lv_obj_t *s_svc_btn_seal    = nullptr;
 
 // ---- Card / row builders --------------------------------------------------
 
@@ -90,6 +105,43 @@ static void batteryCleanup(lv_event_t * /*e*/) {
     s_state_lbl = s_mfr_lbl = s_dev_lbl = s_cycle_lbl = s_soh_lbl = nullptr;
     s_volt_lbl = s_curr_lbl = s_temp_lbl = s_soc_lbl = s_cap_lbl = nullptr;
     for (int i = 0; i < 4; i++) s_cell_lbls[i] = nullptr;
+    s_svc_seal_lbl = s_svc_result = nullptr;
+    s_svc_btn_unseal = s_svc_btn_clearpf = nullptr;
+    s_svc_btn_cycle  = s_svc_btn_seal    = nullptr;
+}
+
+// Forward decl -- defined down in the Service section block.
+static void setBtnEnabled(lv_obj_t *btn, bool enabled);
+
+// Service card button states + seal badge -- called from batteryTick
+// once per refresh cycle so the user sees the badge flip after an
+// unseal/seal op without waiting for a manual reload.
+static void serviceRefresh(const BatteryInfo &info) {
+    if (!s_svc_seal_lbl) return;
+    if (!info.connected) {
+        lv_label_set_text(s_svc_seal_lbl, "no battery");
+        lv_obj_set_style_text_color(s_svc_seal_lbl, lv_color_hex(0xa0a0a0), 0);
+        setBtnEnabled(s_svc_btn_unseal,  false);
+        setBtnEnabled(s_svc_btn_clearpf, false);
+        setBtnEnabled(s_svc_btn_cycle,   false);
+        setBtnEnabled(s_svc_btn_seal,    false);
+        return;
+    }
+    if (info.sealed) {
+        lv_label_set_text(s_svc_seal_lbl, "SEALED");
+        lv_obj_set_style_text_color(s_svc_seal_lbl, lv_color_hex(0xE6A23C), 0);
+        setBtnEnabled(s_svc_btn_unseal,  true);
+        setBtnEnabled(s_svc_btn_clearpf, false);
+        setBtnEnabled(s_svc_btn_cycle,   false);
+        setBtnEnabled(s_svc_btn_seal,    false);
+    } else {
+        lv_label_set_text(s_svc_seal_lbl, "UNSEALED");
+        lv_obj_set_style_text_color(s_svc_seal_lbl, lv_color_hex(0x06A77D), 0);
+        setBtnEnabled(s_svc_btn_unseal,  true);   // still allowed, no-op if already
+        setBtnEnabled(s_svc_btn_clearpf, true);
+        setBtnEnabled(s_svc_btn_cycle,   true);
+        setBtnEnabled(s_svc_btn_seal,    true);
+    }
 }
 
 // ---- Live refresh ---------------------------------------------------------
@@ -114,6 +166,8 @@ static void batteryTick(lv_timer_t * /*t*/) {
 
     // Show port mismatch instead of "no battery" -- saves the user a
     // confused trip to Settings when the issue is just Port B mode.
+    BatteryInfo empty = {};   // for serviceRefresh in not-connected branches
+
     PortMode pm = PinPort::currentMode(PinPort::PORT_B);
     if (pm != PORT_I2C) {
         char buf[48];
@@ -122,6 +176,7 @@ static void batteryTick(lv_timer_t * /*t*/) {
         lv_label_set_text(s_state_lbl, buf);
         lv_obj_set_style_text_color(s_state_lbl, lv_color_hex(0xE6A23C), 0);
         clearLabels();
+        serviceRefresh(empty);
         return;
     }
 
@@ -129,6 +184,7 @@ static void batteryTick(lv_timer_t * /*t*/) {
         lv_label_set_text(s_state_lbl, "no battery on bus");
         lv_obj_set_style_text_color(s_state_lbl, lv_color_hex(0xa0a0a0), 0);
         clearLabels();
+        serviceRefresh(empty);
         return;
     }
 
@@ -137,6 +193,7 @@ static void batteryTick(lv_timer_t * /*t*/) {
         lv_label_set_text(s_state_lbl, "battery dropped");
         lv_obj_set_style_text_color(s_state_lbl, lv_color_hex(0xE6A23C), 0);
         clearLabels();
+        serviceRefresh(empty);
         return;
     }
 
@@ -187,6 +244,8 @@ static void batteryTick(lv_timer_t * /*t*/) {
             lv_label_set_text(s_cell_lbls[i], "—");
         }
     }
+
+    serviceRefresh(info);
 }
 
 // ---- Section builders -----------------------------------------------------
@@ -225,6 +284,138 @@ static void buildChargeCard(lv_obj_t *parent) {
     }
 }
 
+// ---- Service section ------------------------------------------------------
+//
+// 4 ops:
+//   Unseal      -- DJIBattery::unseal() tries every key in the model's
+//                  profile. No-op (returns OK) if already unsealed.
+//   Clear PF    -- DJIBattery::clearPFProper() + clearDJIPF2(). Resets
+//                  Permanent-Failure flags so a falsely-tripped pack
+//                  starts charging/discharging again.
+//   Cycle reset -- DJI-specific MAC pair (0x6A28 then 0x6A2A) sent via
+//                  ManufacturerAccess. Zeroes the cycle counter.
+//   Seal        -- restores sealed mode, locks out further extended ops.
+//
+// Buttons other than Unseal stay greyed out while the BMS reports
+// sealed=true; they would just bounce off the hardware otherwise.
+
+static void serviceShow(const char *msg, uint16_t color) {
+    if (!s_svc_result) return;
+    lv_label_set_text(s_svc_result, msg);
+    lv_obj_set_style_text_color(s_svc_result, lv_color_hex(color), 0);
+    Safety::logf("[battery] %s", msg);
+}
+
+static void setBtnEnabled(lv_obj_t *btn, bool enabled) {
+    if (!btn) return;
+    if (enabled) {
+        lv_obj_clear_state(btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x394150), LV_PART_MAIN);
+    } else {
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x252a31), LV_PART_MAIN);
+    }
+}
+
+static void unsealClicked(lv_event_t * /*e*/) {
+    UnsealResult r = DJIBattery::unseal();
+    switch (r) {
+        case UNSEAL_OK:
+            serviceShow("Unseal OK", 0x06A77D); break;
+        case UNSEAL_REJECTED_SEALED:
+            serviceShow("Unseal rejected (key wrong)", 0xE63946); break;
+        case UNSEAL_NO_RESPONSE:
+            serviceShow("Unseal: no I2C response", 0xE63946); break;
+        case UNSEAL_UNSUPPORTED_MODEL:
+            serviceShow("Unseal: no key for this model", 0xE6A23C); break;
+    }
+}
+
+static void clearPfClicked(lv_event_t * /*e*/) {
+    bool a = DJIBattery::clearPFProper();
+    bool b = DJIBattery::clearDJIPF2();
+    char buf[64];
+    snprintf(buf, sizeof(buf), "PF clear: std=%s dji=%s",
+             a ? "OK" : "FAIL", b ? "OK" : "FAIL");
+    serviceShow(buf, (a && b) ? 0x06A77D : 0xE6A23C);
+}
+
+static void cycleResetClicked(lv_event_t * /*e*/) {
+    // DJI-specific 2-step ManufacturerAccess sequence. Verified on
+    // Mavic Air 2 / Mavic 2 packs. Pack must be unsealed; if either
+    // write NACKs the pack is either sealed, sealed-different, or
+    // not a DJI BMS at all.
+    constexpr uint8_t  ADDR = 0x0B;
+    constexpr uint16_t SUB1 = 0x6A28;
+    constexpr uint16_t SUB2 = 0x6A2A;
+    bool a = SMBus::macCommand(ADDR, SUB1);
+    bool b = a && SMBus::macCommand(ADDR, SUB2);
+    if (a && b) {
+        serviceShow("Cycle reset SENT", 0x06A77D);
+    } else {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Cycle reset: step%d failed", a ? 2 : 1);
+        serviceShow(buf, 0xE63946);
+    }
+}
+
+static void sealClicked(lv_event_t * /*e*/) {
+    bool ok = DJIBattery::seal();
+    serviceShow(ok ? "Sealed" : "Seal failed", ok ? 0x06A77D : 0xE63946);
+}
+
+static lv_obj_t *makeSvcButton(lv_obj_t *parent, const char *label,
+                               lv_event_cb_t cb) {
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_set_flex_grow(b, 1);
+    lv_obj_set_height(b, 40);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x394150), LV_PART_MAIN);
+    lv_obj_set_style_radius(b, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, label);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_center(l);
+    return b;
+}
+
+static void buildServiceCard(lv_obj_t *parent) {
+    lv_obj_t *card = makeCard(parent, "Service");
+
+    s_svc_seal_lbl = makeKvRow(card, "State");
+    lv_label_set_text(s_svc_seal_lbl, "...");
+
+    // 2x2 button grid (two flex rows).
+    lv_obj_t *row1 = lv_obj_create(card);
+    lv_obj_remove_style_all(row1);
+    lv_obj_set_width(row1, lv_pct(100));
+    lv_obj_set_height(row1, 44);
+    lv_obj_set_layout(row1, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row1, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(row1, 6, LV_PART_MAIN);
+
+    s_svc_btn_unseal  = makeSvcButton(row1, "Unseal",   unsealClicked);
+    s_svc_btn_clearpf = makeSvcButton(row1, "Clear PF", clearPfClicked);
+
+    lv_obj_t *row2 = lv_obj_create(card);
+    lv_obj_remove_style_all(row2);
+    lv_obj_set_width(row2, lv_pct(100));
+    lv_obj_set_height(row2, 44);
+    lv_obj_set_layout(row2, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row2, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(row2, 6, LV_PART_MAIN);
+
+    s_svc_btn_cycle = makeSvcButton(row2, "Cycle reset", cycleResetClicked);
+    s_svc_btn_seal  = makeSvcButton(row2, "Seal",        sealClicked);
+
+    s_svc_result = lv_label_create(card);
+    lv_obj_set_width(s_svc_result, lv_pct(100));
+    lv_obj_set_style_text_color(s_svc_result, lv_color_hex(0xa0a0a0), 0);
+    lv_obj_set_style_text_font(s_svc_result, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_svc_result, "(no op yet)");
+}
+
 // ---- Public entry ---------------------------------------------------------
 
 void buildBattery(lv_obj_t *panel) {
@@ -246,6 +437,7 @@ void buildBattery(lv_obj_t *panel) {
     buildStatusCard(panel);
     buildPackCard(panel);
     buildChargeCard(panel);
+    buildServiceCard(panel);
 
     batteryTick(nullptr);   // populate once immediately
 
